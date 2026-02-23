@@ -4,13 +4,7 @@
 export const ADAPTER_TIER_VALUES = ["tier1", "experimental"] as const;
 export type AdapterTier = typeof ADAPTER_TIER_VALUES[number];
 
-export const DETECT_STATUS_VALUES = [
-  "ready",
-  "blocked",
-  "experimental_ready",
-  "experimental_blocked",
-  "missing",
-] as const;
+export const DETECT_STATUS_VALUES = ["ready", "blocked", "experimental_ready", "experimental_blocked", "missing"] as const;
 export type DetectStatus = typeof DETECT_STATUS_VALUES[number];
 
 export const CAPABILITY_CONFIDENCE_VALUES = ["verified", "observed", "unknown"] as const;
