@@ -11,6 +11,7 @@ import type {
   RaceRequest,
   RaceStarted,
   RaceResult,
+  RaceEventBatch,
 } from './types';
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -24,7 +25,13 @@ async function getInvoke(): Promise<InvokeFn> {
     const mod = await import('@tauri-apps/api/core');
     _invoke = mod.invoke as InvokeFn;
   } catch {
-    _invoke = mockInvoke;
+    if (import.meta.env.VITE_ALLOW_MOCK_IPC === 'true') {
+      _invoke = mockInvoke;
+    } else {
+      throw new Error(
+        'Tauri IPC is unavailable. Run inside Tauri, or set VITE_ALLOW_MOCK_IPC=true for standalone mock mode.',
+      );
+    }
   }
   return _invoke;
 }
@@ -56,6 +63,11 @@ export async function startRace(request: RaceRequest): Promise<RaceStarted> {
 export async function getRaceResult(runId: string): Promise<RaceResult | null> {
   const invoke = await getInvoke();
   return invoke('get_race_result', { runId });
+}
+
+export async function pollRaceEvents(runId: string, cursor: number): Promise<RaceEventBatch> {
+  const invoke = await getInvoke();
+  return invoke('poll_race_events', { runId, cursor });
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +142,13 @@ const MOCK_PREFLIGHT: PreflightResult = {
   warnings: [],
 };
 
+let mockCursor = 0;
+const MOCK_EVENT_STREAM = [
+  { runId: 'mock-run', agentKey: 'system', eventType: 'race_process_started', data: {}, timestamp: new Date().toISOString() },
+  { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_started', data: {}, timestamp: new Date().toISOString() },
+  { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_stdout', data: { line: 'Analyzing repository...' }, timestamp: new Date().toISOString() },
+];
+
 async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Promise<T> {
   await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
 
@@ -141,9 +160,29 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
     case 'list_adapters':
       return MOCK_ADAPTERS as T;
     case 'start_race':
-      return { runId: crypto.randomUUID(), agents: ['claude', 'codex'] } as T;
+      mockCursor = 0;
+      return { runId: 'mock-run', agents: ['claude', 'codex'] } as T;
     case 'get_race_result':
-      return null as T;
+      return {
+        runId: 'mock-run',
+        status: 'completed',
+        agents: [
+          { agentKey: 'claude', status: 'completed', durationMs: 2500, score: 93.2, mergeable: true },
+          { agentKey: 'codex', status: 'completed', durationMs: 2800, score: 91.1, mergeable: true },
+        ],
+      } as T;
+    case 'poll_race_events': {
+      const batch = MOCK_EVENT_STREAM.slice(mockCursor, mockCursor + 2);
+      mockCursor += batch.length;
+      return {
+        runId: 'mock-run',
+        events: batch,
+        nextCursor: mockCursor,
+        done: mockCursor >= MOCK_EVENT_STREAM.length,
+        status: mockCursor >= MOCK_EVENT_STREAM.length ? 'completed' : 'running',
+        error: null,
+      } as T;
+    }
     default:
       throw new Error(`Unknown command: ${cmd}`);
   }

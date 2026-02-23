@@ -3,13 +3,18 @@
  * These mirror the Rust `ipc_types` module 1:1.
  */
 
+import type {
+  AdapterTier,
+  CapabilityConfidence,
+  CheckStatus,
+  DetectStatus,
+} from './generated/rust-enums';
+
+export type { AdapterTier, CapabilityConfidence, CheckStatus, DetectStatus };
+
 // ---------------------------------------------------------------------------
 // Adapter types
 // ---------------------------------------------------------------------------
-
-export type AdapterTier = 'tier1' | 'experimental';
-export type DetectStatus = 'ready' | 'blocked' | 'experimental_ready' | 'experimental_blocked' | 'missing';
-export type CapabilityConfidence = 'verified' | 'observed' | 'unknown';
 
 export interface CapabilityEntry {
   supported: boolean;
@@ -38,8 +43,6 @@ export interface AdapterInfo {
 // ---------------------------------------------------------------------------
 // Preflight / Doctor
 // ---------------------------------------------------------------------------
-
-export type CheckStatus = 'passed' | 'failed' | 'warning' | 'running';
 
 export interface DiagnosticCheck {
   name: string;
@@ -95,6 +98,15 @@ export interface RaceResult {
   runId: string;
   status: string;
   agents: AgentResult[];
+}
+
+export interface RaceEventBatch {
+  runId: string;
+  events: AgentStreamEvent[];
+  nextCursor: number;
+  done: boolean;
+  status: string;
+  error: string | null;
 }
 
 // ---------------------------------------------------------------------------

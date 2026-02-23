@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "lint": "node ./scripts/enforce-design-tokens.mjs && npm run typecheck",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },

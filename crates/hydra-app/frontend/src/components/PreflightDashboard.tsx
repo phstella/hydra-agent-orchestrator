@@ -146,7 +146,9 @@ export function PreflightDashboard() {
                 width: 48,
                 height: 48,
                 borderRadius: '50%',
-                backgroundColor: result.systemReady ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                backgroundColor: result.systemReady
+                  ? 'color-mix(in srgb, var(--color-green-500) 15%, transparent)'
+                  : 'color-mix(in srgb, var(--color-danger-500) 15%, transparent)',
                 color: readyColor,
                 fontSize: 'var(--text-xl)',
               }}
@@ -214,7 +216,8 @@ export function PreflightDashboard() {
               variant="outlined"
               style={{
                 borderColor: 'var(--color-warning-500)',
-                backgroundColor: 'rgba(234, 179, 8, 0.05)',
+                backgroundColor:
+                  'color-mix(in srgb, var(--color-warning-500) 5%, transparent)',
               }}
             >
               {result.warnings.map((w, i) => (

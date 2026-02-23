@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { AgentStreamEvent } from '../types';
 
 const MAX_BUFFER_SIZE = 2000;
@@ -61,6 +61,16 @@ export function useEventBuffer(): UseEventBufferState {
   const eventsByAgent = useCallback(
     (agentKey: string) => events.filter((e) => e.agentKey === agentKey),
     [events],
+  );
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    },
+    [],
   );
 
   return { events, push, clear, eventsByAgent };

@@ -65,7 +65,8 @@ export function ExperimentalAdapterModal({
             width: 48,
             height: 48,
             borderRadius: '50%',
-            backgroundColor: 'rgba(234, 179, 8, 0.15)',
+            backgroundColor:
+              'color-mix(in srgb, var(--color-warning-500) 15%, transparent)',
             color: 'var(--color-warning-500)',
             fontSize: 'var(--text-xl)',
             flexShrink: 0,
@@ -130,7 +131,9 @@ export function ExperimentalAdapterModal({
           cursor: 'pointer',
           padding: 'var(--space-3)',
           borderRadius: 'var(--radius-md)',
-          backgroundColor: acknowledged ? 'rgba(47, 111, 159, 0.1)' : 'transparent',
+          backgroundColor: acknowledged
+            ? 'color-mix(in srgb, var(--color-marine-500) 10%, transparent)'
+            : 'transparent',
           border: '1px solid',
           borderColor: acknowledged ? 'var(--color-marine-500)' : 'var(--color-border-700)',
           transition: 'all var(--transition-fast)',
