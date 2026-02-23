@@ -95,10 +95,20 @@ pub struct AgentStreamEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DimensionScoreIpc {
+    pub name: String,
+    pub score: f64,
+    pub evidence: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RaceResult {
     pub run_id: String,
     pub status: String,
     pub agents: Vec<AgentResult>,
+    pub duration_ms: Option<u64>,
+    pub total_cost: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +130,8 @@ pub struct AgentResult {
     pub duration_ms: Option<u64>,
     pub score: Option<f64>,
     pub mergeable: Option<bool>,
+    pub gate_failures: Vec<String>,
+    pub dimensions: Vec<DimensionScoreIpc>,
 }
 
 // ---------------------------------------------------------------------------

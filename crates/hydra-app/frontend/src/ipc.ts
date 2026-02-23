@@ -193,9 +193,39 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
       return {
         runId: 'mock-run',
         status: 'completed',
+        durationMs: 4700,
+        totalCost: 0.42,
         agents: [
-          { agentKey: 'claude', status: 'completed', durationMs: 2500, score: 93.2, mergeable: true },
-          { agentKey: 'codex', status: 'completed', durationMs: 2800, score: 91.1, mergeable: true },
+          {
+            agentKey: 'claude',
+            status: 'completed',
+            durationMs: 4500,
+            score: 93.2,
+            mergeable: true,
+            gateFailures: [],
+            dimensions: [
+              { name: 'build', score: 100.0, evidence: { exit_code: 0 } },
+              { name: 'tests', score: 92.0, evidence: { passed: 14, failed: 0, baseline_passed: 14, regression: 0, new_tests: 1 } },
+              { name: 'lint', score: 95.0, evidence: { baseline_warnings: 3, current_warnings: 2 } },
+              { name: 'diff_scope', score: 78.0, evidence: { files_changed: 3, lines_added: 42, lines_removed: 12 } },
+              { name: 'speed', score: 100.0, evidence: { agent_duration_ms: 4500, fastest_ms: 4500 } },
+            ],
+          },
+          {
+            agentKey: 'codex',
+            status: 'completed',
+            durationMs: 4100,
+            score: 88.5,
+            mergeable: true,
+            gateFailures: [],
+            dimensions: [
+              { name: 'build', score: 100.0, evidence: { exit_code: 0 } },
+              { name: 'tests', score: 85.0, evidence: { passed: 12, failed: 0, baseline_passed: 14, regression: 2, new_tests: 0 } },
+              { name: 'lint', score: 88.0, evidence: { baseline_warnings: 3, current_warnings: 4 } },
+              { name: 'diff_scope', score: 72.0, evidence: { files_changed: 5, lines_added: 68, lines_removed: 18 } },
+              { name: 'speed', score: 100.0, evidence: { agent_duration_ms: 4100, fastest_ms: 4100 } },
+            ],
+          },
         ],
       } as T;
     case 'poll_race_events': {

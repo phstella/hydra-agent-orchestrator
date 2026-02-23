@@ -75,6 +75,8 @@ impl AppStateHandle {
                 run_id: run_id.to_string(),
                 status: "failed".to_string(),
                 agents: Vec::new(),
+                duration_ms: None,
+                total_cost: None,
             });
         }
     }

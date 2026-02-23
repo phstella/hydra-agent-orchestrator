@@ -3,6 +3,7 @@ import { PreflightDashboard } from './components/PreflightDashboard';
 import { ExperimentalAdapterModal } from './components/ExperimentalAdapterModal';
 import { AgentRail } from './components/AgentRail';
 import { LiveOutputPanel } from './components/LiveOutputPanel';
+import { ResultsScoreboard } from './components/ResultsScoreboard';
 import { Tabs, Badge, Button, Card } from './components/design-system';
 import { getRaceResult, listAdapters, pollRaceEvents, startRace } from './ipc';
 import type { AdapterInfo, RaceResult } from './types';
@@ -12,7 +13,7 @@ import { useEventBuffer, useAgentStatuses } from './hooks';
 const NAV_TABS = [
   { id: 'preflight', label: 'Preflight' },
   { id: 'race', label: 'Race' },
-  { id: 'results', label: 'Results', badge: 'soon' },
+  { id: 'results', label: 'Results' },
 ];
 
 export default function App() {
@@ -31,6 +32,7 @@ export default function App() {
   const [runStatus, setRunStatus] = useState<string>('idle');
   const [raceError, setRaceError] = useState<string | null>(null);
   const [raceResult, setRaceResult] = useState<RaceResult | null>(null);
+  const [selectedWinner, setSelectedWinner] = useState<string | null>(null);
 
   const { events, push, clear, eventsByAgent } = useEventBuffer();
 
@@ -121,6 +123,7 @@ export default function App() {
 
     setRaceError(null);
     setRaceResult(null);
+    setSelectedWinner(null);
     setRunStatus('starting');
     setActiveRunId(null);
     setRaceAgents([]);
@@ -143,6 +146,10 @@ export default function App() {
       setRaceError(err instanceof Error ? err.message : String(err));
     }
   }, [clear, selectedAdapters, selectedExperimentalCount, taskPrompt]);
+
+  const handleWinnerSelect = useCallback((agentKey: string) => {
+    setSelectedWinner(agentKey);
+  }, []);
 
   useEffect(() => {
     if (!activeRunId) return;
@@ -374,22 +381,38 @@ export default function App() {
                   </div>
                   <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
                     Agents: {raceResult.agents.length}
+                    {selectedWinner && <> · Winner: <strong style={{ color: 'var(--color-green-400)' }}>{selectedWinner}</strong></>}
                   </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    style={{ marginTop: 'var(--space-3)' }}
+                    onClick={() => setActiveTab('results')}
+                  >
+                    View Scoreboard
+                  </Button>
                 </Card>
               )}
             </div>
           )}
 
           {activeTab === 'results' && (
-            <div
-              style={{
-                padding: 'var(--space-8)',
-                textAlign: 'center',
-                color: 'var(--color-text-muted)',
-              }}
-            >
-              Results view coming in P3-UI-04
-            </div>
+            raceResult ? (
+              <ResultsScoreboard
+                result={raceResult}
+                onSelectWinner={handleWinnerSelect}
+              />
+            ) : (
+              <div
+                style={{
+                  padding: 'var(--space-8)',
+                  textAlign: 'center',
+                  color: 'var(--color-text-muted)',
+                }}
+              >
+                No results yet. Complete a race to see the scoreboard.
+              </div>
+            )
           )}
         </main>
       </Tabs>

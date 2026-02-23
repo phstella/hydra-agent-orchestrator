@@ -10,8 +10,8 @@ pub use error::AdapterError;
 pub use probe::{ProbeReport, ProbeRunner};
 pub use registry::AdapterRegistry;
 pub use types::{
-    AdapterTier, AgentEvent, BuiltCommand, CapabilityConfidence, CapabilitySet, DetectResult,
-    DetectStatus, ProbeResult, SpawnRequest,
+    AdapterTier, AgentEvent, BuiltCommand, CapabilityConfidence, CapabilityEntry, CapabilitySet,
+    DetectResult, DetectStatus, ProbeResult, SpawnRequest,
 };
 
 use std::path::PathBuf;

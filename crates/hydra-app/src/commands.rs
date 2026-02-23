@@ -351,6 +351,14 @@ fn parse_cli_race_summary(stdout: &[u8]) -> Result<RaceResult, IpcError> {
         .map(normalize_status)
         .unwrap_or_else(|| "unknown".to_string());
 
+    let race_duration_ms = json
+        .get("duration_ms")
+        .and_then(|v| v.as_u64());
+
+    let total_cost = json
+        .get("total_cost")
+        .and_then(|v| v.as_f64());
+
     let agents = json
         .get("agents")
         .and_then(|v| v.as_array())
@@ -359,6 +367,35 @@ fn parse_cli_race_summary(stdout: &[u8]) -> Result<RaceResult, IpcError> {
                 .iter()
                 .map(|item| {
                     let score_obj = item.get("score");
+
+                    let dimensions = score_obj
+                        .and_then(|s| s.get("dimensions"))
+                        .and_then(|d| d.as_array())
+                        .map(|dims| {
+                            dims.iter()
+                                .filter_map(|dim| {
+                                    let name = dim.get("name")?.as_str()?.to_string();
+                                    let score = dim.get("score")?.as_f64()?;
+                                    let evidence = dim
+                                        .get("evidence")
+                                        .cloned()
+                                        .unwrap_or(serde_json::json!({}));
+                                    Some(DimensionScoreIpc { name, score, evidence })
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    let gate_failures = score_obj
+                        .and_then(|s| s.get("gate_failures"))
+                        .and_then(|g| g.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
                     AgentResult {
                         agent_key: item
                             .get("agent")
@@ -378,6 +415,8 @@ fn parse_cli_race_summary(stdout: &[u8]) -> Result<RaceResult, IpcError> {
                         mergeable: score_obj
                             .and_then(|v| v.get("mergeable"))
                             .and_then(|v| v.as_bool()),
+                        gate_failures,
+                        dimensions,
                     }
                 })
                 .collect::<Vec<_>>()
@@ -388,6 +427,8 @@ fn parse_cli_race_summary(stdout: &[u8]) -> Result<RaceResult, IpcError> {
         run_id,
         status,
         agents,
+        duration_ms: race_duration_ms,
+        total_cost,
     })
 }
 
@@ -651,12 +692,22 @@ mod tests {
         let payload = serde_json::json!({
             "run_id": "abc",
             "status": "Completed",
+            "duration_ms": 5000,
+            "total_cost": 0.42,
             "agents": [
                 {
                     "agent": "claude",
                     "status": "Completed",
                     "duration_ms": 42,
-                    "score": { "composite": 95.1, "mergeable": true }
+                    "score": {
+                        "composite": 95.1,
+                        "mergeable": true,
+                        "gate_failures": [],
+                        "dimensions": [
+                            { "name": "build", "score": 100.0, "evidence": {} },
+                            { "name": "tests", "score": 90.0, "evidence": { "passed": 14, "failed": 0 } }
+                        ]
+                    }
                 }
             ]
         });
@@ -664,9 +715,15 @@ mod tests {
         let parsed = parse_cli_race_summary(payload.to_string().as_bytes()).unwrap();
         assert_eq!(parsed.run_id, "abc");
         assert_eq!(parsed.status, "completed");
+        assert_eq!(parsed.duration_ms, Some(5000));
+        assert_eq!(parsed.total_cost, Some(0.42));
         assert_eq!(parsed.agents.len(), 1);
         assert_eq!(parsed.agents[0].agent_key, "claude");
         assert_eq!(parsed.agents[0].score, Some(95.1));
         assert_eq!(parsed.agents[0].mergeable, Some(true));
+        assert!(parsed.agents[0].gate_failures.is_empty());
+        assert_eq!(parsed.agents[0].dimensions.len(), 2);
+        assert_eq!(parsed.agents[0].dimensions[0].name, "build");
+        assert!((parsed.agents[0].dimensions[0].score - 100.0).abs() < 0.01);
     }
 }

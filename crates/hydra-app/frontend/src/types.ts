@@ -86,18 +86,28 @@ export interface AgentStreamEvent {
   timestamp: string;
 }
 
+export interface DimensionScore {
+  name: string;
+  score: number;
+  evidence: unknown;
+}
+
 export interface AgentResult {
   agentKey: string;
   status: string;
   durationMs: number | null;
   score: number | null;
   mergeable: boolean | null;
+  gateFailures: string[];
+  dimensions: DimensionScore[];
 }
 
 export interface RaceResult {
   runId: string;
   status: string;
   agents: AgentResult[];
+  durationMs: number | null;
+  totalCost: number | null;
 }
 
 export interface RaceEventBatch {
