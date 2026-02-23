@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
@@ -9,7 +10,7 @@ use tauri::State;
 use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
 
-use hydra_core::artifact::RunEvent;
+use hydra_core::artifact::{EventKind, RunEvent};
 
 use crate::ipc_types::*;
 use crate::state::{AppState, AppStateHandle};
@@ -254,11 +255,9 @@ async fn execute_race(state: AppStateHandle, request: RaceRequest, run_id: Strin
         }
     };
 
-    let events_path = repo_root
-        .join(".hydra")
-        .join("runs")
-        .join(&run_id)
-        .join("events.jsonl");
+    let run_dir = repo_root.join(".hydra").join("runs").join(&run_id);
+    let events_path = run_dir.join("events.jsonl");
+    let agents_dir = run_dir.join("agents");
 
     let mut cmd = build_race_command(&repo_root, &run_id, &request);
     let stop_tail = Arc::new(AtomicBool::new(false));
@@ -266,6 +265,7 @@ async fn execute_race(state: AppStateHandle, request: RaceRequest, run_id: Strin
         state.clone(),
         run_id.clone(),
         events_path,
+        agents_dir,
         Arc::clone(&stop_tail),
     ));
 
@@ -545,13 +545,22 @@ async fn tail_run_events_file(
     state: AppStateHandle,
     run_id: String,
     events_path: PathBuf,
+    agents_dir: PathBuf,
     stop: Arc<AtomicBool>,
 ) {
     let mut consumed_lines = 0usize;
+    let mut consumed_agent_lines: HashMap<PathBuf, usize> = HashMap::new();
 
     loop {
         consumed_lines =
-            emit_new_events_from_file(&state, &run_id, &events_path, consumed_lines).await;
+            emit_new_events_from_file(&state, &run_id, &events_path, consumed_lines, false).await;
+        emit_new_agent_output_events_from_dir(
+            &state,
+            &run_id,
+            &agents_dir,
+            &mut consumed_agent_lines,
+        )
+        .await;
 
         if stop.load(Ordering::Relaxed) {
             break;
@@ -560,7 +569,14 @@ async fn tail_run_events_file(
         sleep(Duration::from_millis(120)).await;
     }
 
-    let _ = emit_new_events_from_file(&state, &run_id, &events_path, consumed_lines).await;
+    let _ = emit_new_events_from_file(&state, &run_id, &events_path, consumed_lines, false).await;
+    emit_new_agent_output_events_from_dir(
+        &state,
+        &run_id,
+        &agents_dir,
+        &mut consumed_agent_lines,
+    )
+    .await;
 }
 
 async fn emit_new_events_from_file(
@@ -568,6 +584,7 @@ async fn emit_new_events_from_file(
     run_id: &str,
     events_path: &Path,
     consumed_lines: usize,
+    output_only: bool,
 ) -> usize {
     let Ok(content) = tokio::fs::read_to_string(events_path).await else {
         return consumed_lines;
@@ -579,7 +596,7 @@ async fn emit_new_events_from_file(
     }
 
     for line in lines.iter().skip(consumed_lines) {
-        if let Some(event) = parse_run_event_line(run_id, line) {
+        if let Some(event) = parse_run_event_line(run_id, line, output_only) {
             state.append_event(run_id, event).await;
         }
     }
@@ -587,12 +604,43 @@ async fn emit_new_events_from_file(
     lines.len()
 }
 
-fn parse_run_event_line(run_id: &str, line: &str) -> Option<AgentStreamEvent> {
+async fn emit_new_agent_output_events_from_dir(
+    state: &AppStateHandle,
+    run_id: &str,
+    agents_dir: &Path,
+    consumed_lines_by_file: &mut HashMap<PathBuf, usize>,
+) {
+    let Ok(mut entries) = tokio::fs::read_dir(agents_dir).await else {
+        return;
+    };
+
+    let mut event_paths = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path().join("events.jsonl");
+        if tokio::fs::metadata(&path).await.is_ok() {
+            event_paths.push(path);
+        }
+    }
+    event_paths.sort();
+
+    for path in &event_paths {
+        let consumed = consumed_lines_by_file.get(path).copied().unwrap_or(0);
+        let next = emit_new_events_from_file(state, run_id, path, consumed, true).await;
+        consumed_lines_by_file.insert(path.clone(), next);
+    }
+
+    consumed_lines_by_file.retain(|path, _| event_paths.contains(path));
+}
+
+fn parse_run_event_line(run_id: &str, line: &str, output_only: bool) -> Option<AgentStreamEvent> {
     if line.trim().is_empty() {
         return None;
     }
 
     let event: RunEvent = serde_json::from_str(line).ok()?;
+    if output_only && !matches!(event.kind, EventKind::AgentStdout | EventKind::AgentStderr) {
+        return None;
+    }
     let event_type = serde_json::to_value(&event.kind)
         .ok()
         .and_then(|v| v.as_str().map(ToOwned::to_owned))
@@ -1287,5 +1335,38 @@ index 3333333..4444444 100644
         .unwrap_err();
         assert!(err.contains("validation_error"));
         assert!(err.contains("working tree has uncommitted changes"));
+    }
+
+    #[test]
+    fn parse_run_event_line_output_only_filters_lifecycle_events() {
+        let lifecycle_line = serde_json::json!({
+            "timestamp": "2026-02-23T20:40:59.440503361Z",
+            "kind": "agent_completed",
+            "agent_key": "claude",
+            "data": { "status": "Completed" }
+        })
+        .to_string();
+
+        assert!(parse_run_event_line("run-1", &lifecycle_line, true).is_none());
+        let passthrough = parse_run_event_line("run-1", &lifecycle_line, false).unwrap();
+        assert_eq!(passthrough.event_type, "agent_completed");
+        assert_eq!(passthrough.agent_key, "claude");
+    }
+
+    #[test]
+    fn parse_run_event_line_output_only_keeps_stdout_lines() {
+        let stdout_line = serde_json::json!({
+            "timestamp": "2026-02-23T20:40:20.589821238Z",
+            "kind": "agent_stdout",
+            "agent_key": "codex",
+            "data": { "line": "hello world" }
+        })
+        .to_string();
+
+        let parsed = parse_run_event_line("run-2", &stdout_line, true).unwrap();
+        assert_eq!(parsed.run_id, "run-2");
+        assert_eq!(parsed.agent_key, "codex");
+        assert_eq!(parsed.event_type, "agent_stdout");
+        assert_eq!(parsed.data["line"], "hello world");
     }
 }
