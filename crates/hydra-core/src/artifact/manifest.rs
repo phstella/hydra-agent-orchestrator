@@ -9,6 +9,7 @@ use super::ArtifactError;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunManifest {
     pub schema_version: u32,
+    pub event_schema_version: u32,
     pub run_id: Uuid,
     pub repo_root: String,
     pub base_ref: String,
@@ -20,7 +21,8 @@ pub struct RunManifest {
 }
 
 impl RunManifest {
-    pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+    pub const CURRENT_EVENT_SCHEMA_VERSION: u32 = 1;
 
     pub fn new(
         run_id: Uuid,
@@ -31,6 +33,7 @@ impl RunManifest {
     ) -> Self {
         Self {
             schema_version: Self::CURRENT_SCHEMA_VERSION,
+            event_schema_version: Self::CURRENT_EVENT_SCHEMA_VERSION,
             run_id,
             repo_root,
             base_ref,
@@ -139,7 +142,8 @@ mod tests {
     fn schema_version_is_present_in_json() {
         let manifest = make_test_manifest();
         let json = serde_json::to_string(&manifest).unwrap();
-        assert!(json.contains("\"schema_version\":1"));
+        assert!(json.contains("\"schema_version\":2"));
+        assert!(json.contains("\"event_schema_version\":1"));
     }
 
     #[test]
