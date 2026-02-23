@@ -1,6 +1,6 @@
 # Hydra Progress Tracker
 
-Last updated: 2026-02-23
+Last updated: 2026-02-23 (session 2)
 
 ## Current State
 
@@ -11,7 +11,7 @@ Last updated: 2026-02-23
 
 ## Completed Milestones
 
-(none yet)
+- **M0.8**: Architecture Decision Lock — Verified ADR 6 (short-lived process model) and ADR 7 (JSONL source of truth, SQLite derived index) are fully documented in `docs/architecture.md` section 11, with corresponding entries resolved in section 12.
 
 ## In-Progress Work
 
@@ -40,7 +40,7 @@ Last updated: 2026-02-23
 
 | Phase | Name | Status | Milestones Done |
 |-------|------|--------|-----------------|
-| 0 | Validation and Guardrails | Not started | 0/8 |
+| 0 | Validation and Guardrails | In progress | 1/8 |
 | 1 | Core Orchestrator + Single Agent | Not started | 0/8 |
 | 2 | Multi-Agent Race + Scoring | Not started | 0/12 |
 | 3 | GUI Alpha | Not started | 0/7 |
