@@ -4,10 +4,10 @@ Last updated: 2026-02-23
 
 ## Current State
 
-- **Phase**: 1 in progress
-- **Milestone**: M1.4 complete; M1.5-M1.8 remaining
-- **Sprint**: Sprint 1 complete (10/10 tickets done); Phase 1 continues
-- **Status**: M1.1 through M1.4 implemented, hardened, and re-validated (`cargo check/build/test/clippy` clean)
+- **Phase**: 1 **complete**
+- **Milestone**: M1.8 complete; Phase 1 finished (8/8 milestones)
+- **Sprint**: Sprint 1 complete (10/10 tickets done); Phase 1 complete
+- **Status**: All Phase 0 + Phase 1 milestones implemented. `cargo check/build/test/clippy` clean. 126 tests passing (120 unit + 6 integration).
 
 ## Completed Milestones
 
@@ -25,10 +25,14 @@ Last updated: 2026-02-23
 | M1.2 | Config Parser and Defaults | 2026-02-23 | `hydra.toml` parser via `serde` + `toml` in `hydra-core::config`. Full typed schema: scoring (profile, weights, gates, diff_scope), adapters, worktree, supervisor. `deny_unknown_fields` catches typos. 11 unit tests. Replaced hand-rolled TOML parser in `doctor.rs`. |
 | M1.3 | Worktree Lifecycle Service | 2026-02-23 | `WorktreeService` with async create/list/remove/force_cleanup via git CLI. Branch naming: `hydra/<run_id>/agent/<agent_key>`. Porcelain parser for worktree list. Force cleanup now surfaces cleanup failures and is idempotent. 7 unit tests including full create-remove lifecycle and force cleanup. |
 | M1.4 | Process Supervisor (Single Agent) | 2026-02-23 | `supervise()` function with hard timeout, idle timeout (with activity-based reset), cancellation, bounded output buffering. Emits `SupervisorEvent` stream via mpsc channel. Line parser callback for adapter-specific event extraction. Process-group termination now sends Unix `SIGTERM`/`SIGKILL` to the group (`setsid` + group kill). 8 unit tests. |
+| M1.5 | Claude Adapter Runtime Path | 2026-02-23 | `build_command()` produces `claude -p <prompt> --output-format stream-json --permission-mode bypassPermissions`. `parse_line()` maps stream-json events (system, assistant, result) to `AgentEvent` variants. `parse_raw()` handles multi-line chunks. 14 new tests (build_command flags, parser for all event types, fixture processing, unknown field tolerance). |
+| M1.6 | Codex Adapter Runtime Path | 2026-02-23 | `build_command()` produces `codex exec <prompt> --json --full-auto`. `parse_line()` maps JSONL events (start, message, tool_call, tool_result, completed) to `AgentEvent` variants. `parse_raw()` handles multi-line chunks. 13 new tests (build_command flags, parser for all event types, fixture processing, unknown field tolerance). |
+| M1.7 | CLI Race Command (Single Agent) | 2026-02-23 | `hydra race --agents <agent> --prompt <task> [--base-ref HEAD] [--json]`. Wires load_config -> WorktreeService::create -> adapter.build_command -> supervise -> EventWriter -> artifact output. Run summary with branch and artifact path. Human and JSON output modes. Non-zero exit on failure. |
+| M1.8 | Interrupt and Recovery Tests | 2026-02-23 | 6 integration tests in `tests/interrupt_recovery.rs`: cancel during execution with cleanup, agent crash with no orphans, timeout with partial artifacts, idempotent force_cleanup, concurrent worktree cleanup without interference, simulated Ctrl+C with process group kill and full cleanup. |
 
 ## In-Progress Work
 
-(none — M1.1-M1.4 complete; ready for M1.5-M1.8)
+(none — Phase 1 complete; ready for Phase 2)
 
 ## Decisions Made
 
@@ -55,18 +59,21 @@ Last updated: 2026-02-23
 | 2026-02-23 | Claude probe flag parsing switched to token-aware matching | Avoids false-positive `-p` detection from unrelated flag substrings |
 | 2026-02-23 | `force_cleanup()` now returns concrete cleanup errors and remains idempotent | Improves reliability and observability for interrupt/failure cleanup |
 | 2026-02-23 | `EventWriter` now redacts secrets before persisting JSONL lines | Enforces log/artifact scrubbing at the persistence boundary |
+| 2026-02-23 | Renamed `supervisor::SupervisorConfig` to `SupervisorPolicy` | Resolves name collision with `config::SupervisorConfig` (TOML schema type) flagged in ANALYSIS.md |
+| 2026-02-23 | Claude adapter uses static `parse_stream_json_line()` for parser reuse | Allows both `parse_line()` trait method and race command line_parser closure to share parsing logic |
+| 2026-02-23 | Codex adapter uses static `parse_json_line()` for parser reuse | Same pattern as Claude adapter; enables line_parser closure in race command |
+| 2026-02-23 | Race command uses `tokio::runtime::Runtime::new()` in CLI main | CLI is sync (clap); race is async. Avoids `block_on` inside existing async context. |
 
 ## Open Issues
 
 - `which` v7 pinned; v8 available but not yet evaluated.
 - CI workflow not yet pushed to remote/tested on GitHub Actions.
-- Full runtime sandbox enforcement path (agent write policy + explicit unsafe per-run CLI opt-in) still pending until race runtime wiring (M1.5-M1.7).
 
 ## Crate Status
 
 | Crate | Exists | Compiles | Tests |
 |-------|--------|----------|-------|
-| hydra-core | Yes | Yes | 93 passing |
+| hydra-core | Yes | Yes | 120 unit + 6 integration = 126 passing |
 | hydra-cli | Yes | Yes | 3 passing |
 | hydra-app | No | - | - |
 
@@ -75,7 +82,7 @@ Last updated: 2026-02-23
 | Phase | Name | Status | Milestones Done |
 |-------|------|--------|-----------------|
 | 0 | Validation and Guardrails | **Complete** | 8/8 |
-| 1 | Core Orchestrator + Single Agent | **In Progress** | 4/8 |
+| 1 | Core Orchestrator + Single Agent | **Complete** | 8/8 |
 | 2 | Multi-Agent Race + Scoring | Not started | 0/12 |
 | 3 | GUI Alpha | Not started | 0/7 |
 | 4 | Collaboration Workflows | Not started | 0/6 |
@@ -84,19 +91,17 @@ Last updated: 2026-02-23
 ## Instructions for Next Agent
 
 1. Read `CLAUDE.md` for project overview and conventions.
-2. Phase 1 is **in progress** — M1.1 through M1.4 are complete.
-3. Current baseline: `hydra-core` 93 passing, `hydra-cli` 3 passing. `cargo check --workspace`, `cargo check --workspace --release`, `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo fmt --all` are clean.
-4. **Next**: Implement M1.5 (Claude Adapter Runtime Path) and M1.6 (Codex Adapter Runtime Path) in parallel.
-   - Both depend on M1.4 (done) and their respective Phase 0 probe milestones (done).
-   - Implement `build_command()` and `parse_line()`/`parse_raw()` for each adapter.
-   - Wire through the process supervisor.
-   - Add integration tests for timeout and cancellation scenarios.
-5. After M1.5+M1.6: M1.7 (CLI Race Command) wires config → worktree → adapter → supervisor → artifact.
-6. After M1.7: M1.8 (Interrupt and Recovery Tests) covers Ctrl+C, crash, partial completion.
-7. Key updated files from this session:
-   - Updated runtime files: `crates/hydra-core/src/supervisor/mod.rs`, `crates/hydra-core/src/worktree/mod.rs`, `crates/hydra-core/src/artifact/events.rs`, `crates/hydra-core/src/adapter/claude.rs`
-   - Updated dependency/CI files: `crates/hydra-core/Cargo.toml`, `.github/workflows/ci.yml`
-8. Config schema covers: scoring (profile, weights, gates, diff_scope), adapters, worktree (base_dir, retain), supervisor (hard_timeout, idle_timeout, output_buffer).
-9. Doctor command now uses the typed config parser instead of hand-rolled TOML.
-10. Worktree service branch convention: `hydra/<run_id>/agent/<agent_key>`.
-11. Supervisor supports: start, stream (stdout/stderr), line parsing callback, hard timeout, idle timeout with activity reset, cancellation via handle, bounded output buffering, and Unix process-group kill escalation for timeout/cancel.
+2. Phase 1 is **complete** — all 8 milestones done (M1.1 through M1.8).
+3. Current baseline: `hydra-core` 126 passing (120 unit + 6 integration), `hydra-cli` 3 passing. `cargo check --workspace`, `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo fmt --all` are clean.
+4. **Next**: Phase 2 — Multi-Agent Race + Scoring, starting with M2.1 (Adapter Registry and Tier Policy).
+5. Key files added/modified in this session:
+   - `crates/hydra-core/src/adapter/claude.rs` — Added `build_command()`, `parse_stream_json_line()`, `parse_line()`, `parse_raw()`, 14 new tests
+   - `crates/hydra-core/src/adapter/codex.rs` — Added `build_command()`, `parse_json_line()`, `parse_line()`, `parse_raw()`, 13 new tests
+   - `crates/hydra-core/src/supervisor/mod.rs` — Renamed `SupervisorConfig` to `SupervisorPolicy`
+   - `crates/hydra-cli/src/race.rs` — New: `hydra race` command implementation
+   - `crates/hydra-cli/src/main.rs` — Added Race subcommand with clap
+   - `crates/hydra-core/tests/interrupt_recovery.rs` — New: 6 integration tests for interrupt/recovery
+   - `crates/hydra-cli/Cargo.toml` — Added `uuid` dependency
+6. Adapter parsers use static methods (`ClaudeAdapter::parse_stream_json_line()`, `CodexAdapter::parse_json_line()`) so both trait methods and CLI closures can call them.
+7. Race command flow: `load_config()` → `discover_repo_root()` → `resolve_adapter()` → `RunLayout::create_dirs()` → `WorktreeService::create()` → `adapter.build_command()` → `supervise()` → event loop → `EventWriter` → manifest update → summary output.
+8. Integration tests cover: cancellation with cleanup, crash with no orphans, timeout with partial artifacts, idempotent cleanup, concurrent worktree isolation, and full Ctrl+C simulation with process group kill.
