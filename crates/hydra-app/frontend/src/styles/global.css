@@ -1,0 +1,68 @@
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-950);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+code, pre, kbd, samp {
+  font-family: var(--font-mono);
+}
+
+a {
+  color: var(--color-marine-400);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--color-marine-300);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-marine-500);
+  outline-offset: 2px;
+}
+
+::selection {
+  background-color: var(--color-marine-500);
+  color: var(--color-text-primary);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg-900);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-700);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-600);
+}

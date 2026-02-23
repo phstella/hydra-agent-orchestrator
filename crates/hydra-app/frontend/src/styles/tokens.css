@@ -1,0 +1,113 @@
+/*
+ * Hydra Design Tokens
+ *
+ * Single source of truth for all visual values.
+ * Feature components MUST use these tokens via var(--token-name).
+ * No ad-hoc hex values in feature components.
+ */
+
+:root {
+  /* ── Background layers ── */
+  --color-bg-950: #060B0A;
+  --color-bg-900: #0A1412;
+  --color-bg-850: #0C1916;
+
+  /* ── Surface layers ── */
+  --color-surface-800: #0F1E1A;
+  --color-surface-750: #122620;
+  --color-surface-700: #162E27;
+
+  /* ── Border ── */
+  --color-border-700: #1C3B33;
+  --color-border-600: #245545;
+  --color-border-500: #2D6D57;
+
+  /* ── Green (primary/success) ── */
+  --color-green-600: #16A34A;
+  --color-green-500: #22C55E;
+  --color-green-400: #4ADE80;
+  --color-green-300: #86EFAC;
+
+  /* ── Marine blue (highlight/active/focus) ── */
+  --color-marine-600: #1E5A8A;
+  --color-marine-500: #2F6F9F;
+  --color-marine-400: #4C8DBF;
+  --color-marine-300: #7AB3D4;
+
+  /* ── Warning ── */
+  --color-warning-600: #CA8A04;
+  --color-warning-500: #EAB308;
+  --color-warning-400: #FACC15;
+
+  /* ── Danger ── */
+  --color-danger-600: #DC2626;
+  --color-danger-500: #EF4444;
+  --color-danger-400: #F87171;
+
+  /* ── Text ── */
+  --color-text-primary: #F0FDF4;
+  --color-text-secondary: #A7C4B8;
+  --color-text-muted: #6B8F80;
+  --color-text-inverse: #060B0A;
+
+  /* ── Spacing scale (4px base) ── */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ── Radius ── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ── Typography ── */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.875rem;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.75;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.6);
+  --shadow-glow-green: 0 0 12px rgba(34, 197, 94, 0.25);
+  --shadow-glow-marine: 0 0 12px rgba(47, 111, 159, 0.3);
+
+  /* ── Transitions ── */
+  --transition-fast: 150ms ease;
+  --transition-base: 250ms ease;
+  --transition-slow: 400ms ease;
+
+  /* ── Z-index layers ── */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal-backdrop: 900;
+  --z-modal: 1000;
+  --z-toast: 1100;
+}
