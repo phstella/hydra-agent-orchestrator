@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hydra-core",
+    "crates/hydra-cli",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
