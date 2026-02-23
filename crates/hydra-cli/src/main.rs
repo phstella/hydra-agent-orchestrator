@@ -8,6 +8,7 @@ use hydra_core::adapter::probe::{AdapterTier, ProbeStatus};
 use hydra_core::artifact::manifest::AgentStatus;
 use hydra_core::config::HydraConfig;
 use hydra_core::doctor::DoctorReport;
+use hydra_core::merge::MergeService;
 use hydra_core::orchestrator::Orchestrator;
 
 #[derive(Parser)]
@@ -38,7 +39,23 @@ enum Command {
         config: Option<PathBuf>,
     },
     /// Merge a completed run result into the main branch.
-    Merge,
+    Merge {
+        /// Source branch to merge from (e.g., hydra/<run_id>/agent/claude).
+        #[arg(long)]
+        source: String,
+        /// Target branch (default: current branch).
+        #[arg(long)]
+        target: Option<String>,
+        /// Dry-run only (default: true).
+        #[arg(long, default_value_t = true)]
+        dry_run: bool,
+        /// Actually perform the merge (overrides --dry-run).
+        #[arg(long)]
+        confirm: bool,
+        /// Output results as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -54,10 +71,13 @@ async fn main() -> Result<ExitCode> {
             prompt,
             config,
         }) => run_race(&agents, &prompt, config.as_deref()).await,
-        Some(Command::Merge) => {
-            tracing::info!("merge subcommand (stub)");
-            Ok(ExitCode::SUCCESS)
-        }
+        Some(Command::Merge {
+            source,
+            target,
+            dry_run,
+            confirm,
+            json,
+        }) => run_merge(&source, target.as_deref(), dry_run, confirm, json).await,
         None => {
             println!("hydra v0.1.0");
             Ok(ExitCode::SUCCESS)
@@ -148,6 +168,95 @@ async fn detect_repo_root() -> Result<PathBuf> {
 
     let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(PathBuf::from(root))
+}
+
+async fn run_merge(
+    source: &str,
+    target: Option<&str>,
+    dry_run: bool,
+    confirm: bool,
+    json_output: bool,
+) -> Result<ExitCode> {
+    let repo_root = detect_repo_root()
+        .await
+        .context("failed to detect git repository root")?;
+
+    let target_branch = match target {
+        Some(t) => t.to_string(),
+        None => {
+            // Use current branch as target
+            let output = tokio::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(&repo_root)
+                .output()
+                .await
+                .context("failed to get current branch")?;
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+    };
+
+    let svc = MergeService::new(repo_root);
+
+    let is_dry_run = dry_run && !confirm;
+
+    let report = if is_dry_run {
+        svc.dry_run(source, &target_branch)
+            .await
+            .context("merge dry-run failed")?
+    } else {
+        svc.merge(source, &target_branch)
+            .await
+            .context("merge failed")?
+    };
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).expect("serialize MergeReport")
+        );
+    } else {
+        print_merge_report(&report);
+    }
+
+    if report.can_merge {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(1))
+    }
+}
+
+fn print_merge_report(report: &hydra_core::merge::MergeReport) {
+    let mode = if report.dry_run { "DRY-RUN" } else { "MERGE" };
+    println!("Hydra Merge Report ({mode})");
+    println!("=========================");
+    println!();
+    println!("Source: {}", report.source_branch);
+    println!("Target: {}", report.target_branch);
+    println!();
+
+    if report.can_merge {
+        println!("Status: CAN MERGE");
+    } else {
+        println!("Status: CONFLICTS DETECTED");
+    }
+
+    println!(
+        "Changes: {} files changed, {} insertions(+), {} deletions(-)",
+        report.files_changed, report.insertions, report.deletions
+    );
+
+    if !report.conflicts.is_empty() {
+        println!();
+        println!("Conflicts:");
+        for conflict in &report.conflicts {
+            println!("  - {} ({})", conflict.path, conflict.conflict_type);
+        }
+    }
+
+    if report.dry_run && report.can_merge {
+        println!();
+        println!("To perform the merge, run again with --confirm");
+    }
 }
 
 fn run_doctor(json_output: bool) -> ExitCode {

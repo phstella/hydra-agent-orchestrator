@@ -46,11 +46,7 @@ impl MergeService {
     ///
     /// Performs `git merge --no-commit --no-ff <source>` then immediately
     /// aborts to leave the tree clean.
-    pub async fn dry_run(
-        &self,
-        source_branch: &str,
-        target_branch: &str,
-    ) -> Result<MergeReport> {
+    pub async fn dry_run(&self, source_branch: &str, target_branch: &str) -> Result<MergeReport> {
         info!(source_branch, target_branch, "performing merge dry-run");
 
         // Get diff stats first (before attempting merge)
@@ -95,11 +91,7 @@ impl MergeService {
     }
 
     /// Perform actual merge with `--no-ff`.
-    pub async fn merge(
-        &self,
-        source_branch: &str,
-        target_branch: &str,
-    ) -> Result<MergeReport> {
+    pub async fn merge(&self, source_branch: &str, target_branch: &str) -> Result<MergeReport> {
         info!(source_branch, target_branch, "performing merge");
 
         let (files_changed, insertions, deletions) =
@@ -164,7 +156,11 @@ impl MergeService {
     ) -> Result<(u32, u32, u32)> {
         let output = git_command(
             &self.repo_root,
-            &["diff", "--stat", &format!("{target_branch}...{source_branch}")],
+            &[
+                "diff",
+                "--stat",
+                &format!("{target_branch}...{source_branch}"),
+            ],
         )
         .await;
 
@@ -172,7 +168,10 @@ impl MergeService {
             Ok(stat_output) => Ok(parse_diff_stat(&stat_output)),
             Err(_) => {
                 // If diff fails (e.g., branches don't share history), return zeros
-                warn!(source_branch, target_branch, "diff --stat failed, returning zeros");
+                warn!(
+                    source_branch,
+                    target_branch, "diff --stat failed, returning zeros"
+                );
                 Ok((0, 0, 0))
             }
         }
@@ -382,20 +381,27 @@ mod tests {
             .await
             .unwrap();
         git_command(&root, &["add", "."]).await.unwrap();
-        git_command(&root, &["commit", "-m", "initial"]).await.unwrap();
+        git_command(&root, &["commit", "-m", "initial"])
+            .await
+            .unwrap();
 
         // Create feature branch with changes
-        git_command(&root, &["checkout", "-b", "feature"]).await.unwrap();
+        git_command(&root, &["checkout", "-b", "feature"])
+            .await
+            .unwrap();
         tokio::fs::write(root.join("file.txt"), "modified\n")
             .await
             .unwrap();
         git_command(&root, &["add", "."]).await.unwrap();
-        git_command(&root, &["commit", "-m", "feature change"]).await.unwrap();
+        git_command(&root, &["commit", "-m", "feature change"])
+            .await
+            .unwrap();
 
         // Switch back to main
-        git_command(&root, &["checkout", "master"]).await
-            .or_else(|_| async { git_command(&root, &["checkout", "main"]).await }.await)
-            .unwrap();
+        // Try "master" first; fall back to "main" for newer git defaults.
+        if git_command(&root, &["checkout", "master"]).await.is_err() {
+            git_command(&root, &["checkout", "main"]).await.unwrap();
+        }
 
         let svc = MergeService::new(root);
         let report = svc.dry_run("feature", "HEAD").await.unwrap();
@@ -425,25 +431,34 @@ mod tests {
             .await
             .unwrap();
         git_command(&root, &["add", "."]).await.unwrap();
-        git_command(&root, &["commit", "-m", "initial"]).await.unwrap();
+        git_command(&root, &["commit", "-m", "initial"])
+            .await
+            .unwrap();
 
         // Create feature branch with conflicting changes
-        git_command(&root, &["checkout", "-b", "feature"]).await.unwrap();
+        git_command(&root, &["checkout", "-b", "feature"])
+            .await
+            .unwrap();
         tokio::fs::write(root.join("file.txt"), "feature-line1\nline2\nline3\n")
             .await
             .unwrap();
         git_command(&root, &["add", "."]).await.unwrap();
-        git_command(&root, &["commit", "-m", "feature change"]).await.unwrap();
+        git_command(&root, &["commit", "-m", "feature change"])
+            .await
+            .unwrap();
 
         // Go back to default branch and make conflicting change
-        git_command(&root, &["checkout", "master"]).await
-            .or_else(|_| async { git_command(&root, &["checkout", "main"]).await }.await)
-            .unwrap();
+        // Try "master" first; fall back to "main" for newer git defaults.
+        if git_command(&root, &["checkout", "master"]).await.is_err() {
+            git_command(&root, &["checkout", "main"]).await.unwrap();
+        }
         tokio::fs::write(root.join("file.txt"), "main-line1\nline2\nline3\n")
             .await
             .unwrap();
         git_command(&root, &["add", "."]).await.unwrap();
-        git_command(&root, &["commit", "-m", "main change"]).await.unwrap();
+        git_command(&root, &["commit", "-m", "main change"])
+            .await
+            .unwrap();
 
         let svc = MergeService::new(root);
         let report = svc.dry_run("feature", "HEAD").await.unwrap();
@@ -472,20 +487,27 @@ mod tests {
             .await
             .unwrap();
         git_command(&root, &["add", "."]).await.unwrap();
-        git_command(&root, &["commit", "-m", "initial"]).await.unwrap();
+        git_command(&root, &["commit", "-m", "initial"])
+            .await
+            .unwrap();
 
         // Create feature branch
-        git_command(&root, &["checkout", "-b", "feature"]).await.unwrap();
+        git_command(&root, &["checkout", "-b", "feature"])
+            .await
+            .unwrap();
         tokio::fs::write(root.join("new_file.txt"), "new content\n")
             .await
             .unwrap();
         git_command(&root, &["add", "."]).await.unwrap();
-        git_command(&root, &["commit", "-m", "add new file"]).await.unwrap();
+        git_command(&root, &["commit", "-m", "add new file"])
+            .await
+            .unwrap();
 
         // Switch back to default branch
-        git_command(&root, &["checkout", "master"]).await
-            .or_else(|_| async { git_command(&root, &["checkout", "main"]).await }.await)
-            .unwrap();
+        // Try "master" first; fall back to "main" for newer git defaults.
+        if git_command(&root, &["checkout", "master"]).await.is_err() {
+            git_command(&root, &["checkout", "main"]).await.unwrap();
+        }
 
         let svc = MergeService::new(root.clone());
         let report = svc.merge("feature", "HEAD").await.unwrap();

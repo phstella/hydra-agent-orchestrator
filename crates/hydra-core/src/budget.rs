@@ -54,10 +54,7 @@ impl CostTracker {
     pub fn record_usage(&mut self, agent_key: &str, input_tokens: u64, output_tokens: u64) {
         let cost = estimate_cost(input_tokens, output_tokens);
 
-        let entry = self
-            .per_agent
-            .entry(agent_key.to_string())
-            .or_default();
+        let entry = self.per_agent.entry(agent_key.to_string()).or_default();
         entry.input_tokens += input_tokens;
         entry.output_tokens += output_tokens;
         entry.estimated_cost_usd += cost;

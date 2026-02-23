@@ -1,8 +1,11 @@
 pub mod adapter;
 pub mod artifact;
+pub mod budget;
 pub mod config;
 pub mod doctor;
 pub mod error;
+pub mod merge;
+pub mod observability;
 pub mod orchestrator;
 pub mod scoring;
 pub mod security;
