@@ -82,36 +82,34 @@ impl SecretRedactor {
 
     /// Redact secrets from a single line of text.
     pub fn redact_line<'a>(&self, input: &'a str) -> Cow<'a, str> {
-        let mut result = None::<String>;
+        let mut output = input.to_string();
+        let mut changed = false;
 
         for (prefix, kind) in SECRET_PATTERNS {
-            let search_from = 0;
-            let haystack = result.as_deref().unwrap_or(input);
-            if let Some(pos) = haystack[search_from..].find(prefix) {
-                let abs_pos = search_from + pos;
-                let owned = result.take().unwrap_or_else(|| input.to_string());
-                let token_end = find_token_end(&owned, abs_pos);
-                let replacement = format!("[REDACTED:{}]", kind.label());
-                let mut new = String::with_capacity(owned.len());
-                new.push_str(&owned[..abs_pos]);
-                new.push_str(&replacement);
-                new.push_str(&owned[token_end..]);
-                result = Some(new);
+            let replacement = format!("[REDACTED:{}]", kind.label());
+            let mut search_from = 0;
+
+            while let Some(rel_pos) = output[search_from..].find(prefix) {
+                let abs_pos = search_from + rel_pos;
+                let token_end = find_token_end(&output, abs_pos);
+                output.replace_range(abs_pos..token_end, &replacement);
+                changed = true;
+                search_from = abs_pos + replacement.len();
             }
         }
 
         for (pattern, label) in &self.custom_patterns {
-            let haystack = result.as_deref().unwrap_or(input);
-            if haystack.contains(pattern.as_str()) {
+            if output.contains(pattern.as_str()) {
                 let replacement = format!("[REDACTED:{label}]");
-                let owned = result.take().unwrap_or_else(|| input.to_string());
-                result = Some(owned.replace(pattern.as_str(), &replacement));
+                output = output.replace(pattern.as_str(), &replacement);
+                changed = true;
             }
         }
 
-        match result {
-            Some(s) => Cow::Owned(s),
-            None => Cow::Borrowed(input),
+        if changed {
+            Cow::Owned(output)
+        } else {
+            Cow::Borrowed(input)
         }
     }
 
@@ -271,5 +269,24 @@ mod tests {
         let output = r.redact_line(input);
         assert!(!output.contains("github_pat_"));
         assert!(output.contains("[REDACTED:GITHUB_FINE_PAT]"));
+    }
+
+    #[test]
+    fn redacts_multiple_occurrences_of_same_prefix() {
+        let r = SecretRedactor::new();
+        let input = "a=sk-ant-first b=sk-ant-second";
+        let output = r.redact_line(input);
+        assert_eq!(output.matches("[REDACTED:ANTHROPIC_KEY]").count(), 2);
+        assert!(!output.contains("sk-ant-"));
+    }
+
+    #[test]
+    fn custom_pattern_redacts_all_occurrences() {
+        let mut r = SecretRedactor::new();
+        r.add_pattern("abc123".to_string(), "CUSTOM".to_string());
+        let input = "abc123 and again abc123";
+        let output = r.redact_line(input);
+        assert_eq!(output.matches("[REDACTED:CUSTOM]").count(), 2);
+        assert!(!output.contains("abc123"));
     }
 }

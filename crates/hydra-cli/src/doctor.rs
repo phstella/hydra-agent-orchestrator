@@ -1,5 +1,6 @@
 use hydra_core::adapter::ProbeReport;
 use serde::Serialize;
+use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, Serialize)]
@@ -8,6 +9,13 @@ pub struct DoctorReport {
     pub git: GitChecks,
     pub all_tier1_ready: bool,
     pub git_ok: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdapterPathOverrides {
+    pub claude: Option<String>,
+    pub codex: Option<String>,
+    pub cursor: Option<String>,
 }
 
 impl DoctorReport {
@@ -25,6 +33,106 @@ impl DoctorReport {
     pub fn healthy(&self) -> bool {
         self.all_tier1_ready && self.git_ok
     }
+}
+
+pub fn load_adapter_path_overrides() -> AdapterPathOverrides {
+    load_adapter_path_overrides_from(Path::new("hydra.toml"))
+}
+
+fn load_adapter_path_overrides_from(path: &Path) -> AdapterPathOverrides {
+    if !path.exists() {
+        return AdapterPathOverrides::default();
+    }
+
+    let data = match std::fs::read_to_string(path) {
+        Ok(d) => d,
+        Err(err) => {
+            tracing::warn!(
+                config = %path.display(),
+                error = %err,
+                "Failed to read hydra.toml adapter path overrides"
+            );
+            return AdapterPathOverrides::default();
+        }
+    };
+
+    match parse_adapter_path_overrides_toml(&data) {
+        Ok(paths) => paths,
+        Err(err) => {
+            tracing::warn!(
+                config = %path.display(),
+                error = %err,
+                "Failed to parse hydra.toml adapter path overrides"
+            );
+            AdapterPathOverrides::default()
+        }
+    }
+}
+
+fn parse_adapter_path_overrides_toml(data: &str) -> Result<AdapterPathOverrides, String> {
+    let mut in_adapters_section = false;
+    let mut parsed = AdapterPathOverrides::default();
+    let mut cursor_fallback: Option<String> = None;
+
+    for (idx, raw_line) in data.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if line.starts_with('[') && line.ends_with(']') {
+            in_adapters_section = line == "[adapters]";
+            continue;
+        }
+
+        if !in_adapters_section {
+            continue;
+        }
+
+        let (key, value_raw) = line
+            .split_once('=')
+            .ok_or_else(|| format!("invalid adapters entry at line {}", idx + 1))?;
+        let key = key.trim();
+        let value = parse_toml_string_value(value_raw.trim())
+            .ok_or_else(|| format!("invalid value for '{key}' at line {}", idx + 1))?;
+
+        match key {
+            "claude" => parsed.claude = Some(value),
+            "codex" => parsed.codex = Some(value),
+            "cursor_agent" => parsed.cursor = Some(value),
+            "cursor" => cursor_fallback = Some(value),
+            _ => {}
+        }
+    }
+
+    if parsed.cursor.is_none() {
+        parsed.cursor = cursor_fallback;
+    }
+
+    Ok(parsed)
+}
+
+fn parse_toml_string_value(input: &str) -> Option<String> {
+    let value_without_comment = input.split('#').next()?.trim();
+    if value_without_comment.is_empty() {
+        return None;
+    }
+
+    if let Some(inner) = value_without_comment
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+    {
+        return Some(inner.replace("\\\"", "\""));
+    }
+
+    if let Some(inner) = value_without_comment
+        .strip_prefix('\'')
+        .and_then(|s| s.strip_suffix('\''))
+    {
+        return Some(inner.to_string());
+    }
+
+    Some(value_without_comment.to_string())
 }
 
 #[derive(Debug, Serialize)]
@@ -161,5 +269,63 @@ pub fn print_human_report(report: &DoctorReport) {
         if !report.git_ok {
             println!("  - Git repository checks failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn parse_adapter_paths_from_toml() {
+        let data = r#"
+[adapters]
+claude = "/opt/claude"
+codex = "/opt/codex"
+cursor = "/opt/cursor"
+"#;
+
+        let parsed = parse_adapter_path_overrides_toml(data).unwrap();
+        assert_eq!(parsed.claude.as_deref(), Some("/opt/claude"));
+        assert_eq!(parsed.codex.as_deref(), Some("/opt/codex"));
+        assert_eq!(parsed.cursor.as_deref(), Some("/opt/cursor"));
+    }
+
+    #[test]
+    fn parse_prefers_cursor_agent_field() {
+        let data = r#"
+[adapters]
+cursor = "/opt/cursor"
+cursor_agent = "/opt/cursor-agent"
+"#;
+
+        let parsed = parse_adapter_path_overrides_toml(data).unwrap();
+        assert_eq!(parsed.cursor.as_deref(), Some("/opt/cursor-agent"));
+    }
+
+    #[test]
+    fn missing_config_file_returns_default_paths() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("hydra.toml");
+        let parsed = load_adapter_path_overrides_from(&missing);
+        assert_eq!(parsed, AdapterPathOverrides::default());
+    }
+
+    #[test]
+    fn parser_ignores_non_adapter_sections_and_inline_comments() {
+        let data = r#"
+[scoring]
+profile = "rust"
+
+[adapters]
+claude = "/opt/claude" # comment
+codex = '/opt/codex'
+"#;
+
+        let parsed = parse_adapter_path_overrides_toml(data).unwrap();
+        assert_eq!(parsed.claude.as_deref(), Some("/opt/claude"));
+        assert_eq!(parsed.codex.as_deref(), Some("/opt/codex"));
+        assert_eq!(parsed.cursor, None);
     }
 }

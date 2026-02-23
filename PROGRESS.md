@@ -7,7 +7,7 @@ Last updated: 2026-02-23
 - **Phase**: 0 complete; ready for Phase 1
 - **Milestone**: All Phase 0 milestones (M0.1-M0.8) complete
 - **Sprint**: Sprint 1 (8/10 tickets done — remaining: M1.1, M1.2)
-- **Status**: Adapter probes, artifact convention, security baseline, and doctor command all implemented
+- **Status**: Phase 0 hardening pass complete (sandbox + redaction fixes, probe robustness, config-aware doctor)
 
 ## Completed Milestones
 
@@ -19,12 +19,12 @@ Last updated: 2026-02-23
 | M0.4 | Cursor Experimental Probe | 2026-02-23 | Always experimental tier. Status: experimental-ready/blocked/missing. Observed confidence. |
 | M0.5 | Run Artifact Convention | 2026-02-23 | `RunLayout`, `RunManifest` (schema_version=1), `EventWriter`/`EventReader` for JSONL. 15 unit tests. |
 | M0.6 | Doctor Command MVP | 2026-02-23 | `hydra doctor` with adapter probes + git checks. Human and JSON output. Non-zero exit on failure. |
-| M0.7 | Security Baseline Implementation | 2026-02-23 | `SecretRedactor` (13 patterns + custom), `SandboxPolicy` (strict/unsafe). 19 unit tests. |
+| M0.7 | Security Baseline Implementation | 2026-02-23 | `SecretRedactor` (13 patterns + custom), `SandboxPolicy` (strict/unsafe). Hardened with multi-match redaction and path-normalized sandbox checks. |
 | M0.8 | Architecture Decision Lock | 2026-02-23 | ADR 6 (process model) and ADR 7 (storage model) confirmed in architecture.md. |
 
 ## In-Progress Work
 
-(none — Phase 0 complete)
+(none — hardening complete; ready for Phase 1)
 
 ## Decisions Made
 
@@ -36,18 +36,24 @@ Last updated: 2026-02-23
 | 2026-02-23 | `RunManifest` includes `schema_version: 1` from day one | Forward-compatibility per ADR 7; supports future migration (M5.6) |
 | 2026-02-23 | `resolve_binary` does not fall back to PATH when configured path is set but missing | Explicit config takes precedence; prevents unexpected binary resolution |
 | 2026-02-23 | M0.8 satisfied by existing docs/architecture.md content | ADR 6 and 7 were already documented during planning phase |
+| 2026-02-23 | Shared adapter version parser extracted to `adapter/mod.rs` | Removes duplication across Claude/Codex/Cursor probes and centralizes version parsing behavior |
+| 2026-02-23 | Adapter help probes now require successful exit status | Prevents false-positive readiness when `--help`/`exec --help` exits non-zero |
+| 2026-02-23 | Sandbox strict-mode fallback now normalizes absolute paths and components | Closes prefix-based bypass for non-existent paths (`worktree` vs `worktree-evil`, `..` traversal) |
+| 2026-02-23 | Secret redaction now handles multiple occurrences per line | Prevents leakage when the same token prefix appears multiple times on one log line |
+| 2026-02-23 | `hydra doctor` reads optional adapter path overrides from `hydra.toml` | Enables configured binary paths before full config parser milestone (M1.2) lands |
+| 2026-02-23 | Reduced Tokio feature sets in core/cli crates | Keeps runtime surface lean while preserving required async/runtime capabilities |
 
 ## Open Issues
 
 - `which` v7 pinned; v8 available but not yet evaluated.
-- Doctor command discovers real adapters on PATH but probe tests use fixture-only approach.
+- `hydra.toml` parsing in doctor is intentionally lightweight and local (full typed config parser deferred to M1.2).
 
 ## Crate Status
 
 | Crate | Exists | Compiles | Tests |
 |-------|--------|----------|-------|
-| hydra-core | Yes | Yes | 61 passing |
-| hydra-cli | Yes | Yes | 0 (functional tests via `cargo run`) |
+| hydra-core | Yes | Yes | 65 passing |
+| hydra-cli | Yes | Yes | 4 passing |
 | hydra-app | No | - | - |
 
 ## Phase Progress
@@ -64,14 +70,21 @@ Last updated: 2026-02-23
 ## Instructions for Next Agent
 
 1. Read `CLAUDE.md` for project overview and conventions.
-2. Phase 0 is **complete**. All 8 milestones done with 61 passing tests.
-3. **Next**: Start Phase 1 per `instructions/phase-1.md` (if exists) or `planning/sprint-1-cut.md`.
-4. Sprint 1 remaining tickets: `M1.1` (Core Workspace Scaffold) and `M1.2` (Config Parser and Defaults).
-5. `M1.1` depends on M0.8 (done). `M1.2` depends on M1.1.
-6. Key files to know:
+2. Phase 0 is **complete** and hardening fixes from `ANALYSIS.md` are implemented.
+3. Current test baseline: `hydra-core` 65 passing, `hydra-cli` 4 passing.
+4. **Next**: Start Phase 1 per `instructions/phase-1.md` (if exists) or `planning/sprint-1-cut.md`.
+5. Sprint 1 remaining tickets: `M1.1` (Core Workspace Scaffold) and `M1.2` (Config Parser and Defaults).
+6. `M1.1` depends on M0.8 (done). `M1.2` depends on M1.1.
+7. Hardening-related files:
+   - Shared adapter version parser: `crates/hydra-core/src/adapter/mod.rs`
+   - Probe exit-status checks: `crates/hydra-core/src/adapter/{claude,codex,cursor}.rs`
+   - Redaction multi-match logic: `crates/hydra-core/src/security/redact.rs`
+   - Sandbox normalized path enforcement: `crates/hydra-core/src/security/sandbox.rs`
+   - Doctor path overrides (`hydra.toml`): `crates/hydra-cli/src/doctor.rs`, `crates/hydra-cli/src/main.rs`
+8. Key files to know:
    - Adapter framework: `crates/hydra-core/src/adapter/`
    - Artifact convention: `crates/hydra-core/src/artifact/`
    - Security: `crates/hydra-core/src/security/`
    - CLI entry: `crates/hydra-cli/src/main.rs`
    - Doctor command: `crates/hydra-cli/src/doctor.rs`
-7. Test fixtures: `crates/hydra-core/tests/fixtures/adapters/{claude,codex,cursor}/`
+9. Test fixtures: `crates/hydra-core/tests/fixtures/adapters/{claude,codex,cursor}/`

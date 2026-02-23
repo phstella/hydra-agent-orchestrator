@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use super::types::*;
-use super::{resolve_binary, AgentAdapter};
+use super::{parse_version_string, resolve_binary, AgentAdapter};
 
 /// Cursor Agent adapter probe implementation (experimental).
 ///
@@ -23,6 +23,17 @@ impl CursorAdapter {
             .output()
             .map_err(|e| format!("failed to run --help: {e}"))?;
 
+        if !output.status.success() {
+            return Err(format!(
+                "--help exited with status {}",
+                output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".to_string())
+            ));
+        }
+
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         Ok(format!("{stdout}{stderr}"))
@@ -30,8 +41,7 @@ impl CursorAdapter {
 
     fn probe_version(binary: &PathBuf) -> Option<String> {
         let output = Command::new(binary).arg("--version").output().ok()?;
-        let text = String::from_utf8_lossy(&output.stdout).to_string();
-        parse_version_string(&text)
+        parse_version_string(&String::from_utf8_lossy(&output.stdout))
     }
 
     /// Parse help text to determine supported flags.
@@ -143,22 +153,6 @@ impl AgentAdapter for CursorAdapter {
             emits_usage: CapabilityEntry::unknown(),
         }
     }
-}
-
-fn parse_version_string(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        for word in line.split_whitespace() {
-            let w = word.strip_prefix('v').unwrap_or(word);
-            if w.contains('.') && w.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                return Some(w.to_string());
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]

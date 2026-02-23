@@ -40,6 +40,23 @@ pub trait AgentAdapter: Send + Sync {
     }
 }
 
+/// Best-effort extraction of semantic-ish version string from CLI output.
+pub(crate) fn parse_version_string(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        for word in line.split_whitespace() {
+            let w = word.strip_prefix('v').unwrap_or(word);
+            if w.contains('.') && w.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                return Some(w.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Resolve binary by checking configured path, then `$PATH` candidates.
 ///
 /// If a configured path is provided but doesn't exist, returns `None`

@@ -50,38 +50,49 @@ impl SandboxPolicy {
             return SandboxResult::Allowed;
         }
 
-        match target.canonicalize() {
-            Ok(canonical) => match self.allowed_root.canonicalize() {
-                Ok(root) => {
-                    if canonical.starts_with(&root) {
-                        SandboxResult::Allowed
-                    } else {
-                        SandboxResult::Blocked {
-                            path: target.to_path_buf(),
-                            allowed_root: self.allowed_root.clone(),
-                        }
-                    }
-                }
-                Err(_) => SandboxResult::Blocked {
-                    path: target.to_path_buf(),
-                    allowed_root: self.allowed_root.clone(),
-                },
-            },
-            Err(_) => {
-                // Path doesn't exist yet; check prefix match on raw paths
-                let target_str = target.to_string_lossy();
-                let root_str = self.allowed_root.to_string_lossy();
-                if target_str.starts_with(root_str.as_ref()) {
-                    SandboxResult::Allowed
-                } else {
-                    SandboxResult::Blocked {
-                        path: target.to_path_buf(),
-                        allowed_root: self.allowed_root.clone(),
-                    }
-                }
+        let root = self
+            .allowed_root
+            .canonicalize()
+            .unwrap_or_else(|_| normalize_abs_path(&self.allowed_root));
+
+        let resolved_target = target
+            .canonicalize()
+            .unwrap_or_else(|_| normalize_abs_path(target));
+
+        if resolved_target.starts_with(&root) {
+            SandboxResult::Allowed
+        } else {
+            SandboxResult::Blocked {
+                path: target.to_path_buf(),
+                allowed_root: self.allowed_root.clone(),
             }
         }
     }
+}
+
+fn normalize_abs_path(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+
+    let mut normalized = PathBuf::new();
+    let is_absolute = absolute.is_absolute();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !normalized.pop() && !is_absolute {
+                    normalized.push("..");
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -174,6 +185,36 @@ mod tests {
         let policy = SandboxPolicy::strict(root);
         assert!(matches!(
             policy.check_path(&outside),
+            SandboxResult::Blocked { .. }
+        ));
+    }
+
+    #[test]
+    fn nonexistent_path_with_similar_prefix_is_blocked() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("worktree");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let lookalike = tmp.path().join("worktree-evil/file.txt");
+        let policy = SandboxPolicy::strict(root);
+
+        assert!(matches!(
+            policy.check_path(&lookalike),
+            SandboxResult::Blocked { .. }
+        ));
+    }
+
+    #[test]
+    fn path_traversal_with_dotdot_is_blocked() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("worktree");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let escaped = root.join("../outside/file.txt");
+        let policy = SandboxPolicy::strict(root);
+
+        assert!(matches!(
+            policy.check_path(&escaped),
             SandboxResult::Blocked { .. }
         ));
     }
