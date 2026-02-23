@@ -64,6 +64,11 @@ pub fn run_merge(opts: MergeOpts) -> Result<()> {
 
     let branch = &entry.branch;
 
+    // Pre-flight safety checks
+    check_not_in_merge_state(&repo_root)?;
+    check_clean_working_tree(&repo_root)?;
+    check_branch_exists(&repo_root, branch)?;
+
     if opts.dry_run {
         return run_dry_merge(&repo_root, branch, &layout, &agent_key, opts.json);
     }
@@ -234,6 +239,50 @@ fn load_agent_score(layout: &RunLayout, agent_key: &str) -> Result<AgentScore> {
     let data = std::fs::read_to_string(&path)?;
     let score: AgentScore = serde_json::from_str(&data)?;
     Ok(score)
+}
+
+fn check_not_in_merge_state(repo_root: &Path) -> Result<()> {
+    let merge_head = repo_root.join(".git/MERGE_HEAD");
+    if merge_head.exists() {
+        bail!(
+            "repository is already in a merge state. \
+             Resolve or abort the current merge before running hydra merge"
+        );
+    }
+    Ok(())
+}
+
+fn check_clean_working_tree(repo_root: &Path) -> Result<()> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo_root)
+        .output()
+        .context("failed to run git status")?;
+
+    if output.status.success() && !output.stdout.is_empty() {
+        bail!(
+            "working tree has uncommitted changes. \
+             Commit or stash changes before running hydra merge"
+        );
+    }
+    Ok(())
+}
+
+fn check_branch_exists(repo_root: &Path, branch: &str) -> Result<()> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
+        .current_dir(repo_root)
+        .output()
+        .context("failed to verify branch")?;
+
+    if !output.status.success() {
+        bail!(
+            "branch '{}' does not exist. \
+             The worktree may have been cleaned up already",
+            branch
+        );
+    }
+    Ok(())
 }
 
 fn discover_repo_root() -> Result<PathBuf> {

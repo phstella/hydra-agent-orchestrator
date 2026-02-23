@@ -1,5 +1,3 @@
-use serde::{Deserialize, Serialize};
-
 use super::DimensionScore;
 use crate::scoring::baseline::CommandResult;
 
@@ -20,13 +18,6 @@ pub fn score_build(
             "duration_ms": agent_result.duration_ms,
         }),
     }
-}
-
-/// Detailed build score with additional context.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BuildScoreDetail {
-    pub passed: bool,
-    pub baseline_passed: Option<bool>,
 }
 
 #[cfg(test)]

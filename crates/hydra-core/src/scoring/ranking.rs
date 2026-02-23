@@ -113,15 +113,14 @@ fn check_gates(dimensions: &[DimensionScore], gates: &GatesConfig) -> (bool, Vec
 
     if gates.max_test_regression_percent >= 0.0 {
         if let Some(tests) = dimensions.iter().find(|d| d.name == "tests") {
-            if let Some(regression) = tests.evidence.get("regression") {
-                if let Some(reg_count) = regression.as_u64() {
-                    if let Some(baseline_passed) = tests
-                        .evidence
-                        .get("baseline_passed")
-                        .and_then(|v| v.as_u64())
-                    {
-                        if baseline_passed > 0 && reg_count > 0 {
-                            let reg_pct = (reg_count as f64 / baseline_passed as f64) * 100.0;
+            let regression = tests.evidence.get("regression");
+            let baseline_passed = tests.evidence.get("baseline_passed");
+
+            match (regression, baseline_passed) {
+                (Some(reg_val), Some(bp_val)) => {
+                    match (reg_val.as_u64(), bp_val.as_u64()) {
+                        (Some(reg_count), Some(bp_count)) if bp_count > 0 && reg_count > 0 => {
+                            let reg_pct = (reg_count as f64 / bp_count as f64) * 100.0;
                             if reg_pct > gates.max_test_regression_percent {
                                 failures.push(format!(
                                     "test regression {reg_pct:.1}% exceeds max {:.1}%",
@@ -129,7 +128,18 @@ fn check_gates(dimensions: &[DimensionScore], gates: &GatesConfig) -> (bool, Vec
                                 ));
                             }
                         }
+                        (None, _) | (_, None) => {
+                            tracing::warn!(
+                                "test gate: evidence fields 'regression' or 'baseline_passed' \
+                                 have unexpected types (expected u64), skipping regression gate"
+                            );
+                        }
+                        _ => {} // reg_count==0 or bp_count==0, no regression to check
                     }
+                }
+                _ => {
+                    // Evidence fields missing — test scorer may not have included them
+                    // (e.g., no baseline). This is expected when baseline is absent.
                 }
             }
         }

@@ -180,8 +180,20 @@ pub async fn run_command(
 /// Supports common patterns from cargo test, pytest, jest/mocha.
 pub fn parse_test_output(result: &CommandResult) -> TestResult {
     let combined = format!("{}\n{}", result.stdout, result.stderr);
-    let (passed, failed, total) =
-        parse_test_counts(&combined).unwrap_or(if result.success { (1, 0, 1) } else { (0, 1, 1) });
+    let (passed, failed, total) = match parse_test_counts(&combined) {
+        Some(counts) => counts,
+        None => {
+            let fallback = if result.success { (1, 0, 1) } else { (0, 1, 1) };
+            tracing::warn!(
+                command = %result.command,
+                exit_code = result.exit_code,
+                "test output did not match any known format (cargo/pytest/jest), \
+                 falling back to exit-code heuristic: passed={}, failed={}, total={}",
+                fallback.0, fallback.1, fallback.2
+            );
+            fallback
+        }
+    };
 
     TestResult {
         command_result: result.clone(),
@@ -231,8 +243,20 @@ fn parse_test_counts(output: &str) -> Option<(u32, u32, u32)> {
 /// Parse lint output to extract error/warning counts.
 pub fn parse_lint_output(result: &CommandResult) -> LintResult {
     let combined = format!("{}\n{}", result.stdout, result.stderr);
-    let (errors, warnings) =
-        parse_lint_counts(&combined).unwrap_or(if result.success { (0, 0) } else { (1, 0) });
+    let (errors, warnings) = match parse_lint_counts(&combined) {
+        Some(counts) => counts,
+        None => {
+            let fallback = if result.success { (0, 0) } else { (1, 0) };
+            tracing::warn!(
+                command = %result.command,
+                exit_code = result.exit_code,
+                "lint output did not match any known format (clippy/eslint/ruff), \
+                 falling back to exit-code heuristic: errors={}, warnings={}",
+                fallback.0, fallback.1
+            );
+            fallback
+        }
+    };
 
     LintResult {
         command_result: result.clone(),

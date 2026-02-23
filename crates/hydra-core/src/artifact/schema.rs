@@ -2,6 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use super::events::{EventKind, RunEvent};
 
+/// Well-known error message fragments used to classify agent failure causes.
+/// Use these instead of bare string literals to prevent silent classification drift.
+const CANCELLED_INDICATOR: &str = "cancelled";
+const TIMED_OUT_INDICATOR: &str = "timed out";
+
 /// Versioned event schema definition.
 /// All EventKind variants are enumerated here for stability guarantees.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,7 +87,9 @@ impl RunHealthMetrics {
                     && e.data
                         .get("error")
                         .and_then(|v| v.as_str())
-                        .is_some_and(|s| !s.contains("cancelled") && !s.contains("timed out"))
+                        .is_some_and(|s| {
+                        !s.contains(CANCELLED_INDICATOR) && !s.contains(TIMED_OUT_INDICATOR)
+                    })
             })
             .count() as u32;
 
