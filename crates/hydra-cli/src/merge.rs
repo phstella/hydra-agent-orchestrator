@@ -94,6 +94,8 @@ fn run_dry_merge(
     agent_key: &str,
     json: bool,
 ) -> Result<()> {
+    let had_merge_state_before = merge_head_exists(repo_root)?;
+
     let merge_output = std::process::Command::new("git")
         .args(["merge", "--no-commit", "--no-ff", branch])
         .current_dir(repo_root)
@@ -104,11 +106,29 @@ fn run_dry_merge(
     let merge_stderr = String::from_utf8_lossy(&merge_output.stderr).to_string();
     let has_conflicts = !merge_output.status.success();
 
-    // Always abort the merge to restore working tree
-    let _ = std::process::Command::new("git")
-        .args(["merge", "--abort"])
-        .current_dir(repo_root)
-        .output();
+    let has_merge_state_after = merge_head_exists(repo_root)?;
+
+    // Abort only when this dry-run actually opened a merge state.
+    if !had_merge_state_before && has_merge_state_after {
+        let abort_output = std::process::Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(repo_root)
+            .output()
+            .context("failed to run git merge --abort after dry-run")?;
+        if !abort_output.status.success() {
+            let stderr = String::from_utf8_lossy(&abort_output.stderr)
+                .trim()
+                .to_string();
+            bail!(
+                "dry-run merge created merge state but failed to abort{}",
+                if stderr.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {stderr}")
+                }
+            );
+        }
+    }
 
     let report = MergeReport {
         agent: agent_key.to_string(),
@@ -242,8 +262,7 @@ fn load_agent_score(layout: &RunLayout, agent_key: &str) -> Result<AgentScore> {
 }
 
 fn check_not_in_merge_state(repo_root: &Path) -> Result<()> {
-    let merge_head = repo_root.join(".git/MERGE_HEAD");
-    if merge_head.exists() {
+    if merge_head_exists(repo_root)? {
         bail!(
             "repository is already in a merge state. \
              Resolve or abort the current merge before running hydra merge"
@@ -259,7 +278,19 @@ fn check_clean_working_tree(repo_root: &Path) -> Result<()> {
         .output()
         .context("failed to run git status")?;
 
-    if output.status.success() && !output.stdout.is_empty() {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!(
+            "git status failed{}",
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
+        );
+    }
+
+    if !output.stdout.is_empty() {
         bail!(
             "working tree has uncommitted changes. \
              Commit or stash changes before running hydra merge"
@@ -283,6 +314,32 @@ fn check_branch_exists(repo_root: &Path, branch: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn merge_head_exists(repo_root: &Path) -> Result<bool> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .context("failed to inspect merge state")?;
+
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    if output.status.code() == Some(1) {
+        return Ok(false);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    bail!(
+        "failed to inspect merge state{}",
+        if stderr.is_empty() {
+            String::new()
+        } else {
+            format!(": {stderr}")
+        }
+    )
 }
 
 fn discover_repo_root() -> Result<PathBuf> {
