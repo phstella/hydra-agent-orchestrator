@@ -1,6 +1,6 @@
 # Hydra Research Index
 
-Last updated: 2026-02-23
+Last updated: 2026-02-22
 
 ## Product Summary
 
@@ -41,18 +41,18 @@ Out-of-scope for initial product:
 
 ## Document Map
 
-- `research/architecture.md`: system and runtime design
+- `research/architecture.md`: system and runtime design (includes locked ADRs for process model and storage model)
 - `research/agent-adapters.md`: per-agent adapter contracts and CLI specifics
 - `research/scoring-engine.md`: evaluation model and calibration
 - `research/collaboration-workflows.md`: multi-agent workflow definitions
 - `research/tech-stack.md`: technology decisions and tradeoffs
 - `research/competitive-analysis.md`: market scan and differentiation
-- `research/roadmap.md`: phased delivery plan, gates, and risks
-- `research/implementation-checklist.md`: issue-ready execution checklist by milestone
-- `research/github-issues.md`: copy-paste-ready GitHub issue bodies (`M0.1` to `M5.5`)
-- `research/sprint-1-cut.md`: dependency-safe first sprint ticket cut
+- `research/roadmap.md`: phased delivery plan, gates, risks, and NFR targets
+- `research/implementation-checklist.md`: issue-ready execution checklist (47 milestones, `M0.1` to `M5.6`)
+- `research/github-issues.md`: copy-paste-ready GitHub issue bodies (47 issues)
+- `research/sprint-1-cut.md`: dependency-safe first sprint ticket cut (10 tickets)
 - `research/issues/README.md`: per-phase issue packs index
-- `research/audit.md`: quality audit summary and unresolved gaps
+- `research/audit.md`: quality audit summary, revision history, and unresolved gaps
 
 ## Quality Bar For This Research Package
 

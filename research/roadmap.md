@@ -38,9 +38,13 @@ Deliverables:
 - experimental probe path for Cursor
 - run artifact directory convention
 - baseline `hydra doctor` command
+- security baseline: secret redaction, worktree sandbox enforcement, unsafe-mode guardrails
+- architecture decision lock: process model and storage model documented as ADRs
 
 Exit criteria:
 - `hydra doctor` reports adapter readiness and repo prerequisites.
+- Secret redaction tests pass with known fixture patterns.
+- ADR entries for process model and storage model are finalized.
 
 ## 5. Phase 1 (2-3 weeks): Core Orchestrator + Single Agent
 
@@ -71,11 +75,15 @@ Deliverables:
 - mergeable flag and ranking output
 - CLI merge command with dry-run
 - experimental adapter opt-in gate (`--allow-experimental-adapters`)
+- cost and budget engine: token usage capture, cost aggregation, budget stop conditions
+- observability contract: versioned event schema, run health metrics, stable artifact format
 
 Exit criteria:
 - 2+ Tier-1 agents run concurrently without collisions
 - score output includes breakdown and artifacts
 - merge dry-run and real merge both tested
+- token usage captured and cost summary displayed for adapters that emit usage data
+- event schema versioned and manifest includes `schema_version` field
 
 ## 7. Phase 3 (3-4 weeks): GUI Alpha (Tauri)
 
@@ -119,9 +127,12 @@ Deliverables:
 - path/permission edge-case fixes
 - crash recovery and artifact integrity checks
 - packaging and release automation
+- artifact and schema migration strategy with forward/backward compatibility tests
 
 Exit criteria:
 - parity acceptance suite passes on Linux and Windows
+- schema migration tool upgrades v1 artifacts to current format
+- forward/backward compatibility tests pass
 
 ## 10. Milestone Risk Register
 
@@ -132,21 +143,31 @@ Exit criteria:
 | Scoring false positives | 2-4 | Medium | baseline normalization + per-repo profiles |
 | Merge automation distrust | 2-5 | Medium | default dry-run and explicit human gate |
 | Scope creep from workflow editor | 4 | Medium | ship presets first, postpone graph editor |
+| Secret leakage in logs/artifacts | 0-5 | High | secret redaction rules + log scrubbing tests (M0.7) |
+| Uncontrolled API cost in race mode | 2-5 | High | budget stop conditions + cost visibility in output (M2.11) |
+| Schema drift breaking run history | 3-5 | Medium | versioned event schema + migration tool (M2.12, M5.6) |
+| Competitor adds scoring feature | 2-3 | High | prioritize Phases 0-2 as single push to market |
 
 ## 11. Metrics by Phase
 
 ### Engineering metrics
 
-- run success rate
-- median orchestration overhead (excluding agent runtime)
-- adapter parse error rate
-- merge conflict detection accuracy
+| Metric | Target (v1) |
+|---|---|
+| Run success rate (no Hydra-caused failures) | >= 95% |
+| Median orchestration overhead (excluding agent runtime) | < 5 seconds |
+| Adapter parse error rate | < 1% of streamed events |
+| Merge conflict detection accuracy | 100% (no silent conflicts) |
+| Worktree cleanup reliability (no orphans) | 100% |
 
 ### Product metrics
 
-- time-to-first-ranked-result
-- percent of runs ending in mergeable candidate
-- user override rate (when user picks non-top score winner)
+| Metric | Target (v1) |
+|---|---|
+| Time-to-first-ranked-result (after agents finish) | < 30 seconds |
+| Percent of runs ending in at least one mergeable candidate | >= 70% |
+| User override rate (picks non-top score winner) | tracked, no target yet |
+| Cost visibility coverage (runs with cost data when adapter supports it) | 100% |
 
 ## 12. Suggested Backlog Order (Immediate)
 
@@ -169,8 +190,11 @@ Pre-release checklist:
 - Milestone-to-ticket breakdown is maintained in `research/implementation-checklist.md`.
 - Use milestone IDs (`M0.1`, `M1.1`, etc.) as canonical issue prefixes.
 
-## 15. Open Roadmap Questions
+## 15. Resolved Roadmap Questions
+
+1. ~~Should cost tracking move earlier (Phase 2) since it affects run-policy decisions?~~ **Decided: Yes.** Cost and budget engine added to Phase 2 as M2.11. Race mode multiplies API cost; users need visibility before workflows add further complexity.
+
+## 16. Open Roadmap Questions
 
 1. Should Windows parity happen before GUI alpha, if early users are mixed-OS teams?
-2. Should cost tracking move earlier (Phase 2) since it affects run-policy decisions?
-3. Should we publish plugin API in v1 or keep adapters internal until stabilized?
+2. Should we publish plugin API in v1 or keep adapters internal until stabilized?

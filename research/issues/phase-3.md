@@ -1,6 +1,6 @@
 # Phase 3 Tickets (GUI Alpha) Issue Bodies
 
-Last updated: 2026-02-23
+Last updated: 2026-02-22
 
 Generated from `research/github-issues.md`.
 
@@ -17,10 +17,10 @@ Global label prefix: `hydra`
 
 ```md
 ## Problem
-Implement milestone M3.1 to advance Hydra roadmap execution.
+The GUI surface does not exist yet. A Tauri v2 application needs to be bootstrapped with shared type definitions between the Rust backend and React frontend to ensure the GUI can consume the same data structures as the CLI.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M3.1.
+Create Tauri v2 app scaffold with React + TypeScript frontend. Define shared type generation between Rust and TypeScript. Verify GUI launches and can query backend health endpoint. Set up Linux packaging smoke test.
 
 ## Acceptance Criteria
 - [ ] GUI launches and can query backend health.
@@ -28,7 +28,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M3.1.
 - [ ] Linux packaging smoke test passes.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Functional race UI; Windows packaging.
 
 ## Dependencies
 - M1.1
@@ -50,10 +50,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M3.2 to advance Hydra roadmap execution.
+The GUI needs to trigger races and receive results via Tauri IPC commands. Without a defined IPC surface, the frontend cannot drive orchestration or display results.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M3.2.
+Implement Tauri IPC commands for starting a race, streaming events, and fetching results. Map core errors to human-readable frontend messages. Implement backpressure handling to prevent UI freezes during high-throughput event streams.
 
 ## Acceptance Criteria
 - [ ] Start race and fetch results via IPC.
@@ -61,7 +61,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M3.2.
 - [ ] Backpressure does not freeze UI.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Workflow IPC commands; settings UI.
 
 ## Dependencies
 - M2.10, M3.1
@@ -83,10 +83,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M3.3 to advance Hydra roadmap execution.
+During a race, users need to see each agent's output in real time to understand progress and catch issues early. Without live panels, the GUI is no better than CLI for monitoring.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M3.3.
+Build a per-agent output panel component using xterm.js or equivalent. Display lifecycle status badges (running, completed, failed, timed out). Ensure stream rendering remains responsive under high output volume.
 
 ## Acceptance Criteria
 - [ ] One panel per running agent.
@@ -94,7 +94,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M3.3.
 - [ ] Stream rendering remains responsive under load.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Log search/filter; output export.
 
 ## Dependencies
 - M3.2
@@ -116,10 +116,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M3.4 to advance Hydra roadmap execution.
+Scoring results are available as JSON but not visually presented. Users need a ranked scoreboard with per-dimension breakdown and clear mergeability signals to make informed merge decisions.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M3.4.
+Build ranked score cards showing composite score, per-dimension breakdown, and mergeable/not-mergeable status. Visually block merge actions for non-mergeable candidates. Make winner selection an explicit user action.
 
 ## Acceptance Criteria
 - [ ] Ranked cards show score breakdown.
@@ -127,7 +127,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M3.4.
 - [ ] Winner selection action is explicit.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Score comparison across runs; score trend charts.
 
 ## Dependencies
 - M2.7, M3.2
@@ -149,10 +149,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M3.5 to advance Hydra roadmap execution.
+Users need to visually inspect agent diffs to validate scoring results and understand what each agent changed. A side-by-side diff viewer is essential for the GUI's review workflow.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M3.5.
+Integrate Monaco diff viewer or equivalent. Allow switching between candidate diffs. Handle large diffs gracefully (virtualized rendering). Show fallback message when diff is unavailable.
 
 ## Acceptance Criteria
 - [ ] User can switch candidate diff views.
@@ -160,7 +160,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M3.5.
 - [ ] Fallback message shown when diff unavailable.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Semantic diff highlighting; inline commenting.
 
 ## Dependencies
 - M3.2
@@ -182,10 +182,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M3.6 to advance Hydra roadmap execution.
+The GUI must clearly distinguish Tier-1 from experimental adapters. Without visual warnings and explicit opt-in flows, users may accidentally include unstable adapters in production runs.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M3.6.
+Add experimental labels and warning badges to adapter selection UI. Require explicit risk confirmation before including experimental adapters. Ensure Tier-1 adapters are always the default selections.
 
 ## Acceptance Criteria
 - [ ] Experimental adapters are clearly labeled.
@@ -193,7 +193,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M3.6.
 - [ ] Tier-1 adapters remain default selections.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Adapter configuration UI; custom adapter registration.
 
 ## Dependencies
 - M2.1, M2.9, M3.2
@@ -215,10 +215,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M3.7 to advance Hydra roadmap execution.
+GUI functionality needs automated validation to prevent regressions. Without smoke tests, visual and interaction bugs may ship undetected.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M3.7.
+Write smoke tests covering app startup, race launch and completion path, and merge action in dry-run mode. Run on Linux and Windows CI.
 
 ## Acceptance Criteria
 - [ ] Startup test passes on Linux and Windows.
@@ -226,7 +226,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M3.7.
 - [ ] Merge action UI path tested in dry-run mode.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Full E2E browser tests; accessibility audit.
 
 ## Dependencies
 - M3.3, M3.4, M3.5
@@ -235,5 +235,3 @@ Any work not required to satisfy this ticket's acceptance criteria.
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
 ```
-
-

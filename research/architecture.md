@@ -261,12 +261,14 @@ Suggested implementation:
 3. Prefer normalized event schema over adapter-specific UI handling.
 4. Treat scoring as pluggable, with baseline deterministic dimensions first.
 5. Keep merge operation explicit by default; auto-merge is policy-gated.
+6. **Short-lived process model for v1.** Hydra CLI runs as a short-lived process per command. The GUI (Tauri) embeds `hydra-core` directly and manages its own lifecycle. CLI and GUI share state exclusively through file-based artifacts (`.hydra/runs/`), not through IPC to a daemon. Rationale: a daemon adds operational complexity (lifecycle management, port conflicts, crash recovery) with limited benefit when file artifacts already provide the coordination surface. If future usage patterns demand a shared daemon (e.g., concurrent CLI queries during a GUI-managed run), this can be introduced as an optional mode without breaking the file-first contract.
+7. **JSONL as source of truth, SQLite as derived index from Phase 3.** All run events are persisted as append-only JSONL under `.hydra/runs/<run_id>/events.jsonl`. When the GUI ships (Phase 3), a SQLite index is built from JSONL on demand for query performance (run history, filtering, search). The SQLite index is always rebuildable from JSONL and is not the source of truth. Rationale: JSONL is transparent, portable, and works without additional dependencies. SQLite provides the query ergonomics the GUI needs without requiring it for CLI-only workflows.
 
-## 12. Open Architecture Questions
+## 12. Resolved Architecture Questions
 
-1. Should Hydra run as short-lived process per command, or optional background daemon for GUI and CLI sharing?
-2. Should event storage be append-only JSONL only, or dual-write to SQLite in v1?
-3. Should we support "remote repo" orchestration before local parity is complete?
+1. ~~Should Hydra run as short-lived process per command, or optional background daemon?~~ **Decided: short-lived process (ADR 6).** Daemon mode deferred to post-v1.
+2. ~~Should event storage be append-only JSONL only, or dual-write to SQLite in v1?~~ **Decided: JSONL source of truth, SQLite derived index from Phase 3 (ADR 7).**
+3. ~~Should we support "remote repo" orchestration before local parity is complete?~~ **Decided: No.** Remote execution is out of scope for v1 (already listed in non-goals).
 
 ## 13. Source Notes
 

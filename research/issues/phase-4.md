@@ -1,6 +1,6 @@
 # Phase 4 Tickets (Collaboration Workflows) Issue Bodies
 
-Last updated: 2026-02-23
+Last updated: 2026-02-22
 
 Generated from `research/github-issues.md`.
 
@@ -17,10 +17,10 @@ Global label prefix: `hydra`
 
 ```md
 ## Problem
-Implement milestone M4.1 to advance Hydra roadmap execution.
+Race mode only supports independent parallel execution. Structured cooperation patterns (builder/reviewer, specialization, iterative refinement) require a DAG-based workflow engine that manages step execution, artifact passing, and conditional branching.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M4.1.
+Implement a DAG step executor that runs workflow nodes sequentially or in parallel based on graph structure. Support artifact passing between nodes via immutable artifact IDs. Honor per-node timeout and retry policies. Persist workflow run summary.
 
 ## Acceptance Criteria
 - [ ] DAG step executor supports artifacts and statuses.
@@ -28,7 +28,8 @@ Deliver the implementation needed to satisfy the acceptance criteria for M4.1.
 - [ ] Workflow run summary is persisted.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+- Visual workflow editor.
+- Custom node types.
 
 ## Dependencies
 - M2.10
@@ -50,10 +51,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M4.2 to advance Hydra roadmap execution.
+The builder-reviewer-refiner pattern is a common code quality improvement loop, but there is no preset that orchestrates it. Users would have to manually chain agent runs and pass artifacts between them.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M4.2.
+Implement the builder-reviewer-refiner workflow preset. Builder generates code, reviewer critiques via structured rubric, refiner applies feedback. Persist reviewer artifact for reuse. Score and gate the final output.
 
 ## Acceptance Criteria
 - [ ] Preset runs end-to-end from CLI.
@@ -61,7 +62,8 @@ Deliver the implementation needed to satisfy the acceptance criteria for M4.2.
 - [ ] Final output is scored and gated.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+- Multi-round review loops.
+- Reviewer read-only enforcement.
 
 ## Dependencies
 - M4.1
@@ -83,10 +85,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M4.3 to advance Hydra roadmap execution.
+Some features naturally split into bounded scopes (e.g., backend + frontend). Without a specialization preset, users cannot assign different agents to different scopes and then integrate results automatically.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M4.3.
+Implement the specialization workflow preset. Create shared contract artifact, launch parallel scoped agent tasks, detect out-of-scope edits, merge specialized branches into integration branch, and score the result.
 
 ## Acceptance Criteria
 - [ ] Parallel scoped tasks run in separate branches.
@@ -94,7 +96,8 @@ Deliver the implementation needed to satisfy the acceptance criteria for M4.3.
 - [ ] Integration branch result is scored.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+- Automatic path-revert for out-of-scope edits.
+- Dynamic scope assignment.
 
 ## Dependencies
 - M4.1
@@ -116,10 +119,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M4.4 to advance Hydra roadmap execution.
+A single agent pass may not achieve the desired quality threshold. Iterative refinement uses scoring feedback as a correction signal, but without a preset, users must manually re-run agents with synthesized prompts.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M4.4.
+Implement the iterative refinement workflow preset. Run agent, score result, synthesize refinement prompt from failures, repeat until threshold or max iterations. Include convergence guard (stop if score decreases twice or no improvement after N iterations). Persist iteration history.
 
 ## Acceptance Criteria
 - [ ] Refinement loop uses structured score failures.
@@ -127,7 +130,8 @@ Deliver the implementation needed to satisfy the acceptance criteria for M4.4.
 - [ ] Iteration history artifacts are persisted.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+- Cross-agent iteration (switching agents between iterations).
+- Auto-tuning thresholds.
 
 ## Dependencies
 - M4.1, M2.7
@@ -149,10 +153,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M4.5 to advance Hydra roadmap execution.
+Workflow execution involves multiple steps with dependencies and artifacts. Without a timeline view, users cannot track progress, understand step relationships, or diagnose failures across the workflow.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M4.5.
+Add CLI step timeline with per-node status indicators. Add GUI node timeline view with artifact links and drilldown. Include retry guidance in failure states.
 
 ## Acceptance Criteria
 - [ ] CLI prints step timeline with statuses.
@@ -160,7 +164,8 @@ Deliver the implementation needed to satisfy the acceptance criteria for M4.5.
 - [ ] Failure states include retry guidance.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+- Drag-and-drop workflow editing.
+- Real-time timeline animation.
 
 ## Dependencies
 - M4.2, M4.3, M4.4
@@ -182,10 +187,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M4.6 to advance Hydra roadmap execution.
+Workflow presets involve complex multi-step interactions that can fail in non-obvious ways. Without dedicated integration tests, workflow regressions may go undetected.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M4.6.
+Write one golden-path and one failure-path integration test per workflow preset. Add deterministic artifact graph snapshot tests to detect structural regressions.
 
 ## Acceptance Criteria
 - [ ] One golden-path test per workflow preset.
@@ -193,7 +198,8 @@ Deliver the implementation needed to satisfy the acceptance criteria for M4.6.
 - [ ] Artifact graph snapshot test is stable.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+- Performance benchmarks.
+- Fuzz testing.
 
 ## Dependencies
 - M4.2, M4.3, M4.4
@@ -202,5 +208,3 @@ Any work not required to satisfy this ticket's acceptance criteria.
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
 ```
-
-

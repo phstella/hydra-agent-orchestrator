@@ -35,7 +35,7 @@ This file records the quality audit of the research package and the concrete imp
 4. Workflow and scoring docs had strong concepts but lacked explicit artifact contracts and policy gates.
 5. Top-level `research.md` did not act as a navigable research index.
 
-## 4. Improvements Applied
+## 4. Improvements Applied (Initial Revision)
 
 1. Added source-backed adapter sections with confidence annotations.
 2. Added explicit architecture constraints, failure modes, and safety boundaries.
@@ -50,17 +50,58 @@ This file records the quality audit of the research package and the concrete imp
 11. Produced dependency-safe sprint-1 cut for the first 8 tickets.
 12. Split the issue pack into per-phase files for faster triage.
 
-## 5. Remaining Uncertainties
+## 5. Improvements Applied (Review Revision, 2026-02-22)
+
+Triggered by external review (`research-review-2026-02-23.md`) that identified high-priority gaps in security, cost governance, architecture decision locking, and issue body quality.
+
+### High-priority gaps addressed
+
+1. **Architecture decisions locked.** Resolved all three open architecture questions in `research/architecture.md`:
+   - ADR 6: Short-lived process model for v1 (no daemon).
+   - ADR 7: JSONL source of truth, SQLite derived index from Phase 3.
+   - Remote repo orchestration confirmed out of scope for v1.
+
+2. **Security baseline added as milestone.** Added `M0.7` (Security Baseline Implementation) to Phase 0 covering secret redaction, worktree sandbox enforcement, and unsafe-mode guardrails. Added to sprint-1 cut.
+
+3. **Cost governance promoted to Phase 2.** Added `M2.11` (Cost and Budget Engine) covering token usage capture, cost aggregation, and budget stop conditions. Resolved open roadmap question about cost tracking timing.
+
+4. **Observability contract added.** Added `M2.12` (Observability Contract) covering versioned event schema, run health metrics, and stable artifact format.
+
+5. **Schema migration strategy added.** Added `M5.6` (Artifact and Schema Migration Strategy) covering versioned manifests, migration tooling, and forward/backward compatibility tests.
+
+### Medium-priority gaps addressed
+
+6. **Issue body quality improved.** Replaced generic "Implement milestone M#.# to advance Hydra roadmap execution" boilerplate across all Phase 1-5 issue bodies with specific Problem, Scope, and Out of Scope descriptions. Updated all per-phase issue packs and github-issues.md.
+
+7. **Dependency notation disambiguated.** Changed `M2.2 to M2.8` and `M5.1 to M5.4` to explicit enumerated lists in implementation-checklist.md, github-issues.md, and phase issue files.
+
+8. **NFR thresholds added.** Replaced metric-name-only engineering and product metrics in roadmap with concrete v1 targets (e.g., run success rate >= 95%, orchestration overhead < 5s, merge conflict detection 100%).
+
+9. **Sprint-1 cut expanded.** Added `M0.7` and `M0.8` to sprint-1 (now 10 tickets). Added Lane C (architecture governance) to parallelization plan. Added new risks and exit criteria.
+
+10. **Risk register expanded.** Added secret leakage, uncontrolled API cost, schema drift, and competitor scoring risks to roadmap risk register.
+
+### Total milestone count
+
+- Previous: 42 milestones (`M0.1` to `M5.5`)
+- Current: 47 milestones (`M0.1` to `M5.6`, including `M0.7`, `M0.8`, `M2.11`, `M2.12`, `M5.6`)
+
+## 6. Remaining Uncertainties
 
 1. Cursor CLI command/flag stability across versions still needs runtime probe validation in implementation.
 2. PTY behavior parity on Windows must be tested with real workload before final UI assumptions.
 3. Market differentiation should be re-validated each release cycle (space is changing quickly).
+4. CLI command tree design does not have a dedicated document yet; commands are documented across architecture, roadmap, and checklist files.
+5. Full `hydra.toml` configuration schema reference is not centralized (snippets exist in scoring-engine.md and tech-stack.md).
+6. API key discovery and validation strategy is not explicitly documented (covered partially by M0.7 security baseline).
 
-## 6. Recommended Ongoing Process
+## 7. Recommended Ongoing Process
 
 1. Add a monthly research refresh cadence.
 2. Keep adapter capability fixtures versioned in-repo.
 3. Require source links for any new competitor or CLI capability claim.
+4. Monitor competitor scoring features bi-weekly during active development.
+5. Regenerate issue packs from `implementation-checklist.md` after any milestone changes to avoid drift.
 
 ## 7. Sources Used in This Audit Cycle
 

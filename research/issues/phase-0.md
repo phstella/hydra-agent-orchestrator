@@ -1,8 +1,8 @@
 # Phase 0 Tickets (Validation and Guardrails) Issue Bodies
 
-Last updated: 2026-02-23
+Last updated: 2026-02-22
 
-Generated from `research/github-issues.md`.
+Generated from `research/implementation-checklist.md`.
 
 Global label prefix: `hydra`
 
@@ -204,3 +204,77 @@ auto-fix behavior.
 ```
 
 
+## [M0.7] Security Baseline Implementation
+
+- Phase: Phase 0 Tickets (Validation and Guardrails)
+- Labels: hydra, phase-0, area-core, type-feature
+- Estimate: M
+- Dependencies: M0.5
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Security intent exists in architecture docs but has no implementation milestones. Agent processes inherit environment variables including API keys; logs and artifacts can capture secrets from agent output.
+
+## Scope
+Implement secret redaction rules for logs and artifacts, sandbox policy enforcement for agent worktrees, and unsafe-mode guardrails.
+
+## Acceptance Criteria
+- [ ] Known secret patterns (API keys, tokens) are redacted from persisted logs and artifacts.
+- [ ] Agent processes cannot write outside their assigned worktree unless unsafe mode is explicitly enabled.
+- [ ] Unsafe mode requires explicit per-run opt-in flag and emits a visible warning.
+- [ ] Log scrubbing unit tests pass with known secret fixtures.
+
+## Out of Scope
+full threat model document; runtime network sandboxing.
+
+## Dependencies
+- M0.5
+
+## Notes
+- Tier-1 launch adapters are claude and codex.
+- Experimental adapters require explicit opt-in.
+```
+
+
+## [M0.8] Architecture Decision Lock
+
+- Phase: Phase 0 Tickets (Validation and Guardrails)
+- Labels: hydra, phase-0, area-core, type-chore
+- Estimate: S
+- Dependencies: none
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Two architecture decisions (process model and storage model) were deferred as open questions but affect implementation choices in Phase 1 and Phase 3.
+
+## Scope
+Document locked decisions for process model (short-lived CLI, embedded GUI) and storage model (JSONL source of truth, SQLite derived index from Phase 3) in architecture.md.
+
+## Acceptance Criteria
+- [ ] ADR entries 6 and 7 are present in research/architecture.md.
+- [ ] Open questions section is updated to reflect resolved status.
+- [ ] No implementation is blocked by unresolved architecture questions.
+
+## Out of Scope
+implementing the SQLite index (Phase 3).
+
+## Dependencies
+- none
+
+## Notes
+- Tier-1 launch adapters are claude and codex.
+- Experimental adapters require explicit opt-in.
+```
+
+
+---
+
+## Coverage Check
+
+Phase 0 issues in this file: **8** (M0.1, M0.2, M0.3, M0.4, M0.5, M0.6, M0.7, M0.8)
+Phase 0 tickets in checklist: **8**
+Coverage: **complete**

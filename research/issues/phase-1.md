@@ -1,6 +1,6 @@
 # Phase 1 Tickets (Core Orchestrator + Single Agent) Issue Bodies
 
-Last updated: 2026-02-23
+Last updated: 2026-02-22
 
 Generated from `research/github-issues.md`.
 
@@ -17,10 +17,10 @@ Global label prefix: `hydra`
 
 ```md
 ## Problem
-Implement milestone M1.1 to advance Hydra roadmap execution.
+No Rust workspace exists yet. All subsequent features need a compilable crate structure with shared error handling and logging.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M1.1.
+Create `hydra-core` library crate and `hydra-cli` binary crate in a Cargo workspace. Wire `tracing` for structured logging and `thiserror`/`anyhow` for error handling. Set up CI for Linux and Windows compilation.
 
 ## Acceptance Criteria
 - [ ] Workspace builds with hydra-core and hydra-cli crates.
@@ -28,7 +28,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M1.1.
 - [ ] CI compiles on Linux and Windows.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Runtime logic, config parsing, adapter code.
 
 ## Dependencies
 - none
@@ -50,10 +50,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M1.2 to advance Hydra roadmap execution.
+Hydra needs a user-editable configuration file to control scoring weights, adapter preferences, timeout values, and artifact retention. Without a config parser, all behavior must be hardcoded or passed via CLI flags.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M1.2.
+Implement `hydra.toml` parser using `serde` + `toml` crate. Define the full configuration schema with typed fields, defaults for all optional values, and actionable validation error messages.
 
 ## Acceptance Criteria
 - [ ] hydra.toml parses with schema validation.
@@ -61,7 +61,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M1.2.
 - [ ] Invalid config returns actionable error messages.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+GUI config editor; runtime config reload.
 
 ## Dependencies
 - M1.1
@@ -83,10 +83,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M1.3 to advance Hydra roadmap execution.
+Agents must run in isolated worktrees to prevent file collisions. Worktree creation, tracking, and cleanup (including on interrupt and failure) must be reliable to avoid orphaned directories and branches.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M1.3.
+Implement worktree create/list/remove operations via git CLI. Add interrupt-safe cleanup using signal handlers. Ensure paths are valid on both Linux and Windows.
 
 ## Acceptance Criteria
 - [ ] Create/list/remove worktree operations are implemented.
@@ -94,7 +94,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M1.3.
 - [ ] Windows path handling tests pass.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Garbage collection scheduler; sparse checkout support.
 
 ## Dependencies
 - M1.1
@@ -116,10 +116,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M1.4 to advance Hydra roadmap execution.
+Agent CLI processes need lifecycle management: spawning with correct arguments, streaming stdout/stderr, enforcing timeouts, and graceful cancellation. Without supervision, hung agents consume resources indefinitely and produce no usable artifacts.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M1.4.
+Build a single-agent process supervisor with start, stream, timeout (idle + hard), and cancel support. Implement bounded output buffering and emit normalized lifecycle events to the event bus.
 
 ## Acceptance Criteria
 - [ ] Supports start, stream, timeout, cancel.
@@ -127,7 +127,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M1.4.
 - [ ] Emits normalized lifecycle events.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Parallel supervision (Phase 2); PTY layer (handled separately).
 
 ## Dependencies
 - M1.1
@@ -149,10 +149,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M1.5 to advance Hydra roadmap execution.
+The Claude adapter probe (M0.2) validates binary presence and flags, but the actual runtime path (spawning Claude in a worktree, parsing its stream-json output, mapping events to the normalized schema) has not been implemented.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M1.5.
+Implement `build_command()` and `parse_line()`/`parse_raw()` for the Claude adapter. Wire it through the process supervisor. Cover timeout and cancellation with integration tests.
 
 ## Acceptance Criteria
 - [ ] claude runs in isolated worktree.
@@ -160,7 +160,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M1.5.
 - [ ] Timeout and cancellation are covered by tests.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Multi-agent orchestration; scoring.
 
 ## Dependencies
 - M0.2, M1.4
@@ -182,10 +182,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M1.6 to advance Hydra roadmap execution.
+The Codex adapter probe (M0.3) validates binary presence and flags, but the runtime path (spawning `codex exec` in a worktree, parsing JSON stream output, handling flag variants) has not been implemented.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M1.6.
+Implement `build_command()` and `parse_line()`/`parse_raw()` for the Codex adapter. Handle known flag variants gracefully. Wire through process supervisor with integration tests.
 
 ## Acceptance Criteria
 - [ ] codex exec works in isolated worktree.
@@ -193,7 +193,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M1.6.
 - [ ] Unsupported flag fallback logic is tested.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Multi-agent orchestration; scoring.
 
 ## Dependencies
 - M0.3, M1.4
@@ -215,10 +215,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M1.7 to advance Hydra roadmap execution.
+There is no end-to-end CLI command that ties together config parsing, worktree creation, and agent execution. Users need a single command to run an agent on a task and get results.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M1.7.
+Implement `hydra race --agents <agent>` command using clap. Wire config -> worktree -> adapter -> supervisor -> artifact output into a single flow. Output run summary with branch name and artifact path.
 
 ## Acceptance Criteria
 - [ ] hydra race --agents claude completes end-to-end.
@@ -226,7 +226,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M1.7.
 - [ ] Non-zero exit codes on fatal failures.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Multi-agent parallel execution; scoring.
 
 ## Dependencies
 - M1.2, M1.3, M1.5
@@ -248,10 +248,10 @@ Any work not required to satisfy this ticket's acceptance criteria.
 
 ```md
 ## Problem
-Implement milestone M1.8 to advance Hydra roadmap execution.
+Interrupted runs (Ctrl+C, process kill, system crash) can leave orphaned worktrees, stale branches, and incomplete artifacts. These failure paths must be tested to ensure cleanup is reliable.
 
 ## Scope
-Deliver the implementation needed to satisfy the acceptance criteria for M1.8.
+Write integration tests for interrupt scenarios: Ctrl+C during agent execution, agent process crash, partial completion. Verify worktree and branch cleanup, artifact integrity, and absence of orphaned resources.
 
 ## Acceptance Criteria
 - [ ] Ctrl+C cleanup test passes.
@@ -259,7 +259,7 @@ Deliver the implementation needed to satisfy the acceptance criteria for M1.8.
 - [ ] No orphan worktrees after test run.
 
 ## Out of Scope
-Any work not required to satisfy this ticket's acceptance criteria.
+Crash recovery metadata (Phase 5); Windows-specific interrupt behavior (Phase 5).
 
 ## Dependencies
 - M1.3, M1.4, M1.7
@@ -268,5 +268,3 @@ Any work not required to satisfy this ticket's acceptance criteria.
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
 ```
-
-
