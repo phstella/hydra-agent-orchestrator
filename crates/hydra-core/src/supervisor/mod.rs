@@ -225,21 +225,21 @@ where
                 }
             }
             _ = tokio::time::sleep(hard_timeout) => {
-                let _ = child.kill().await;
+                terminate_process(&mut child).await;
                 let _ = event_tx.send(SupervisorEvent::TimedOut {
                     kind: TimeoutKind::Hard,
                     duration: start.elapsed(),
                 }).await;
             }
             _ = idle_timeout_watch(idle_timeout, &mut idle_reset_rx) => {
-                let _ = child.kill().await;
+                terminate_process(&mut child).await;
                 let _ = event_tx.send(SupervisorEvent::TimedOut {
                     kind: TimeoutKind::Idle,
                     duration: start.elapsed(),
                 }).await;
             }
             _ = cancel_rx.recv() => {
-                let _ = child.kill().await;
+                terminate_process(&mut child).await;
                 let _ = event_tx.send(SupervisorEvent::Failed {
                     error: "cancelled".to_string(),
                     duration: start.elapsed(),
@@ -277,6 +277,39 @@ async fn idle_timeout_watch(timeout: Duration, reset_rx: &mut mpsc::Receiver<()>
     }
 }
 
+async fn terminate_process(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        let Some(pid_u32) = child.id() else {
+            let _ = child.kill().await;
+            return;
+        };
+
+        let pid = pid_u32 as i32;
+        let pgid = -pid;
+
+        let term_result = unsafe { libc::kill(pgid, libc::SIGTERM) };
+        if term_result != 0 {
+            let _ = child.kill().await;
+            return;
+        }
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
+        }
+
+        let _ = unsafe { libc::kill(pgid, libc::SIGKILL) };
+        let _ = child.kill().await;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill().await;
+    }
+}
+
 fn build_process(cmd: &BuiltCommand) -> Result<tokio::process::Child, SupervisorError> {
     let mut command = Command::new(&cmd.program);
     command
@@ -294,7 +327,9 @@ fn build_process(cmd: &BuiltCommand) -> Result<tokio::process::Child, Supervisor
     {
         unsafe {
             command.pre_exec(|| {
-                libc::setsid();
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 Ok(())
             });
         }
@@ -318,42 +353,118 @@ mod tests {
     use crate::adapter::BuiltCommand;
     use std::path::PathBuf;
 
+    fn test_cwd() -> PathBuf {
+        std::env::temp_dir()
+    }
+
     fn echo_command(msg: &str) -> BuiltCommand {
+        #[cfg(unix)]
+        let (program, args) = ("echo".to_string(), vec![msg.to_string()]);
+        #[cfg(windows)]
+        let (program, args) = (
+            "cmd".to_string(),
+            vec!["/C".to_string(), format!("echo {msg}")],
+        );
+
         BuiltCommand {
-            program: "echo".to_string(),
-            args: vec![msg.to_string()],
+            program,
+            args,
             env: vec![],
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_cwd(),
         }
     }
 
     fn sleep_command(seconds: f64) -> BuiltCommand {
+        #[cfg(unix)]
+        let (program, args) = ("sleep".to_string(), vec![seconds.to_string()]);
+        #[cfg(windows)]
+        let (program, args) = (
+            "powershell".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                format!("Start-Sleep -Seconds {}", seconds.ceil() as u64),
+            ],
+        );
+
         BuiltCommand {
-            program: "sleep".to_string(),
-            args: vec![seconds.to_string()],
+            program,
+            args,
             env: vec![],
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_cwd(),
         }
     }
 
     fn failing_command() -> BuiltCommand {
+        #[cfg(unix)]
+        let (program, args) = (
+            "sh".to_string(),
+            vec!["-c".to_string(), "exit 42".to_string()],
+        );
+        #[cfg(windows)]
+        let (program, args) = (
+            "cmd".to_string(),
+            vec!["/C".to_string(), "exit 42".to_string()],
+        );
+
         BuiltCommand {
-            program: "sh".to_string(),
-            args: vec!["-c".to_string(), "exit 42".to_string()],
+            program,
+            args,
             env: vec![],
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_cwd(),
         }
     }
 
     fn multiline_command() -> BuiltCommand {
+        #[cfg(unix)]
+        let (program, args) = (
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                "echo line1; echo line2; echo line3".to_string(),
+            ],
+        );
+        #[cfg(windows)]
+        let (program, args) = (
+            "cmd".to_string(),
+            vec![
+                "/C".to_string(),
+                "echo line1 && echo line2 && echo line3".to_string(),
+            ],
+        );
+
+        BuiltCommand {
+            program,
+            args,
+            env: vec![],
+            cwd: test_cwd(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn background_child_command() -> BuiltCommand {
         BuiltCommand {
             program: "sh".to_string(),
             args: vec![
                 "-c".to_string(),
-                "echo line1; echo line2; echo line3".to_string(),
+                "sleep 60 & echo child:$!; wait".to_string(),
             ],
             env: vec![],
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_cwd(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn process_exists(pid: i32) -> bool {
+        unsafe {
+            if libc::kill(pid, 0) == 0 {
+                true
+            } else {
+                matches!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::EPERM)
+                )
+            }
         }
     }
 
@@ -521,14 +632,61 @@ mod tests {
     async fn supervise_nonexistent_binary_fails() {
         let (tx, _rx) = mpsc::channel(64);
         let cmd = BuiltCommand {
-            program: "/nonexistent/binary".to_string(),
+            program: if cfg!(windows) {
+                r"Z:\definitely\missing\hydra.exe".to_string()
+            } else {
+                "/nonexistent/binary".to_string()
+            },
             args: vec![],
             env: vec![],
-            cwd: PathBuf::from("/tmp"),
+            cwd: test_cwd(),
         };
         let config = SupervisorConfig::default();
 
         let result = supervise(cmd, config, tx, |_| None).await;
         assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hard_timeout_kills_background_child_process() {
+        let (tx, mut rx) = mpsc::channel(64);
+        let cmd = background_child_command();
+        let config = SupervisorConfig {
+            hard_timeout: Duration::from_millis(200),
+            idle_timeout: Duration::from_secs(30),
+            ..Default::default()
+        };
+
+        let _handle = supervise(cmd, config, tx, |_| None).await.unwrap();
+
+        let mut child_pid: Option<i32> = None;
+        let mut saw_timeout = false;
+        while let Some(evt) = rx.recv().await {
+            match evt {
+                SupervisorEvent::Stdout(line) => {
+                    if let Some(pid) = line.strip_prefix("child:") {
+                        child_pid = pid.trim().parse::<i32>().ok();
+                    }
+                }
+                SupervisorEvent::TimedOut {
+                    kind: TimeoutKind::Hard,
+                    ..
+                } => {
+                    saw_timeout = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_timeout, "expected hard timeout");
+        let pid = child_pid.expect("expected background child pid in stdout");
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !process_exists(pid),
+            "background child process should be terminated with process group"
+        );
     }
 }

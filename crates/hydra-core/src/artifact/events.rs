@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 use super::ArtifactError;
+use crate::security::SecretRedactor;
 
 /// Normalized event kinds persisted to events.jsonl.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +48,7 @@ impl RunEvent {
 /// Append-only writer for events.jsonl.
 pub struct EventWriter {
     file: std::fs::File,
+    redactor: SecretRedactor,
 }
 
 impl EventWriter {
@@ -55,12 +57,16 @@ impl EventWriter {
             .create(true)
             .append(true)
             .open(path)?;
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            redactor: SecretRedactor::new(),
+        })
     }
 
     pub fn write_event(&mut self, event: &RunEvent) -> Result<(), ArtifactError> {
         let line = serde_json::to_string(event)?;
-        writeln!(self.file, "{}", line)?;
+        let redacted = self.redactor.redact_line(&line);
+        writeln!(self.file, "{}", redacted)?;
         self.file.flush()?;
         Ok(())
     }
@@ -193,5 +199,31 @@ mod tests {
             let back: EventKind = serde_json::from_str(&json).unwrap();
             assert_eq!(back, kind);
         }
+    }
+
+    #[test]
+    fn event_writer_redacts_secrets_before_persisting() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("events.jsonl");
+        let mut writer = EventWriter::create(&path).unwrap();
+
+        writer
+            .write_event(&RunEvent::new(
+                EventKind::AgentStdout,
+                Some("claude".to_string()),
+                serde_json::json!({
+                    "line": "OPENAI_API_KEY=sk-proj-super-secret"
+                }),
+            ))
+            .unwrap();
+        drop(writer);
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("sk-proj-"));
+        assert!(content.contains("[REDACTED:OPENAI_KEY]"));
+
+        let events = EventReader::read_all(&path).unwrap();
+        let line = events[0].data["line"].as_str().unwrap();
+        assert!(line.contains("[REDACTED:OPENAI_KEY]"));
     }
 }

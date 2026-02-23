@@ -169,6 +169,8 @@ impl WorktreeService {
     /// Force-remove a worktree and delete its associated branch.
     /// Used for cleanup on interrupt or failure.
     pub async fn force_cleanup(&self, info: &WorktreeInfo) -> Result<(), WorktreeError> {
+        let mut failures = Vec::new();
+
         if info.path.exists() {
             if let Err(e) = self.remove(&info.path, true).await {
                 tracing::warn!(
@@ -176,21 +178,59 @@ impl WorktreeService {
                     error = %e,
                     "force cleanup: worktree remove failed, removing directory manually"
                 );
-                let _ = tokio::fs::remove_dir_all(&info.path).await;
 
-                let _ = Command::new("git")
+                if let Err(io_err) = tokio::fs::remove_dir_all(&info.path).await {
+                    failures.push(format!("failed to remove worktree directory: {io_err}"));
+                } else if info.path.exists() {
+                    failures
+                        .push("worktree directory still exists after removal attempt".to_string());
+                }
+
+                match Command::new("git")
                     .args(["worktree", "prune"])
                     .current_dir(&self.repo_root)
                     .output()
-                    .await;
+                    .await
+                {
+                    Ok(output) if !output.status.success() => {
+                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        failures.push(format!("git worktree prune failed: {stderr}"));
+                    }
+                    Err(err) => {
+                        failures.push(format!("failed to run git worktree prune: {err}"));
+                    }
+                    _ => {}
+                }
             }
         }
 
-        let _ = Command::new("git")
+        match Command::new("git")
             .args(["branch", "-D", &info.branch])
             .current_dir(&self.repo_root)
             .output()
-            .await;
+            .await
+        {
+            Ok(output) if !output.status.success() => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                // Treat already-deleted branches as success for idempotent cleanup.
+                if !stderr.contains("not found") {
+                    failures.push(format!("git branch -D {} failed: {stderr}", info.branch));
+                }
+            }
+            Err(err) => {
+                failures.push(format!(
+                    "failed to run git branch -D {}: {err}",
+                    info.branch
+                ));
+            }
+            _ => {}
+        }
+
+        if !failures.is_empty() {
+            return Err(WorktreeError::GitFailed {
+                detail: failures.join("; "),
+            });
+        }
 
         tracing::info!(
             branch = %info.branch,
@@ -388,5 +428,22 @@ bare
         let svc = WorktreeService::new(repo, tmp.path().join("worktrees"));
         let result = svc.remove(Path::new("/tmp/nonexistent-wt"), false).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn force_cleanup_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_test_repo(&repo);
+
+        let wt_base = tmp.path().join("worktrees");
+        let svc = WorktreeService::new(repo, wt_base);
+        let run_id = Uuid::new_v4();
+        let info = svc.create(run_id, "claude", "HEAD").await.unwrap();
+
+        svc.force_cleanup(&info).await.unwrap();
+        // Re-running cleanup should not fail if branch/path are already gone.
+        svc.force_cleanup(&info).await.unwrap();
     }
 }

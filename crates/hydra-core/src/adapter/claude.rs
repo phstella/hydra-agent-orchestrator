@@ -51,7 +51,9 @@ impl ClaudeAdapter {
         ];
 
         for (short, long) in &required {
-            if help_text.contains(short) || help_text.contains(long) {
+            if Self::contains_flag_token(help_text, short)
+                || Self::contains_flag_token(help_text, long)
+            {
                 flags.push(long.to_string());
             }
         }
@@ -63,12 +65,19 @@ impl ClaudeAdapter {
             "--input-format",
         ];
         for flag in &optional {
-            if help_text.contains(flag) {
+            if Self::contains_flag_token(help_text, flag) {
                 flags.push(flag.to_string());
             }
         }
 
         flags
+    }
+
+    fn contains_flag_token(help_text: &str, flag: &str) -> bool {
+        help_text.lines().any(|line| {
+            line.split(|c: char| c.is_whitespace() || c == ',' || c == ':' || c == '(' || c == ')')
+                .any(|token| token == flag)
+        })
     }
 }
 
@@ -113,7 +122,7 @@ impl AgentAdapter for ClaudeAdapter {
 
         let flags = Self::parse_help_flags(&help_text);
 
-        let has_print = flags.iter().any(|f| f == "--print" || f == "-p");
+        let has_print = flags.iter().any(|f| f == "--print");
         let has_output_format = flags.iter().any(|f| f == "--output-format");
 
         let status = if has_print && has_output_format {
@@ -184,6 +193,14 @@ mod tests {
     fn parse_help_missing_flags_returns_empty_for_blank() {
         let flags = ClaudeAdapter::parse_help_flags("");
         assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn parse_help_does_not_false_positive_print_from_permission_mode() {
+        let help = "Options:\n  --permission-mode <mode>  Controls approvals";
+        let flags = ClaudeAdapter::parse_help_flags(help);
+        assert!(!flags.contains(&"--print".to_string()));
+        assert!(flags.contains(&"--permission-mode".to_string()));
     }
 
     #[test]
