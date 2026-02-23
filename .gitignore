@@ -1,6 +1,26 @@
+# Rust
 /target/
+Cargo.lock
+
+# Hydra runtime artifacts
 .hydra/
+
+# Frontend
+node_modules/
+dist/
+
+# Editor
 *.swp
 *.swo
 *~
+.idea/
+.vscode/
+*.iml
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
