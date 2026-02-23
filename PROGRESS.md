@@ -4,10 +4,10 @@ Last updated: 2026-02-23
 
 ## Current State
 
-- **Phase**: 0 complete; ready for Phase 1
-- **Milestone**: All Phase 0 milestones (M0.1-M0.8) complete
-- **Sprint**: Sprint 1 (8/10 tickets done — remaining: M1.1, M1.2)
-- **Status**: Phase 0 hardening pass complete (sandbox + redaction fixes, probe robustness, config-aware doctor)
+- **Phase**: 1 in progress
+- **Milestone**: M1.4 complete; M1.5-M1.8 remaining
+- **Sprint**: Sprint 1 complete (10/10 tickets done); Phase 1 continues
+- **Status**: M1.1 through M1.4 implemented with full test coverage
 
 ## Completed Milestones
 
@@ -21,10 +21,14 @@ Last updated: 2026-02-23
 | M0.6 | Doctor Command MVP | 2026-02-23 | `hydra doctor` with adapter probes + git checks. Human and JSON output. Non-zero exit on failure. |
 | M0.7 | Security Baseline Implementation | 2026-02-23 | `SecretRedactor` (13 patterns + custom), `SandboxPolicy` (strict/unsafe). Hardened with multi-match redaction and path-normalized sandbox checks. |
 | M0.8 | Architecture Decision Lock | 2026-02-23 | ADR 6 (process model) and ADR 7 (storage model) confirmed in architecture.md. |
+| M1.1 | Core Workspace Scaffold | 2026-02-23 | Cargo workspace, crate structure, tracing, error handling all existed from Phase 0. Added GitHub Actions CI workflow for Linux and Windows (fmt, clippy, build, test). |
+| M1.2 | Config Parser and Defaults | 2026-02-23 | `hydra.toml` parser via `serde` + `toml` in `hydra-core::config`. Full typed schema: scoring (profile, weights, gates, diff_scope), adapters, worktree, supervisor. `deny_unknown_fields` catches typos. 11 unit tests. Replaced hand-rolled TOML parser in `doctor.rs`. |
+| M1.3 | Worktree Lifecycle Service | 2026-02-23 | `WorktreeService` with async create/list/remove/force_cleanup via git CLI. Branch naming: `hydra/<run_id>/agent/<agent_key>`. Porcelain parser for worktree list. 6 unit tests including full create-remove lifecycle and force cleanup. |
+| M1.4 | Process Supervisor (Single Agent) | 2026-02-23 | `supervise()` function with hard timeout, idle timeout (with activity-based reset), cancellation, bounded output buffering. Emits `SupervisorEvent` stream via mpsc channel. Line parser callback for adapter-specific event extraction. Process group isolation via `setsid` on Unix. 7 unit tests. |
 
 ## In-Progress Work
 
-(none — hardening complete; ready for Phase 1)
+(none — M1.1-M1.4 complete; ready for M1.5-M1.8)
 
 ## Decisions Made
 
@@ -42,18 +46,23 @@ Last updated: 2026-02-23
 | 2026-02-23 | Secret redaction now handles multiple occurrences per line | Prevents leakage when the same token prefix appears multiple times on one log line |
 | 2026-02-23 | `hydra doctor` reads optional adapter path overrides from `hydra.toml` | Enables configured binary paths before full config parser milestone (M1.2) lands |
 | 2026-02-23 | Reduced Tokio feature sets in core/cli crates | Keeps runtime surface lean while preserving required async/runtime capabilities |
+| 2026-02-23 | Config uses `deny_unknown_fields` on all serde structs | Catches TOML typos at parse time with actionable error messages |
+| 2026-02-23 | Supervisor idle timeout yields forever when pipe senders drop | Prevents false idle timeout when process exits normally (stdout/stderr close before wait returns) |
+| 2026-02-23 | Supervisor uses `setsid` on Unix for process group isolation | Ensures child processes can be killed as a group on cancellation |
+| 2026-02-23 | Worktree service uses `git worktree list --porcelain` for parsing | Machine-readable format avoids fragile human-output parsing |
 
 ## Open Issues
 
 - `which` v7 pinned; v8 available but not yet evaluated.
-- `hydra.toml` parsing in doctor is intentionally lightweight and local (full typed config parser deferred to M1.2).
+- CI workflow not yet pushed to remote/tested on GitHub Actions.
+- Tokio features expanded for supervisor/worktree needs; `process`, `io-util`, `time`, `signal`, `fs` now included.
 
 ## Crate Status
 
 | Crate | Exists | Compiles | Tests |
 |-------|--------|----------|-------|
-| hydra-core | Yes | Yes | 65 passing |
-| hydra-cli | Yes | Yes | 4 passing |
+| hydra-core | Yes | Yes | 89 passing |
+| hydra-cli | Yes | Yes | 3 passing |
 | hydra-app | No | - | - |
 
 ## Phase Progress
@@ -61,7 +70,7 @@ Last updated: 2026-02-23
 | Phase | Name | Status | Milestones Done |
 |-------|------|--------|-----------------|
 | 0 | Validation and Guardrails | **Complete** | 8/8 |
-| 1 | Core Orchestrator + Single Agent | Not started | 0/8 |
+| 1 | Core Orchestrator + Single Agent | **In Progress** | 4/8 |
 | 2 | Multi-Agent Race + Scoring | Not started | 0/12 |
 | 3 | GUI Alpha | Not started | 0/7 |
 | 4 | Collaboration Workflows | Not started | 0/6 |
@@ -70,21 +79,21 @@ Last updated: 2026-02-23
 ## Instructions for Next Agent
 
 1. Read `CLAUDE.md` for project overview and conventions.
-2. Phase 0 is **complete** and hardening fixes from `ANALYSIS.md` are implemented.
-3. Current test baseline: `hydra-core` 65 passing, `hydra-cli` 4 passing.
-4. **Next**: Start Phase 1 per `instructions/phase-1.md` (if exists) or `planning/sprint-1-cut.md`.
-5. Sprint 1 remaining tickets: `M1.1` (Core Workspace Scaffold) and `M1.2` (Config Parser and Defaults).
-6. `M1.1` depends on M0.8 (done). `M1.2` depends on M1.1.
-7. Hardening-related files:
-   - Shared adapter version parser: `crates/hydra-core/src/adapter/mod.rs`
-   - Probe exit-status checks: `crates/hydra-core/src/adapter/{claude,codex,cursor}.rs`
-   - Redaction multi-match logic: `crates/hydra-core/src/security/redact.rs`
-   - Sandbox normalized path enforcement: `crates/hydra-core/src/security/sandbox.rs`
-   - Doctor path overrides (`hydra.toml`): `crates/hydra-cli/src/doctor.rs`, `crates/hydra-cli/src/main.rs`
-8. Key files to know:
-   - Adapter framework: `crates/hydra-core/src/adapter/`
-   - Artifact convention: `crates/hydra-core/src/artifact/`
-   - Security: `crates/hydra-core/src/security/`
-   - CLI entry: `crates/hydra-cli/src/main.rs`
-   - Doctor command: `crates/hydra-cli/src/doctor.rs`
-9. Test fixtures: `crates/hydra-core/tests/fixtures/adapters/{claude,codex,cursor}/`
+2. Phase 1 is **in progress** — M1.1 through M1.4 are complete.
+3. Current test baseline: `hydra-core` 89 passing, `hydra-cli` 3 passing. `cargo clippy` and `cargo fmt` clean.
+4. **Next**: Implement M1.5 (Claude Adapter Runtime Path) and M1.6 (Codex Adapter Runtime Path) in parallel.
+   - Both depend on M1.4 (done) and their respective Phase 0 probe milestones (done).
+   - Implement `build_command()` and `parse_line()`/`parse_raw()` for each adapter.
+   - Wire through the process supervisor.
+   - Add integration tests for timeout and cancellation scenarios.
+5. After M1.5+M1.6: M1.7 (CLI Race Command) wires config → worktree → adapter → supervisor → artifact.
+6. After M1.7: M1.8 (Interrupt and Recovery Tests) covers Ctrl+C, crash, partial completion.
+7. Key new files from this session:
+   - Config module: `crates/hydra-core/src/config/{mod.rs, schema.rs}`
+   - Worktree service: `crates/hydra-core/src/worktree/mod.rs`
+   - Process supervisor: `crates/hydra-core/src/supervisor/mod.rs`
+   - CI workflow: `.github/workflows/ci.yml`
+8. Config schema covers: scoring (profile, weights, gates, diff_scope), adapters, worktree (base_dir, retain), supervisor (hard_timeout, idle_timeout, output_buffer).
+9. Doctor command now uses the typed config parser instead of hand-rolled TOML.
+10. Worktree service branch convention: `hydra/<run_id>/agent/<agent_key>`.
+11. Supervisor supports: start, stream (stdout/stderr), line parsing callback, hard timeout, idle timeout with activity reset, cancellation via handle, bounded output buffering.
