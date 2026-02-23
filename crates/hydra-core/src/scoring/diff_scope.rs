@@ -106,13 +106,85 @@ pub async fn compute_diff_stats(
         .output()
         .await?;
 
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::other(format!("git diff failed: {stderr}")));
+    }
+
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_numstat(&stdout))
+    let mut stats = parse_numstat(&stdout);
+
+    let untracked = list_untracked_files(worktree_path).await?;
+    for rel_path in untracked {
+        let output = tokio::process::Command::new("git")
+            .args([
+                "-C",
+                &worktree_path.to_string_lossy(),
+                "diff",
+                "--numstat",
+                "--no-index",
+                "--",
+                "/dev/null",
+                &rel_path,
+            ])
+            .output()
+            .await?;
+
+        // `git diff --no-index` exits with status 1 when differences are present.
+        if !output.status.success() && output.status.code() != Some(1) {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(std::io::Error::other(format!(
+                "git diff --no-index failed: {stderr}"
+            )));
+        }
+
+        let mut extra = parse_numstat(&String::from_utf8_lossy(&output.stdout));
+        if extra.files_changed > 0 {
+            extra.paths = vec![rel_path];
+        }
+        merge_stats(&mut stats, extra);
+    }
+
+    Ok(stats)
+}
+
+async fn list_untracked_files(
+    worktree_path: &std::path::Path,
+) -> Result<Vec<String>, std::io::Error> {
+    let output = tokio::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(worktree_path)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::other(format!(
+            "git ls-files failed: {stderr}"
+        )));
+    }
+
+    let files = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect();
+    Ok(files)
+}
+
+fn merge_stats(target: &mut DiffStats, extra: DiffStats) {
+    target.files_changed += extra.files_changed;
+    target.lines_added += extra.lines_added;
+    target.lines_removed += extra.lines_removed;
+    target.paths.extend(extra.paths);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+    use tempfile::TempDir;
 
     fn default_config() -> DiffScopeConfig {
         DiffScopeConfig {
@@ -211,5 +283,40 @@ mod tests {
         let stats = DiffStats::default();
         let score = score_diff_scope(&stats, &config);
         assert!((score.score - 100.0).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn compute_diff_stats_includes_untracked_new_files() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+
+        fn git(repo: &std::path::Path, args: &[&str]) {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        git(repo, &["init"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        git(repo, &["config", "user.name", "Test User"]);
+        std::fs::write(repo.join("README.md"), "base\n").unwrap();
+        git(repo, &["add", "README.md"]);
+        git(repo, &["commit", "-m", "init"]);
+
+        std::fs::write(repo.join("snake.py"), "print('snake')\n").unwrap();
+
+        let stats = compute_diff_stats(repo, "HEAD").await.unwrap();
+        assert_eq!(stats.files_changed, 1);
+        assert_eq!(stats.lines_added, 1);
+        assert_eq!(stats.lines_removed, 0);
+        assert!(stats.paths.iter().any(|p| p == "snake.py"));
     }
 }

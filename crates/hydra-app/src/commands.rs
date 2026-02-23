@@ -745,8 +745,35 @@ pub async fn get_candidate_diff(
     }
 
     if let Some(branch_name) = &branch {
+        if let Some(worktree_path) = find_worktree_path_for_branch(&repo_root, branch_name) {
+            match generate_worktree_diff(&worktree_path, &base_ref) {
+                Ok(diff_text) => {
+                    let files = parse_diff_numstat_from_patch(&diff_text);
+                    return Ok(CandidateDiffPayload {
+                        run_id,
+                        agent_key,
+                        base_ref,
+                        branch,
+                        mergeable,
+                        gate_failures,
+                        diff_text,
+                        files,
+                        diff_available: true,
+                        source: "git".to_string(),
+                        warning: Some(
+                            "Diff generated live from retained worktree (artifact was not persisted)"
+                                .to_string(),
+                        ),
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "worktree live diff generation failed");
+                }
+            }
+        }
+
         if branch_exists(&repo_root, branch_name) {
-            match generate_live_diff(&repo_root, branch_name, &base_ref) {
+            match generate_branch_diff(&repo_root, branch_name, &base_ref) {
                 Ok(diff_text) => {
                     let files = parse_diff_numstat_from_patch(&diff_text);
                     return Ok(CandidateDiffPayload {
@@ -1083,13 +1110,13 @@ fn branch_exists(repo_root: &Path, branch: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn generate_live_diff(repo_root: &Path, branch: &str, base_ref: &str) -> Result<String, String> {
+fn generate_branch_diff(repo_root: &Path, branch: &str, base_ref: &str) -> Result<String, String> {
     let output = std::process::Command::new("git")
         .args([
             "diff",
             "--no-color",
             "--patch",
-            &format!("{base_ref}...{branch}"),
+            &format!("{base_ref}..{branch}"),
         ])
         .current_dir(repo_root)
         .output()
@@ -1101,6 +1128,122 @@ fn generate_live_diff(repo_root: &Path, branch: &str, base_ref: &str) -> Result<
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn generate_worktree_diff(worktree_path: &Path, base_ref: &str) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            &worktree_path.to_string_lossy(),
+            "diff",
+            "--no-color",
+            "--patch",
+            base_ref,
+        ])
+        .output()
+        .map_err(|e| format!("failed to run git diff: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("git diff failed: {stderr}"));
+    }
+
+    let mut patch = String::from_utf8_lossy(&output.stdout).to_string();
+
+    let untracked = std::process::Command::new("git")
+        .args([
+            "-C",
+            &worktree_path.to_string_lossy(),
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+        ])
+        .output()
+        .map_err(|e| format!("failed to list untracked files: {e}"))?;
+
+    if !untracked.status.success() {
+        let stderr = String::from_utf8_lossy(&untracked.stderr).trim().to_string();
+        return Err(format!("git ls-files failed: {stderr}"));
+    }
+
+    for rel_path in String::from_utf8_lossy(&untracked.stdout).lines() {
+        let rel_path = rel_path.trim();
+        if rel_path.is_empty() {
+            continue;
+        }
+
+        let extra = std::process::Command::new("git")
+            .args([
+                "-C",
+                &worktree_path.to_string_lossy(),
+                "diff",
+                "--no-color",
+                "--patch",
+                "--no-index",
+                "--",
+                "/dev/null",
+                rel_path,
+            ])
+            .output()
+            .map_err(|e| format!("failed to diff untracked file: {e}"))?;
+
+        if !extra.status.success() && extra.status.code() != Some(1) {
+            let stderr = String::from_utf8_lossy(&extra.stderr).trim().to_string();
+            return Err(format!("git diff --no-index failed: {stderr}"));
+        }
+
+        let text = String::from_utf8_lossy(&extra.stdout);
+        if !text.trim().is_empty() {
+            if !patch.is_empty() && !patch.ends_with('\n') {
+                patch.push('\n');
+            }
+            patch.push_str(&text);
+        }
+    }
+
+    Ok(patch)
+}
+
+fn find_worktree_path_for_branch(repo_root: &Path, branch: &str) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_worktree_path_for_branch(&String::from_utf8_lossy(&output.stdout), branch)
+}
+
+fn parse_worktree_path_for_branch(porcelain: &str, branch: &str) -> Option<PathBuf> {
+    let target_ref = format!("refs/heads/{branch}");
+    let mut current_worktree: Option<PathBuf> = None;
+    let mut current_branch: Option<String> = None;
+
+    for line in porcelain.lines().chain(std::iter::once("")) {
+        if line.is_empty() {
+            if current_branch.as_deref() == Some(target_ref.as_str()) {
+                return current_worktree;
+            }
+            current_worktree = None;
+            current_branch = None;
+            continue;
+        }
+
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_worktree = Some(PathBuf::from(path));
+            continue;
+        }
+
+        if let Some(found_branch) = line.strip_prefix("branch ") {
+            current_branch = Some(found_branch.to_string());
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -1368,5 +1511,34 @@ index 3333333..4444444 100644
         assert_eq!(parsed.agent_key, "codex");
         assert_eq!(parsed.event_type, "agent_stdout");
         assert_eq!(parsed.data["line"], "hello world");
+    }
+
+    #[test]
+    fn parse_worktree_path_for_branch_finds_matching_entry() {
+        let porcelain = r#"worktree /repo
+HEAD 1111111
+branch refs/heads/main
+
+worktree /repo/.hydra/worktrees/run/claude
+HEAD 2222222
+branch refs/heads/hydra/run/agent/claude
+"#;
+        let found = parse_worktree_path_for_branch(porcelain, "hydra/run/agent/claude")
+            .expect("expected worktree path");
+        assert_eq!(
+            found,
+            PathBuf::from("/repo/.hydra/worktrees/run/claude")
+        );
+    }
+
+    #[test]
+    fn parse_worktree_path_for_branch_returns_none_when_missing() {
+        let porcelain = r#"worktree /repo
+HEAD 1111111
+branch refs/heads/main
+"#;
+        assert!(
+            parse_worktree_path_for_branch(porcelain, "hydra/run/agent/codex").is_none()
+        );
     }
 }

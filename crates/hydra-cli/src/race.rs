@@ -1108,25 +1108,85 @@ fn sha256_short(input: &str) -> String {
 }
 
 async fn generate_diff_patch(worktree_path: &Path, base_ref: &str) -> Result<String> {
-    let output = TokioCommand::new("git")
+    let base_output = TokioCommand::new("git")
         .args([
             "-C",
             &worktree_path.to_string_lossy(),
             "diff",
             "--no-color",
             "--patch",
-            &format!("{base_ref}...HEAD"),
+            base_ref,
         ])
         .output()
         .await
         .context("failed to run git diff for patch")?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !base_output.status.success() {
+        let stderr = String::from_utf8_lossy(&base_output.stderr)
+            .trim()
+            .to_string();
         bail!("git diff exited with non-zero status: {stderr}");
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let mut patch = String::from_utf8_lossy(&base_output.stdout).to_string();
+
+    let untracked_output = TokioCommand::new("git")
+        .args([
+            "-C",
+            &worktree_path.to_string_lossy(),
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+        ])
+        .output()
+        .await
+        .context("failed to list untracked files for patch")?;
+
+    if !untracked_output.status.success() {
+        let stderr = String::from_utf8_lossy(&untracked_output.stderr)
+            .trim()
+            .to_string();
+        bail!("git ls-files exited with non-zero status: {stderr}");
+    }
+
+    for rel_path in String::from_utf8_lossy(&untracked_output.stdout).lines() {
+        let rel_path = rel_path.trim();
+        if rel_path.is_empty() {
+            continue;
+        }
+
+        let output = TokioCommand::new("git")
+            .args([
+                "-C",
+                &worktree_path.to_string_lossy(),
+                "diff",
+                "--no-color",
+                "--patch",
+                "--no-index",
+                "--",
+                "/dev/null",
+                rel_path,
+            ])
+            .output()
+            .await
+            .context("failed to generate patch for untracked file")?;
+
+        // `git diff --no-index` exits with status 1 when differences are present.
+        if !output.status.success() && output.status.code() != Some(1) {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            bail!("git diff --no-index exited with non-zero status: {stderr}");
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        if !text.trim().is_empty() {
+            if !patch.is_empty() && !patch.ends_with('\n') {
+                patch.push('\n');
+            }
+            patch.push_str(&text);
+        }
+    }
+
+    Ok(patch)
 }
 
 fn should_cleanup_worktree(retain: RetentionPolicy, status: &RunStatus) -> bool {
@@ -1256,7 +1316,9 @@ impl SharedBudgetState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
     use std::sync::Arc;
+    use tempfile::TempDir;
 
     #[test]
     fn sha256_short_matches_known_vector() {
@@ -1313,5 +1375,39 @@ mod tests {
         let reason = state.note_usage(60, None, &budget).await;
         assert!(reason.is_some());
         assert!(state.should_stop());
+    }
+
+    #[tokio::test]
+    async fn generate_diff_patch_includes_uncommitted_new_file_changes() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path();
+
+        fn git(repo: &Path, args: &[&str]) {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        git(repo, &["init"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        git(repo, &["config", "user.name", "Test User"]);
+
+        std::fs::write(repo.join("README.md"), "base\n").unwrap();
+        git(repo, &["add", "README.md"]);
+        git(repo, &["commit", "-m", "init"]);
+
+        std::fs::write(repo.join("snake.py"), "print('snake')\n").unwrap();
+
+        let patch = generate_diff_patch(repo, "HEAD").await.unwrap();
+        assert!(patch.contains("diff --git a/snake.py b/snake.py"));
+        assert!(patch.contains("+print('snake')"));
     }
 }
