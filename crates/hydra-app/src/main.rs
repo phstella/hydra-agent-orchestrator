@@ -15,6 +15,9 @@ fn main() {
             hydra_app::start_race,
             hydra_app::poll_race_events,
             hydra_app::get_race_result,
+            hydra_app::get_candidate_diff,
+            hydra_app::preview_merge,
+            hydra_app::execute_merge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running hydra application");

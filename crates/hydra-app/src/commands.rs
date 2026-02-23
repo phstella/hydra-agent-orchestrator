@@ -633,6 +633,369 @@ async fn emit_orchestrator_event(
         .await;
 }
 
+// ---------------------------------------------------------------------------
+// Diff review commands (P3-UI-05)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_candidate_diff(
+    run_id: String,
+    agent_key: String,
+) -> Result<CandidateDiffPayload, String> {
+    let repo_root =
+        discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
+    let hydra_root = repo_root.join(".hydra");
+    let run_uuid = uuid::Uuid::parse_str(&run_id)
+        .map_err(|e| format!("[validation_error] invalid run_id: {e}"))?;
+    let layout = hydra_core::artifact::RunLayout::new(&hydra_root, run_uuid);
+
+    if !layout.base_dir().exists() {
+        return Err(format!(
+            "[validation_error] run {} not found",
+            run_id
+        ));
+    }
+
+    let manifest =
+        hydra_core::artifact::RunManifest::read_from(&layout.manifest_path())
+            .map_err(|e| format!("[internal_error] failed to read manifest: {e}"))?;
+
+    let entry = manifest
+        .agents
+        .iter()
+        .find(|a| a.agent_key == agent_key)
+        .ok_or_else(|| {
+            format!(
+                "[validation_error] agent '{}' not found in run {}",
+                agent_key, run_id
+            )
+        })?;
+
+    let base_ref = manifest.base_ref.clone();
+    let branch = Some(entry.branch.clone());
+
+    let (mergeable, gate_failures) = load_agent_mergeability(&layout, &agent_key);
+
+    let diff_artifact = layout.agent_diff(&agent_key);
+    if diff_artifact.exists() {
+        let diff_text = std::fs::read_to_string(&diff_artifact)
+            .map_err(|e| format!("[internal_error] failed to read diff artifact: {e}"))?;
+        let files = parse_diff_numstat_from_patch(&diff_text);
+        return Ok(CandidateDiffPayload {
+            run_id,
+            agent_key,
+            base_ref,
+            branch,
+            mergeable,
+            gate_failures,
+            diff_text: diff_text.clone(),
+            files,
+            diff_available: true,
+            source: "artifact".to_string(),
+            warning: None,
+        });
+    }
+
+    if let Some(branch_name) = &branch {
+        if branch_exists(&repo_root, branch_name) {
+            match generate_live_diff(&repo_root, branch_name, &base_ref) {
+                Ok(diff_text) => {
+                    let files = parse_diff_numstat_from_patch(&diff_text);
+                    return Ok(CandidateDiffPayload {
+                        run_id,
+                        agent_key,
+                        base_ref,
+                        branch,
+                        mergeable,
+                        gate_failures,
+                        diff_text,
+                        files,
+                        diff_available: true,
+                        source: "git".to_string(),
+                        warning: Some(
+                            "Diff generated live from branch (artifact was not persisted)"
+                                .to_string(),
+                        ),
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "live diff generation failed");
+                }
+            }
+        }
+    }
+
+    Ok(CandidateDiffPayload {
+        run_id,
+        agent_key,
+        base_ref,
+        branch,
+        mergeable,
+        gate_failures,
+        diff_text: String::new(),
+        files: Vec::new(),
+        diff_available: false,
+        source: "none".to_string(),
+        warning: Some(
+            "Diff unavailable: artifact not persisted and branch no longer exists".to_string(),
+        ),
+    })
+}
+
+#[tauri::command]
+pub async fn preview_merge(
+    run_id: String,
+    agent_key: String,
+    force: bool,
+) -> Result<MergePreviewPayload, String> {
+    let (cli_parts, repo_root) = resolve_cli_and_repo()?;
+
+    let mut args: Vec<String> = cli_parts[1..].to_vec();
+    args.extend([
+        "merge".to_string(),
+        "--run-id".to_string(),
+        run_id,
+        "--agent".to_string(),
+        agent_key.clone(),
+        "--dry-run".to_string(),
+        "--json".to_string(),
+    ]);
+    if force {
+        args.push("--force".to_string());
+    }
+
+    let output = std::process::Command::new(&cli_parts[0])
+        .args(&args)
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| format!("[internal_error] failed to execute merge command: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let (success, has_conflicts, branch, report_path) = if output.status.success() {
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
+        let branch_val = parsed
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let conflicts = parsed
+            .get("has_conflicts")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let rp = parsed
+            .get("report_path")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        (true, conflicts, branch_val, rp)
+    } else {
+        let has_conflicts = stderr.contains("CONFLICT") || stdout.contains("has_conflicts");
+        (false, has_conflicts, String::new(), None)
+    };
+
+    Ok(MergePreviewPayload {
+        agent_key,
+        branch,
+        success,
+        has_conflicts,
+        stdout,
+        stderr,
+        report_path,
+    })
+}
+
+#[tauri::command]
+pub async fn execute_merge(
+    run_id: String,
+    agent_key: String,
+    force: bool,
+) -> Result<MergeExecutionPayload, String> {
+    let (cli_parts, repo_root) = resolve_cli_and_repo()?;
+
+    let mut args: Vec<String> = cli_parts[1..].to_vec();
+    args.extend([
+        "merge".to_string(),
+        "--run-id".to_string(),
+        run_id,
+        "--agent".to_string(),
+        agent_key.clone(),
+        "--confirm".to_string(),
+        "--json".to_string(),
+    ]);
+    if force {
+        args.push("--force".to_string());
+    }
+
+    let output = std::process::Command::new(&cli_parts[0])
+        .args(&args)
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| format!("[internal_error] failed to execute merge command: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
+        let branch_val = parsed
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let message = parsed
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Merge completed successfully")
+            .to_string();
+        Ok(MergeExecutionPayload {
+            agent_key,
+            branch: branch_val,
+            success: true,
+            message,
+            stdout: Some(stdout),
+            stderr: if stderr.is_empty() {
+                None
+            } else {
+                Some(stderr)
+            },
+        })
+    } else {
+        Ok(MergeExecutionPayload {
+            agent_key,
+            branch: String::new(),
+            success: false,
+            message: if stderr.is_empty() {
+                format!("merge exited with status {}", output.status)
+            } else {
+                stderr.trim().to_string()
+            },
+            stdout: if stdout.is_empty() {
+                None
+            } else {
+                Some(stdout)
+            },
+            stderr: if stderr.is_empty() {
+                None
+            } else {
+                Some(stderr)
+            },
+        })
+    }
+}
+
+fn resolve_cli_and_repo() -> Result<(Vec<String>, PathBuf), String> {
+    let repo_root =
+        discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
+
+    if let Ok(bin) = std::env::var("HYDRA_CLI_BIN") {
+        Ok((vec![bin], repo_root))
+    } else if binary_available("hydra") {
+        Ok((vec!["hydra".to_string()], repo_root))
+    } else {
+        Ok((
+            vec![
+                "cargo".to_string(),
+                "run".to_string(),
+                "-p".to_string(),
+                "hydra-cli".to_string(),
+                "--".to_string(),
+            ],
+            repo_root,
+        ))
+    }
+}
+
+fn load_agent_mergeability(
+    layout: &hydra_core::artifact::RunLayout,
+    agent_key: &str,
+) -> (Option<bool>, Vec<String>) {
+    let score_path = layout.agent_score(agent_key);
+    if !score_path.exists() {
+        return (None, Vec::new());
+    }
+    let Ok(data) = std::fs::read_to_string(&score_path) else {
+        return (None, Vec::new());
+    };
+    let Ok(score) = serde_json::from_str::<serde_json::Value>(&data) else {
+        return (None, Vec::new());
+    };
+    let mergeable = score.get("mergeable").and_then(|v| v.as_bool());
+    let gate_failures = score
+        .get("gate_failures")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    (mergeable, gate_failures)
+}
+
+fn parse_diff_numstat_from_patch(patch: &str) -> Vec<DiffFile> {
+    let mut files: Vec<DiffFile> = Vec::new();
+    for line in patch.lines() {
+        if let Some(path) = line.strip_prefix("diff --git a/") {
+            if let Some(bpath) = path.split(" b/").nth(1) {
+                if !files.iter().any(|f| f.path == bpath) {
+                    files.push(DiffFile {
+                        path: bpath.to_string(),
+                        added: 0,
+                        removed: 0,
+                    });
+                }
+            }
+        }
+        if line.starts_with("@@") {
+            continue;
+        }
+        if let Some(last) = files.last_mut() {
+            if line.starts_with('+') && !line.starts_with("+++") {
+                last.added += 1;
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                last.removed += 1;
+            }
+        }
+    }
+    files
+}
+
+fn branch_exists(repo_root: &Path, branch: &str) -> bool {
+    std::process::Command::new("git")
+        .args([
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{branch}"),
+        ])
+        .current_dir(repo_root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn generate_live_diff(repo_root: &Path, branch: &str, base_ref: &str) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args([
+            "diff",
+            "--no-color",
+            "--patch",
+            &format!("{base_ref}...{branch}"),
+        ])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|e| format!("failed to run git diff: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("git diff failed: {stderr}"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,6 +4,7 @@ import { ExperimentalAdapterModal } from './components/ExperimentalAdapterModal'
 import { AgentRail } from './components/AgentRail';
 import { LiveOutputPanel } from './components/LiveOutputPanel';
 import { ResultsScoreboard } from './components/ResultsScoreboard';
+import { CandidateDiffReview } from './components/CandidateDiffReview';
 import { Tabs, Badge, Button, Card } from './components/design-system';
 import { getRaceResult, listAdapters, pollRaceEvents, startRace } from './ipc';
 import type { AdapterInfo, RaceResult } from './types';
@@ -14,6 +15,7 @@ const NAV_TABS = [
   { id: 'preflight', label: 'Preflight' },
   { id: 'race', label: 'Race' },
   { id: 'results', label: 'Results' },
+  { id: 'review', label: 'Review' },
 ];
 
 export default function App() {
@@ -149,6 +151,7 @@ export default function App() {
 
   const handleWinnerSelect = useCallback((agentKey: string) => {
     setSelectedWinner(agentKey);
+    setActiveTab('review');
   }, []);
 
   useEffect(() => {
@@ -412,6 +415,26 @@ export default function App() {
                 }}
               >
                 No results yet. Complete a race to see the scoreboard.
+              </div>
+            )
+          )}
+
+          {activeTab === 'review' && (
+            raceResult && activeRunId ? (
+              <CandidateDiffReview
+                runId={activeRunId}
+                agents={raceResult.agents}
+                selectedWinner={selectedWinner}
+              />
+            ) : (
+              <div
+                style={{
+                  padding: 'var(--space-8)',
+                  textAlign: 'center',
+                  color: 'var(--color-text-muted)',
+                }}
+              >
+                No results yet. Complete a race and select a winner to review diffs.
               </div>
             )
           )}

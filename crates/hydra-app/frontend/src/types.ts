@@ -120,6 +120,49 @@ export interface RaceEventBatch {
 }
 
 // ---------------------------------------------------------------------------
+// Diff / Merge (P3-UI-05)
+// ---------------------------------------------------------------------------
+
+export interface DiffFile {
+  path: string;
+  added: number;
+  removed: number;
+}
+
+export interface CandidateDiffPayload {
+  runId: string;
+  agentKey: string;
+  baseRef: string;
+  branch: string | null;
+  mergeable: boolean | null;
+  gateFailures: string[];
+  diffText: string;
+  files: DiffFile[];
+  diffAvailable: boolean;
+  source: 'artifact' | 'git' | 'none';
+  warning: string | null;
+}
+
+export interface MergePreviewPayload {
+  agentKey: string;
+  branch: string;
+  success: boolean;
+  hasConflicts: boolean;
+  stdout: string;
+  stderr: string;
+  reportPath: string | null;
+}
+
+export interface MergeExecutionPayload {
+  agentKey: string;
+  branch: string;
+  success: boolean;
+  message: string;
+  stdout: string | null;
+  stderr: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // IPC Error
 // ---------------------------------------------------------------------------
 

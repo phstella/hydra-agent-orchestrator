@@ -84,3 +84,30 @@ jobs:
 
       - name: Frontend build
         run: npm run build --prefix crates/hydra-app/frontend
+
+      - name: Frontend smoke tests
+        run: npm run test:smoke --prefix crates/hydra-app/frontend
+
+  gui-windows:
+    name: windows-latest / gui
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: crates/hydra-app/frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix crates/hydra-app/frontend
+
+      - name: Frontend lint
+        run: npm run lint --prefix crates/hydra-app/frontend
+
+      - name: Frontend build
+        run: npm run build --prefix crates/hydra-app/frontend
+
+      - name: Frontend smoke tests
+        run: npm run test:smoke --prefix crates/hydra-app/frontend

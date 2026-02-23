@@ -5,9 +5,9 @@ Last updated: 2026-02-23
 ## Current State
 
 - **Phase**: 3 **in progress** (GUI Alpha)
-- **Milestone**: P3-DS-01, P3-IPC-01, P3-UI-01, P3-UI-02, P3-UI-03, P3-UI-04 complete; M3.1 bootstrap done
+- **Milestone**: P3-DS-01, P3-IPC-01, P3-UI-01, P3-UI-02, P3-UI-03, P3-UI-04, P3-UI-05, P3-QA-01 complete; M3.1 bootstrap done
 - **Sprint**: Phase 3 GUI implementation
-- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI includes: Tauri v2 app crate, React+TS frontend with design system tokens, IPC layer with backpressure, Preflight Dashboard, Experimental Adapter Modal, Running Agents Rail with Live Output Panel, and Results Scoreboard + explicit winner selection. Runtime status normalization now preserves timeout-vs-failure distinction in the rail/panel lifecycle. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean. Frontend builds via `npm run build` and `tsc --noEmit` clean. `hydra-app` crate requires system packages (`webkit2gtk-4.1`, `javascriptcoregtk-4.1`) to compile — excluded from default-members.
+- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete: Tauri v2 app crate, React+TS frontend with design system tokens, IPC layer with backpressure, Preflight Dashboard, Experimental Adapter Modal, Running Agents Rail with Live Output Panel, Results Scoreboard + explicit winner selection, Candidate Diff Review + Merge Action Rail, and GUI Smoke Test Pack (10 tests). Diff patch artifacts are now persisted during the race flow before worktree cleanup. Three new Tauri IPC commands (get_candidate_diff, preview_merge, execute_merge) map to CLI merge semantics. Vitest + Testing Library smoke test framework added with CI on Linux + Windows. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean. Frontend builds via `npm run build`, `tsc --noEmit`, and `npm run test:smoke` clean. `hydra-app` crate requires system packages (`webkit2gtk-4.1`, `javascriptcoregtk-4.1`) to compile — excluded from default-members.
 
 ## Completed Milestones
 
@@ -48,12 +48,14 @@ Last updated: 2026-02-23
 | P3-UI-02 | Experimental Adapter Opt-In Modal | 2026-02-23 | Warning modal with resource impact bar, risk acknowledgment checkbox, disabled confirm until acknowledged. Matches Image #2 mockup. |
 | P3-UI-03 | Live Agent Output + Running Agents Rail | 2026-02-23 | AgentRail with lifecycle badges (running/completed/failed/timed_out), selected-agent state driving LiveOutputPanel context switch, backpressure-safe rendering via useEventBuffer, mock IPC with multi-agent event stream. Matches M3.3 acceptance criteria. |
 | P3-UI-04 | Results Scoreboard + Winner Selection | 2026-02-23 | Ranked candidate cards with mergeability gating, explicit winner selection, per-dimension score table, and run metadata badges (duration/cost where available). Winner state is app-owned and consistent across tabs. |
+| P3-UI-05 | Candidate Diff Review + Merge Action Rail | 2026-02-23 | Diff patch persisted in race flow before cleanup. Three new Tauri IPC commands (get_candidate_diff, preview_merge, execute_merge) with CLI merge mapping. CandidateDiffReview component with candidate tabs, virtualized diff viewer, modified-files list, and merge action rail (preview/accept/reject). Fallback state when diff unavailable. Force override for non-mergeable candidates. Winner selection feeds default candidate in review view. |
+| P3-QA-01 | GUI Smoke Test Pack | 2026-02-23 | Vitest + Testing Library (jsdom) smoke test framework. 10 tests covering: startup/tab rendering, preflight refresh IPC, experimental modal gating, race flow transitions, explicit winner selection (no auto-merge), diff candidate switching, and merge dry-run gating with conflict blocking. CI runs on Linux + Windows. |
 
 ## In-Progress Work
 
-- **Phase 3 GUI Alpha**: P3-UI-05 (Diff Review + Merge Rail) and P3-QA-01 smoke coverage are next.
+- **Phase 3 GUI Alpha**: All supplemental tickets complete (P3-DS-01 through P3-QA-01). Remaining M3.x milestones from the original checklist may need reconciliation.
 - M3.2 IPC surface is wired end-to-end through `hydra race --json` with event polling and parsed run summaries.
-- M3.5 diff/review components and M3.7 smoke tests are pending.
+- M3.5 diff viewer satisfied by P3-UI-05. M3.7 smoke tests satisfied by P3-QA-01.
 
 ## Decisions Made
 
@@ -103,6 +105,11 @@ Last updated: 2026-02-23
 | 2026-02-23 | Race summary output now includes top-level `duration_ms` and `total_cost` fields | Keeps GUI run metadata rendering stable while preserving detailed nested `cost` payload |
 | 2026-02-23 | Timeout lifecycle is inferred from `agent_failed` timeout signatures in UI hook | Preserves visual distinction between timed-out and failed agents without changing artifact event schema |
 | 2026-02-23 | Design tokens defined as CSS custom properties (not JS) | Faster at runtime; works with any CSS-in-JS approach; lint-enforceable via pattern match |
+| 2026-02-23 | Diff patch artifact (`diff.patch`) persisted before worktree cleanup | GUI diff view must not depend on branch existence post-cleanup; empty file written for no-diff case |
+| 2026-02-23 | Diff/merge IPC commands shell out to `hydra` CLI binary | Reuses existing CLI merge semantics (--dry-run, --confirm, --force, --json) without duplicating logic |
+| 2026-02-23 | Diff source resolution: artifact -> live git -> unavailable fallback | Three-tier fallback ensures diff is available in most scenarios; GUI shows explicit unavailable state |
+| 2026-02-23 | Vitest + Testing Library (jsdom) for GUI smoke tests | Deterministic, fast, no browser dependency; mocked IPC for isolated UI flow validation |
+| 2026-02-23 | Winner selection navigates to Review tab | Explicit flow from scoreboard -> diff review aligns with CLI workflow (score -> inspect -> merge) |
 
 ## Open Issues
 
@@ -118,7 +125,7 @@ Last updated: 2026-02-23
 |-------|--------|----------|-------|
 | hydra-core | Yes | Yes | 218 unit + 12 integration = 230 passing |
 | hydra-cli | Yes | Yes | 7 passing |
-| hydra-app | Yes | Requires system libs | 5 unit tests (pending system libs) |
+| hydra-app | Yes | Requires system libs | 5 unit tests + 10 smoke tests (Vitest) |
 
 ## Phase Progress
 
@@ -127,7 +134,7 @@ Last updated: 2026-02-23
 | 0 | Validation and Guardrails | **Complete** | 8/8 |
 | 1 | Core Orchestrator + Single Agent | **Complete** | 8/8 |
 | 2 | Multi-Agent Race + Scoring | **Complete** | 12/12 |
-| 3 | GUI Alpha | **In Progress** | 6/7+ (P3-DS-01, P3-IPC-01, P3-UI-01, P3-UI-02, P3-UI-03, P3-UI-04) |
+| 3 | GUI Alpha | **In Progress** | 8/7+ (P3-DS-01, P3-IPC-01, P3-UI-01, P3-UI-02, P3-UI-03, P3-UI-04, P3-UI-05, P3-QA-01) |
 | 4 | Collaboration Workflows | Not started | 0/6 |
 | 5 | Windows Parity + Hardening | Not started | 0/6 |
 
@@ -135,25 +142,22 @@ Last updated: 2026-02-23
 
 1. Read `CLAUDE.md` for project overview and conventions.
 2. Phase 2 is **complete** — all 12 milestones done (M2.1 through M2.12).
-3. Phase 3 is **in progress** — P3-DS-01, P3-IPC-01, P3-UI-01, P3-UI-02, P3-UI-03, P3-UI-04 implemented.
-4. Current baseline: `hydra-core` 230 passing, `hydra-cli` 7 passing. Default workspace `cargo check/test/clippy` clean. Frontend `tsc --noEmit` and `vite build` clean.
+3. Phase 3 supplemental tickets are **complete** — P3-DS-01, P3-IPC-01, P3-UI-01 through P3-UI-05, P3-QA-01 implemented.
+4. Current baseline: `hydra-core` 230 passing, `hydra-cli` 7 passing, `hydra-app` 5 Rust unit tests + 10 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. Frontend `tsc --noEmit`, `vite build`, and `npm run test:smoke` clean.
 5. **System package requirement**: `hydra-app` needs `webkit2gtk-4.1` (`pacman -S webkit2gtk-4.1` on Arch). Install before attempting `cargo check -p hydra-app`.
 6. **Next priorities**:
-   - P3-UI-05: Candidate Diff Review + Merge Action Rail (M3.5)
-   - M3.7: GUI Smoke Test Pack
-7. Key files added in Phase 3:
-   - `crates/hydra-app/` — NEW crate: Tauri v2 backend (commands, state, IPC types)
-   - `crates/hydra-app/frontend/` — React+TS frontend app
-   - `crates/hydra-app/frontend/src/styles/tokens.css` — Design system token source
-   - `crates/hydra-app/frontend/src/components/design-system/` — Core primitives
-   - `crates/hydra-app/frontend/src/components/PreflightDashboard.tsx` — P3-UI-01
-   - `crates/hydra-app/frontend/src/components/ExperimentalAdapterModal.tsx` — P3-UI-02
-   - `crates/hydra-app/frontend/src/components/AgentRail.tsx` — P3-UI-03 running-agent rail
-   - `crates/hydra-app/frontend/src/components/LiveOutputPanel.tsx` — P3-UI-03 live output panel
-   - `crates/hydra-app/frontend/src/hooks/useAgentStatuses.ts` — P3-UI-03 agent lifecycle derivation
-   - `crates/hydra-app/frontend/src/components/ResultsScoreboard.tsx` — P3-UI-04 results scoreboard + winner selection
-   - `crates/hydra-app/frontend/src/ipc.ts` — IPC bridge with mock fallback
-   - `crates/hydra-app/frontend/src/hooks/` — usePreflight, useEventBuffer (backpressure)
-8. Design system tokens are CSS custom properties in `tokens.css`. All primitives consume tokens only. Feature components must NOT use hardcoded hex colors.
-9. IPC flow: Frontend calls `invoke('command_name', args)` → Tauri dispatches to `#[tauri::command]` fn → returns JSON. Mock fallback for dev without Tauri runtime.
+   - Reconcile original M3.x milestones (M3.1-M3.7) against supplemental tickets for formal closure
+   - Phase 4: Collaboration Workflows
+7. Key files added for P3-UI-05 and P3-QA-01:
+   - `crates/hydra-cli/src/race.rs` — diff.patch persistence via `generate_diff_patch()` before worktree cleanup
+   - `crates/hydra-app/src/ipc_types.rs` — CandidateDiffPayload, MergePreviewPayload, MergeExecutionPayload, DiffFile
+   - `crates/hydra-app/src/commands.rs` — get_candidate_diff, preview_merge, execute_merge Tauri commands
+   - `crates/hydra-app/frontend/src/components/CandidateDiffReview.tsx` — P3-UI-05 diff review surface
+   - `crates/hydra-app/frontend/src/types.ts` — TypeScript diff/merge types
+   - `crates/hydra-app/frontend/src/ipc.ts` — getCandidateDiff, previewMerge, executeMerge IPC + mock fallback
+   - `crates/hydra-app/frontend/src/__tests__/smoke.test.tsx` — P3-QA-01 10-test smoke suite
+   - `crates/hydra-app/frontend/vitest.config.ts` — Vitest configuration
+   - `.github/workflows/ci.yml` — Added smoke test step on Linux + Windows GUI CI jobs
+8. Design system tokens are CSS custom properties in `tokens.css`. All primitives consume tokens only. Feature components must NOT use hardcoded hex colors (enforced by `enforce-design-tokens.mjs`).
+9. IPC flow: Frontend calls `invoke('command_name', args)` → Tauri dispatches to `#[tauri::command]` fn → returns JSON. Mock fallback for dev without Tauri runtime. Diff/merge commands shell out to `hydra` CLI binary.
 10. Adapter/status data is runtime-driven from `ProbeRunner`/`AdapterRegistry`. No hardcoded agent names in UI components.

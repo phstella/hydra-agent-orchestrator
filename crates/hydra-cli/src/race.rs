@@ -7,6 +7,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use tokio::process::Command as TokioCommand;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -326,6 +327,30 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
         .iter()
         .map(|score| (score.agent_key.clone(), score.clone()))
         .collect();
+
+    // Persist diff.patch for each agent before worktree cleanup.
+    // The diff artifact must survive cleanup so the GUI can display it later.
+    for (adapter, wt_info) in adapters.iter().zip(worktrees.iter()) {
+        let diff_path = layout.agent_diff(adapter.key());
+        match generate_diff_patch(&wt_info.path, &opts.base_ref).await {
+            Ok(patch) => {
+                if let Err(e) = std::fs::write(&diff_path, &patch) {
+                    tracing::warn!(
+                        agent = adapter.key(),
+                        error = %e,
+                        "failed to write diff.patch artifact"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    agent = adapter.key(),
+                    error = %e,
+                    "failed to generate diff.patch; skipping"
+                );
+            }
+        }
+    }
 
     // Cleanup worktrees
     let mut cleanup_results: HashMap<String, bool> = HashMap::new();
@@ -1080,6 +1105,28 @@ fn sha256_short(input: &str) -> String {
         let _ = write!(&mut out, "{byte:02x}");
     }
     out
+}
+
+async fn generate_diff_patch(worktree_path: &Path, base_ref: &str) -> Result<String> {
+    let output = TokioCommand::new("git")
+        .args([
+            "-C",
+            &worktree_path.to_string_lossy(),
+            "diff",
+            "--no-color",
+            "--patch",
+            &format!("{base_ref}...HEAD"),
+        ])
+        .output()
+        .await
+        .context("failed to run git diff for patch")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!("git diff exited with non-zero status: {stderr}");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn should_cleanup_worktree(retain: RetentionPolicy, status: &RunStatus) -> bool {

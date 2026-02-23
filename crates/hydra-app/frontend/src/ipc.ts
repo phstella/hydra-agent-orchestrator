@@ -13,6 +13,9 @@ import type {
   RaceStarted,
   RaceResult,
   RaceEventBatch,
+  CandidateDiffPayload,
+  MergePreviewPayload,
+  MergeExecutionPayload,
 } from './types';
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -69,6 +72,21 @@ export async function getRaceResult(runId: string): Promise<RaceResult | null> {
 export async function pollRaceEvents(runId: string, cursor: number): Promise<RaceEventBatch> {
   const invoke = await getInvoke();
   return invoke('poll_race_events', { runId, cursor });
+}
+
+export async function getCandidateDiff(runId: string, agentKey: string): Promise<CandidateDiffPayload> {
+  const invoke = await getInvoke();
+  return invoke('get_candidate_diff', { runId, agentKey });
+}
+
+export async function previewMerge(runId: string, agentKey: string, force: boolean): Promise<MergePreviewPayload> {
+  const invoke = await getInvoke();
+  return invoke('preview_merge', { runId, agentKey, force });
+}
+
+export async function executeMerge(runId: string, agentKey: string, force: boolean): Promise<MergeExecutionPayload> {
+  const invoke = await getInvoke();
+  return invoke('execute_merge', { runId, agentKey, force });
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +192,93 @@ function buildMockEventStream(): AgentStreamEvent[] {
 
 let mockEventStream = buildMockEventStream();
 
+const MOCK_DIFF_CLAUDE = `diff --git a/src/main.rs b/src/main.rs
+index abc1234..def5678 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -10,6 +10,18 @@ fn main() {
+     let config = load_config();
+-    println!("starting");
+-    println!("done");
++    tracing::info!("starting application");
++    let result = run_pipeline(&config);
++    match result {
++        Ok(()) => tracing::info!("pipeline completed"),
++        Err(e) => {
++            tracing::error!(error = %e, "pipeline failed");
++            std::process::exit(1);
++        }
++    }
++}
++
++fn run_pipeline(config: &Config) -> Result<()> {
++    validate_inputs(config)?;
++    execute_stages(config)?;
++    Ok(())
+ }
+diff --git a/src/lib.rs b/src/lib.rs
+index 1234567..abcdef0 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,8 +1,22 @@
+-pub fn process() {
+-    // TODO: implement
++pub fn process(input: &str) -> Result<Output, ProcessError> {
++    let parsed = parse_input(input)?;
++    let validated = validate(parsed)?;
++    transform(validated)
+ }
+diff --git a/tests/integration.rs b/tests/integration.rs
+index aaa1111..bbb2222 100644
+--- a/tests/integration.rs
++++ b/tests/integration.rs
+@@ -5,1 +5,5 @@
+-    assert!(true);
++    let result = process("test input");
++    assert!(result.is_ok());
++    let output = result.unwrap();
++    assert_eq!(output.status, "success");
++    assert!(!output.data.is_empty());
+`;
+
+const MOCK_DIFF_CODEX = `diff --git a/src/main.rs b/src/main.rs
+index abc1234..def5678 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,5 +1,30 @@
++use anyhow::Result;
++use tracing_subscriber;
++
+ fn main() {
++    tracing_subscriber::init();
+     let config = load_config();
+-    println!("starting");
++    if let Err(e) = run(config) {
++        eprintln!("Error: {e:#}");
++        std::process::exit(1);
++    }
++}
++
++fn run(config: Config) -> Result<()> {
++    let ctx = Context::new(config)?;
++    ctx.execute()?;
++    Ok(())
+ }
+diff --git a/src/utils.rs b/src/utils.rs
+index 1111111..2222222 100644
+--- a/src/utils.rs
++++ b/src/utils.rs
+@@ -1,4 +1,18 @@
+-pub fn helper() {}
++pub fn helper(input: &str) -> String {
++    input.trim().to_lowercase()
++}
++
++pub fn validate_path(path: &std::path::Path) -> bool {
++    path.exists() && path.is_file()
++}
+`;
+
 async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Promise<T> {
   await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
 
@@ -245,6 +350,60 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
         done,
         status: done ? 'completed' : 'running',
         error: null,
+      } as T;
+    }
+    case 'get_candidate_diff': {
+      const args = _args as Record<string, unknown> | undefined;
+      const agentKey = (args?.agentKey as string) ?? 'claude';
+      const isClaude = agentKey === 'claude';
+      return {
+        runId: 'mock-run',
+        agentKey,
+        baseRef: 'HEAD~1',
+        branch: `hydra/mock-run/agent/${agentKey}`,
+        mergeable: isClaude ? true : true,
+        gateFailures: [],
+        diffText: isClaude ? MOCK_DIFF_CLAUDE : MOCK_DIFF_CODEX,
+        files: isClaude
+          ? [
+              { path: 'src/main.rs', added: 15, removed: 3 },
+              { path: 'src/lib.rs', added: 22, removed: 8 },
+              { path: 'tests/integration.rs', added: 5, removed: 1 },
+            ]
+          : [
+              { path: 'src/main.rs', added: 30, removed: 5 },
+              { path: 'src/utils.rs', added: 18, removed: 4 },
+              { path: 'src/config.rs', added: 12, removed: 6 },
+              { path: 'tests/unit.rs', added: 8, removed: 3 },
+            ],
+        diffAvailable: true,
+        source: 'artifact' as const,
+        warning: null,
+      } as T;
+    }
+    case 'preview_merge': {
+      const args = _args as Record<string, unknown> | undefined;
+      const agentKey = (args?.agentKey as string) ?? 'claude';
+      return {
+        agentKey,
+        branch: `hydra/mock-run/agent/${agentKey}`,
+        success: true,
+        hasConflicts: false,
+        stdout: 'Dry-run merge: clean merge (no conflicts)',
+        stderr: '',
+        reportPath: null,
+      } as T;
+    }
+    case 'execute_merge': {
+      const args = _args as Record<string, unknown> | undefined;
+      const agentKey = (args?.agentKey as string) ?? 'claude';
+      return {
+        agentKey,
+        branch: `hydra/mock-run/agent/${agentKey}`,
+        success: true,
+        message: `Merged '${agentKey}' branch 'hydra/mock-run/agent/${agentKey}'`,
+        stdout: 'Merge made by the \'ort\' strategy.',
+        stderr: null,
       } as T;
     }
     default:

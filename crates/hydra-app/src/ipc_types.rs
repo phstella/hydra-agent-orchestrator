@@ -177,3 +177,54 @@ impl std::fmt::Display for IpcError {
         write!(f, "[{}] {}", self.code, self.message)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Diff / Merge types (P3-UI-05)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffFile {
+    pub path: String,
+    pub added: u64,
+    pub removed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CandidateDiffPayload {
+    pub run_id: String,
+    pub agent_key: String,
+    pub base_ref: String,
+    pub branch: Option<String>,
+    pub mergeable: Option<bool>,
+    pub gate_failures: Vec<String>,
+    pub diff_text: String,
+    pub files: Vec<DiffFile>,
+    pub diff_available: bool,
+    pub source: String,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePreviewPayload {
+    pub agent_key: String,
+    pub branch: String,
+    pub success: bool,
+    pub has_conflicts: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub report_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeExecutionPayload {
+    pub agent_key: String,
+    pub branch: String,
+    pub success: bool,
+    pub message: String,
+    pub stdout: Option<String>,
+    pub stderr: Option<String>,
+}
