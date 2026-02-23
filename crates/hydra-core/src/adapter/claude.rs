@@ -1,10 +1,12 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
+use super::error::AdapterError;
 use super::types::*;
 use super::{parse_version_string, resolve_binary, AgentAdapter};
 
-/// Claude Code adapter probe implementation.
+/// Claude Code adapter: probe + runtime implementation.
 pub struct ClaudeAdapter {
     configured_path: Option<String>,
 }
@@ -78,6 +80,109 @@ impl ClaudeAdapter {
             line.split(|c: char| c.is_whitespace() || c == ',' || c == ':' || c == '(' || c == ')')
                 .any(|token| token == flag)
         })
+    }
+
+    /// Parse a single line of Claude `stream-json` output into an `AgentEvent`.
+    ///
+    /// Claude stream-json emits one JSON object per line. Known types:
+    /// - `system` (init) -> Progress
+    /// - `assistant` with message content -> Message
+    /// - `assistant` with tool_use -> ToolCall
+    /// - `result` with subtype `tool_result` -> ToolResult
+    /// - `result` with subtype `success` -> Completed + optional Usage
+    pub fn parse_stream_json_line(line: &str) -> Option<AgentEvent> {
+        let v: serde_json::Value = serde_json::from_str(line).ok()?;
+        let obj = v.as_object()?;
+
+        match obj.get("type")?.as_str()? {
+            "system" => Some(AgentEvent::Progress {
+                message: format!(
+                    "session init: {}",
+                    obj.get("subtype")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("unknown")
+                ),
+                percent: None,
+            }),
+            "assistant" => {
+                let msg = obj.get("message")?.as_object()?;
+                if let Some(tool_use) = msg.get("tool_use").and_then(|t| t.as_object()) {
+                    let tool = tool_use
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let input = tool_use
+                        .get("input")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    return Some(AgentEvent::ToolCall { tool, input });
+                }
+                let content = msg
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if content.is_empty() {
+                    return None;
+                }
+                Some(AgentEvent::Message { content })
+            }
+            "result" => {
+                let subtype = obj.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
+                match subtype {
+                    "tool_result" => {
+                        let tool_id = obj
+                            .get("tool_use_id")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let content = obj
+                            .get("content")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        Some(AgentEvent::ToolResult {
+                            tool: tool_id,
+                            output: content,
+                        })
+                    }
+                    "success" => {
+                        let summary = obj
+                            .get("cost_usd")
+                            .and_then(|c| c.as_f64())
+                            .map(|c| format!("cost: ${c:.4}"));
+                        if let Some(usage) = obj.get("usage").and_then(|u| u.as_object()) {
+                            let input_tokens = usage
+                                .get("input_tokens")
+                                .and_then(|t| t.as_u64())
+                                .unwrap_or(0);
+                            let output_tokens = usage
+                                .get("output_tokens")
+                                .and_then(|t| t.as_u64())
+                                .unwrap_or(0);
+                            let mut extra = HashMap::new();
+                            if let Some(cost) = obj.get("cost_usd").and_then(|c| c.as_f64()) {
+                                extra.insert("cost_usd".to_string(), serde_json::Value::from(cost));
+                            }
+                            if let Some(dur) = obj.get("duration_ms").and_then(|d| d.as_u64()) {
+                                extra.insert(
+                                    "duration_ms".to_string(),
+                                    serde_json::Value::from(dur),
+                                );
+                            }
+                            return Some(AgentEvent::Usage {
+                                input_tokens,
+                                output_tokens,
+                                extra,
+                            });
+                        }
+                        Some(AgentEvent::Completed { summary })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 }
 
@@ -165,13 +270,57 @@ impl AgentAdapter for ClaudeAdapter {
             emits_usage: CapabilityEntry::verified(true),
         }
     }
+
+    fn build_command(&self, req: &SpawnRequest) -> Result<BuiltCommand, AdapterError> {
+        let binary = resolve_binary(self.configured_path.as_deref(), &["claude"]).ok_or(
+            AdapterError::BinaryMissing {
+                adapter: "claude".to_string(),
+            },
+        )?;
+
+        let mut args = vec![
+            "-p".to_string(),
+            req.task_prompt.clone(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+        ];
+
+        if req.force_edit {
+            args.push("--permission-mode".to_string());
+            args.push("bypassPermissions".to_string());
+        }
+
+        Ok(BuiltCommand {
+            program: binary.display().to_string(),
+            args,
+            env: vec![],
+            cwd: req.worktree_path.clone(),
+        })
+    }
+
+    fn parse_line(&self, line: &str) -> Option<AgentEvent> {
+        Self::parse_stream_json_line(line)
+    }
+
+    fn parse_raw(&self, chunk: &[u8]) -> Vec<AgentEvent> {
+        let text = match std::str::from_utf8(chunk) {
+            Ok(t) => t,
+            Err(_) => return Vec::new(),
+        };
+        text.lines()
+            .filter_map(Self::parse_stream_json_line)
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     const FIXTURE_HELP: &str = include_str!("../../tests/fixtures/adapters/claude/help.txt");
+    const FIXTURE_STREAM: &str =
+        include_str!("../../tests/fixtures/adapters/claude/stream-json.ok.jsonl");
 
     #[test]
     fn parse_help_finds_required_flags() {
@@ -235,5 +384,183 @@ mod tests {
         let result = adapter.detect();
         assert_eq!(result.status, DetectStatus::Missing);
         assert!(result.error.is_some());
+    }
+
+    // --- M1.5: build_command tests ---
+
+    #[test]
+    fn build_command_produces_correct_flags() {
+        let adapter = ClaudeAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "fix the bug".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: false,
+            force_edit: true,
+            output_json_stream: true,
+        };
+        let cmd = adapter.build_command(&req).unwrap();
+        assert_eq!(cmd.program, "/usr/bin/echo");
+        assert!(cmd.args.contains(&"-p".to_string()));
+        assert!(cmd.args.contains(&"fix the bug".to_string()));
+        assert!(cmd.args.contains(&"--output-format".to_string()));
+        assert!(cmd.args.contains(&"stream-json".to_string()));
+        assert!(cmd.args.contains(&"--permission-mode".to_string()));
+        assert!(cmd.args.contains(&"bypassPermissions".to_string()));
+        assert_eq!(cmd.cwd, PathBuf::from("/tmp/wt"));
+    }
+
+    #[test]
+    fn build_command_omits_permission_mode_when_not_force_edit() {
+        let adapter = ClaudeAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "describe the code".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: false,
+            force_edit: false,
+            output_json_stream: true,
+        };
+        let cmd = adapter.build_command(&req).unwrap();
+        assert!(!cmd.args.contains(&"--permission-mode".to_string()));
+    }
+
+    #[test]
+    fn build_command_fails_when_binary_missing() {
+        let adapter = ClaudeAdapter::new(Some("/nonexistent/claude".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "test".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: false,
+            force_edit: true,
+            output_json_stream: true,
+        };
+        let err = adapter.build_command(&req).unwrap_err();
+        assert!(matches!(err, AdapterError::BinaryMissing { .. }));
+    }
+
+    // --- M1.5: parse_line / parse_raw tests ---
+
+    #[test]
+    fn parse_line_system_init() {
+        let line =
+            r#"{"type":"system","subtype":"init","session_id":"abc123","tools":["Read","Write"]}"#;
+        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        match evt {
+            AgentEvent::Progress { message, .. } => {
+                assert!(message.contains("init"));
+            }
+            other => panic!("expected Progress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_line_assistant_message() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":"I'll help with that task."},"session_id":"abc123"}"#;
+        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        match evt {
+            AgentEvent::Message { content } => {
+                assert_eq!(content, "I'll help with that task.");
+            }
+            other => panic!("expected Message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_line_assistant_tool_use() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":"","tool_use":{"name":"Read","input":{"file_path":"src/main.rs"}}},"session_id":"abc123"}"#;
+        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        match evt {
+            AgentEvent::ToolCall { tool, input } => {
+                assert_eq!(tool, "Read");
+                assert!(input["file_path"].as_str().unwrap().contains("main.rs"));
+            }
+            other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_line_result_tool_result() {
+        let line = r#"{"type":"result","subtype":"tool_result","tool_use_id":"t1","content":"fn main() {}","session_id":"abc123"}"#;
+        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        match evt {
+            AgentEvent::ToolResult { tool, output } => {
+                assert_eq!(tool, "t1");
+                assert!(output.as_str().unwrap().contains("fn main"));
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_line_result_success_with_usage() {
+        let line = r#"{"type":"result","subtype":"success","cost_usd":0.003,"duration_ms":2500,"session_id":"abc123","usage":{"input_tokens":1200,"output_tokens":450}}"#;
+        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        match evt {
+            AgentEvent::Usage {
+                input_tokens,
+                output_tokens,
+                extra,
+            } => {
+                assert_eq!(input_tokens, 1200);
+                assert_eq!(output_tokens, 450);
+                assert!(extra.contains_key("cost_usd"));
+                assert!(extra.contains_key("duration_ms"));
+            }
+            other => panic!("expected Usage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_line_ignores_unknown_type() {
+        let line = r#"{"type":"unknown_future_type","data":{}}"#;
+        assert!(ClaudeAdapter::parse_stream_json_line(line).is_none());
+    }
+
+    #[test]
+    fn parse_line_handles_invalid_json() {
+        assert!(ClaudeAdapter::parse_stream_json_line("not json at all").is_none());
+        assert!(ClaudeAdapter::parse_stream_json_line("").is_none());
+    }
+
+    #[test]
+    fn parse_line_empty_assistant_content_returns_none() {
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":""},"session_id":"abc123"}"#;
+        assert!(ClaudeAdapter::parse_stream_json_line(line).is_none());
+    }
+
+    #[test]
+    fn parse_raw_processes_multiple_lines() {
+        let adapter = ClaudeAdapter::new(None);
+        let events = adapter.parse_raw(FIXTURE_STREAM.as_bytes());
+        assert!(
+            events.len() >= 3,
+            "fixture should produce at least 3 events, got {}",
+            events.len()
+        );
+
+        let has_message = events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Message { .. }));
+        let has_tool_call = events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolCall { .. }));
+        let has_usage = events.iter().any(|e| matches!(e, AgentEvent::Usage { .. }));
+        assert!(has_message, "should parse at least one Message");
+        assert!(has_tool_call, "should parse at least one ToolCall");
+        assert!(has_usage, "should parse Usage from success result");
+    }
+
+    #[test]
+    fn parse_line_fixture_lines_individually() {
+        let adapter = ClaudeAdapter::new(None);
+        for line in FIXTURE_STREAM.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            // Should not panic on any fixture line
+            let _ = adapter.parse_line(line);
+        }
     }
 }
