@@ -1,4 +1,10 @@
+pub mod adapter;
+pub mod artifact;
+pub mod config;
 pub mod error;
+pub mod security;
+pub mod supervisor;
+pub mod worktree;
 
 pub use error::{HydraError, Result};
 
