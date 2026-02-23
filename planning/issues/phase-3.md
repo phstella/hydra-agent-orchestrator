@@ -1,8 +1,8 @@
 # Phase 3 Tickets (GUI Alpha) Issue Bodies
 
-Last updated: 2026-02-22
+Last updated: 2026-02-23
 
-Generated from `planning/implementation-checklist.md`.
+Generated from `planning/implementation-checklist.md`, with supplemental mockup-derived execution tickets.
 
 Global label prefix: `hydra`
 
@@ -234,4 +234,300 @@ Full E2E browser tests; accessibility audit.
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+```
+
+## Mockup-Derived Supplemental Execution Tickets
+
+These tickets are derived from approved GUI mockups (Image #1 through Image #4) and are intended to guide implementation sequencing within Phase 3.
+
+## Global UI Theme Contract (applies to all supplemental tickets)
+
+- Base visual direction: dark UI with green system/success emphasis.
+- Highlight/accent direction: marine blue for selected/active/focus states.
+- Use tokenized values only for color, spacing, radius, typography, and shadows.
+- No hardcoded hex values in feature components after token system lands.
+- Adapter names and statuses must be data-driven from runtime, never hardcoded to mockup strings.
+
+Recommended initial token values:
+
+- `color.bg.950 = #060B0A`
+- `color.bg.900 = #0A1412`
+- `color.surface.800 = #0F1E1A`
+- `color.border.700 = #1C3B33`
+- `color.green.500 = #22C55E`
+- `color.green.400 = #4ADE80`
+- `color.marine.500 = #2F6F9F`
+- `color.marine.400 = #4C8DBF`
+- `color.warning.500 = #EAB308`
+- `color.danger.500 = #EF4444`
+
+## [P3-DS-01] Visual Design System v0 (Dark/Green + Marine Blue)
+
+- Phase: Phase 3 Tickets (GUI Alpha)
+- Labels: hydra, phase-3, area-ui, type-feature
+- Estimate: M
+- Dependencies: M3.1
+- Milestone alignment: M3.1 foundation
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Without a shared visual token system, AI-generated frontend code will drift in colors, spacing, typography, and states across screens.
+
+## Scope
+Create a design-system foundation for the Tauri React app: color/spacing/type tokens, global theme variables, and core primitives (`Button`, `Badge`, `Card`, `Panel`, `Tabs`, `Modal`, `Table`).
+
+## Acceptance Criteria
+- [ ] A token source defines dark/green base colors and marine-blue highlight states.
+- [ ] Core primitives consume tokens only and expose required states (default, hover, focus, disabled, loading).
+- [ ] Focus-visible and selected states consistently use marine-blue highlight treatment.
+- [ ] Lint or style checks fail when raw hex colors are introduced in feature components.
+
+## Out of Scope
+Screen-level feature implementation.
+
+## Dependencies
+- M3.1
+
+## Notes
+- Theme intent is mandatory: dark + green with marine-blue highlights.
+- This ticket should land before major screen implementation to prevent churn.
+```
+
+## [P3-IPC-01] GUI Race IPC + Event Backpressure Layer
+
+- Phase: Phase 3 Tickets (GUI Alpha)
+- Labels: hydra, phase-3, area-ui, type-feature
+- Estimate: M
+- Dependencies: M3.1, M2.10
+- Milestone alignment: M3.2
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+The GUI screens require a stable command/event contract for launching races, streaming output, and loading final results. Without a state layer and backpressure controls, UI rendering can freeze under high event volume.
+
+## Scope
+Implement typed IPC commands and a frontend event store for: start race, subscribe stream, fetch results, and map errors to user-readable messages. Add bounded buffering/backpressure behavior.
+
+## Acceptance Criteria
+- [ ] GUI can launch a race, subscribe to events, and fetch final results via IPC.
+- [ ] Core errors are mapped to human-readable frontend messages.
+- [ ] High-throughput event streams do not freeze the UI thread.
+- [ ] Event store supports selection state needed by running agent cards and diff/results views.
+
+## Out of Scope
+Workflow (Phase 4) IPC commands.
+
+## Dependencies
+- M3.1
+- M2.10
+```
+
+## [P3-UI-01] System Preflight Dashboard (Mockup Image #1)
+
+- Phase: Phase 3 Tickets (GUI Alpha)
+- Labels: hydra, phase-3, area-ui, type-feature
+- Estimate: M
+- Dependencies: P3-DS-01, P3-IPC-01
+- Milestone alignment: M3.1, M3.2, M3.3 readiness
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Users need a fast readiness surface before running races. CLI doctor output exists, but there is no visual dashboard for subsystem health, diagnostic checks, environment readiness, and quick recovery actions.
+
+## Scope
+Build the preflight dashboard matching Image #1: system readiness hero card, diagnostics checklist, environment panel, and actions (`View Logs`, `Re-run Diagnostics`).
+
+## Acceptance Criteria
+- [ ] Preflight screen renders readiness state, passed/failed count, and health indicator.
+- [ ] Diagnostic rows show status badge and evidence text.
+- [ ] Environment panel shows active adapters and warning block when resource constraints are detected.
+- [ ] Re-run diagnostics action refreshes screen state from backend data.
+
+## Out of Scope
+Historical diagnostics analytics.
+
+## Dependencies
+- P3-DS-01
+- P3-IPC-01
+
+## Mockup References
+- Image #1
+```
+
+## [P3-UI-02] Experimental Adapter Opt-In Modal (Mockup Image #2)
+
+- Phase: Phase 3 Tickets (GUI Alpha)
+- Labels: hydra, phase-3, area-ui, type-feature
+- Estimate: S
+- Dependencies: P3-DS-01, P3-IPC-01
+- Milestone alignment: M3.6
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Experimental adapters must require explicit acknowledgment of risk. Without a blocking confirmation flow, users can accidentally run unstable adapters.
+
+## Scope
+Implement the warning modal from Image #2 for experimental adapter selection with a required risk acknowledgment checkbox and disabled confirm action until acknowledged.
+
+## Acceptance Criteria
+- [ ] Experimental adapters trigger a blocking warning modal before selection is accepted.
+- [ ] Confirm action remains disabled until risk acknowledgment is checked.
+- [ ] Modal includes a clear warning treatment and resource-impact messaging.
+- [ ] Tier-1 adapters remain the default selection path.
+
+## Out of Scope
+Adapter-specific advanced configuration.
+
+## Dependencies
+- P3-DS-01
+- P3-IPC-01
+
+## Mockup References
+- Image #2
+```
+
+## [P3-UI-03] Live Agent Output + Running Agents Rail
+
+- Phase: Phase 3 Tickets (GUI Alpha)
+- Labels: hydra, phase-3, area-ui, type-feature
+- Estimate: M
+- Dependencies: P3-DS-01, P3-IPC-01
+- Milestone alignment: M3.3
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+The GUI must provide real-time visibility into each agent execution. Without an agent rail and live output panel, users cannot monitor progress or diagnose failures quickly.
+
+## Scope
+Implement running-agent list with lifecycle badges and selected-agent live output panel. Ensure rendering remains responsive under sustained stream volume.
+
+## Acceptance Criteria
+- [ ] One list item per running agent with status (running, completed, failed, timed out).
+- [ ] Selecting an agent switches the live output panel context.
+- [ ] Stream rendering remains responsive under high-volume output.
+- [ ] Failure and timeout states are visually distinct and persist in history for completed run review.
+
+## Out of Scope
+Full-text log search and export.
+
+## Dependencies
+- P3-DS-01
+- P3-IPC-01
+```
+
+## [P3-UI-04] Results Scoreboard + Winner Selection (Mockup Image #4)
+
+- Phase: Phase 3 Tickets (GUI Alpha)
+- Labels: hydra, phase-3, area-ui, type-feature
+- Estimate: M
+- Dependencies: P3-DS-01, P3-IPC-01
+- Milestone alignment: M3.4
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Scoring artifacts exist, but users need a clear ranked decision surface to choose a winner safely and understand why candidates are blocked.
+
+## Scope
+Implement results page matching Image #4: ranked candidate cards, mergeability indicators, explicit "Select as Winner" action, and per-dimension score breakdown.
+
+## Acceptance Criteria
+- [ ] Ranked cards show composite score and mergeability/gate status.
+- [ ] Non-mergeable candidates are visually blocked from winner action.
+- [ ] Winner selection is explicit and not auto-applied by UI.
+- [ ] Per-dimension score breakdown table matches scoring artifact fields.
+- [ ] Run-level metadata (duration, cost where available) is displayed.
+
+## Out of Scope
+Cross-run trend analytics.
+
+## Dependencies
+- P3-DS-01
+- P3-IPC-01
+
+## Mockup References
+- Image #4
+```
+
+## [P3-UI-05] Candidate Diff Review + Merge Action Rail (Mockup Image #3)
+
+- Phase: Phase 3 Tickets (GUI Alpha)
+- Labels: hydra, phase-3, area-ui, type-feature
+- Estimate: M
+- Dependencies: P3-DS-01, P3-IPC-01, P3-UI-04
+- Milestone alignment: M3.5 and M3.4 merge path
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Users need to inspect candidate code changes before merge decisions. Without a diff workspace and merge action rail, winner selection cannot be confidently validated.
+
+## Scope
+Build the diff review surface from Image #3: candidate tabs, side-by-side diff viewer, modified-file list, and merge action rail with status signals.
+
+## Acceptance Criteria
+- [ ] User can switch candidate tabs and update diff content accordingly.
+- [ ] Side-by-side diff remains usable on large patches (virtualization or equivalent safeguards).
+- [ ] Fallback state is shown when diff is unavailable.
+- [ ] Merge action rail reflects mergeability status and blocks invalid actions.
+- [ ] Accept/Reject actions are explicit and require confirmation path aligned with CLI semantics.
+
+## Out of Scope
+Inline code review comments.
+
+## Dependencies
+- P3-DS-01
+- P3-IPC-01
+- P3-UI-04
+
+## Mockup References
+- Image #3
+```
+
+## [P3-QA-01] GUI Smoke Test Pack for Mockup Flows
+
+- Phase: Phase 3 Tickets (GUI Alpha)
+- Labels: hydra, phase-3, area-test, type-test
+- Estimate: M
+- Dependencies: P3-UI-01, P3-UI-02, P3-UI-03, P3-UI-04, P3-UI-05
+- Milestone alignment: M3.7
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Mockup-driven GUI implementation is vulnerable to regressions in interaction flow, selection state, and merge gating unless core paths are smoke tested.
+
+## Scope
+Add smoke tests for startup, preflight rendering, race launch path, live output selection, results winner selection, experimental modal gating, and diff candidate switching.
+
+## Acceptance Criteria
+- [ ] Startup test passes on Linux and Windows CI.
+- [ ] Preflight diagnostics screen loads and refresh action works.
+- [ ] Experimental adapter flow enforces risk acknowledgment before confirm.
+- [ ] Race launch and completion path validate live output and results transitions.
+- [ ] Winner selection and merge action path validate dry-run gating behavior.
+- [ ] Diff candidate switching path is covered.
+
+## Out of Scope
+Pixel-perfect visual regression suite.
+
+## Dependencies
+- P3-UI-01
+- P3-UI-02
+- P3-UI-03
+- P3-UI-04
+- P3-UI-05
 ```
