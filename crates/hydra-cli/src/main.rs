@@ -1,6 +1,13 @@
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+use hydra_core::adapter::claude::ClaudeAdapter;
+use hydra_core::adapter::codex::CodexAdapter;
+use hydra_core::adapter::cursor::CursorAdapter;
+use hydra_core::adapter::{AgentAdapter, ProbeRunner};
+
+mod doctor;
+
 #[derive(Parser)]
 #[command(name = "hydra", about = "Multi-agent orchestration control center")]
 struct Cli {
@@ -27,43 +34,24 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Doctor { json } => {
-            let runner = hydra_core::adapter::ProbeRunner::new(vec![]);
-            let report = runner.run();
+            let adapters: Vec<Box<dyn AgentAdapter>> = vec![
+                Box::new(ClaudeAdapter::new(None)),
+                Box::new(CodexAdapter::new(None)),
+                Box::new(CursorAdapter::new(None)),
+            ];
+
+            let runner = ProbeRunner::new(adapters);
+            let probe_report = runner.run();
+            let git_checks = doctor::check_git_repo();
+            let report = doctor::DoctorReport::new(probe_report, git_checks);
 
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
-                println!("Hydra Doctor Report");
-                println!("===================");
-                println!(
-                    "All Tier-1 adapters ready: {}",
-                    if report.all_tier1_ready { "yes" } else { "NO" }
-                );
-                println!();
-                if report.results.is_empty() {
-                    println!("No adapters registered.");
-                }
-                for r in &report.results {
-                    println!(
-                        "  [{}] {} ({}): {:?}",
-                        r.tier,
-                        r.adapter_key,
-                        r.detect.status_label(),
-                        r.detect.status
-                    );
-                    if let Some(path) = &r.detect.binary_path {
-                        println!("    binary: {}", path.display());
-                    }
-                    if let Some(v) = &r.detect.version {
-                        println!("    version: {}", v);
-                    }
-                    if let Some(err) = &r.detect.error {
-                        println!("    error: {}", err);
-                    }
-                }
+                doctor::print_human_report(&report);
             }
 
-            if !report.all_tier1_ready {
+            if !report.healthy() {
                 std::process::exit(1);
             }
         }
