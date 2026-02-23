@@ -12,10 +12,11 @@ This folder contains per-phase issue body packs generated from `planning/impleme
 | `phase-1.md` | Core Orchestrator + Single Agent | M1.1-M1.8 | 8 |
 | `phase-2.md` | Multi-Agent Race + Scoring | M2.1-M2.12 | 12 |
 | `phase-3.md` | GUI Alpha | M3.1-M3.7 | 7 |
-| `phase-4.md` | Collaboration Workflows | M4.1-M4.6 | 6 |
-| `phase-5.md` | Windows Parity and Release Hardening | M5.1-M5.6 | 6 |
+| `phase-4.md` | Interactive Session Mode | M4.1-M4.6 | 6 |
+| `phase-5.md` | Collaboration Workflows | M5.1-M5.6 | 6 |
+| `phase-6.md` | Windows Parity and Release Hardening | M6.1-M6.6 | 6 |
 
-**Total: 47 milestones**
+**Total: 53 milestones**
 
 ## Notes
 

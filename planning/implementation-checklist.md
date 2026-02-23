@@ -241,7 +241,7 @@ Out of Scope
 1. Ctrl+C cleanup test passes.
 2. Partial failure leaves usable artifacts.
 3. No orphan worktrees after test run.
-- Out of Scope: crash recovery metadata (Phase 5); Windows-specific interrupt behavior (Phase 5).
+- Out of Scope: crash recovery metadata (Phase 6); Windows-specific interrupt behavior (Phase 6).
 
 ## 5. Phase 2 Tickets (Multi-Agent Race + Scoring)
 
@@ -496,11 +496,92 @@ Out of Scope
 3. Merge action UI path tested in dry-run mode.
 - Out of Scope: full E2E browser tests; accessibility audit.
 
-## 7. Phase 4 Tickets (Collaboration Workflows)
+## 7. Phase 4 Tickets (Interactive Session Mode)
 
-### M4.1 Workflow Engine Core
+### M4.1 PTY Supervisor Path for Interactive Sessions
 
-- Labels: `phase-4`, `area-workflow`, `type-feature`
+- Labels: `phase-4`, `area-core`, `type-feature`
+- Estimate: `M`
+- Dependencies: `M1.4`
+- Problem: Current process supervision is non-interactive (`stdin` is closed), so users cannot communicate with a running agent.
+- Scope: Add a PTY-backed supervisor path with interactive stdin write support, terminal resize, cancellation, and normalized output streaming while preserving current non-PTY race path.
+- Acceptance Criteria:
+1. PTY session can spawn supported adapters and stream output.
+2. Runtime can write input to a running agent session.
+3. Terminal resize events are propagated to the process.
+4. Cancellation terminates child process group without orphans.
+- Out of Scope: Windows parity hardening (Phase 6); replacing deterministic race-mode supervision.
+
+### M4.2 Interactive Session Runtime and IPC Surface
+
+- Labels: `phase-4`, `area-core`, `type-feature`
+- Estimate: `M`
+- Dependencies: `M4.1`, `M3.2`
+- Problem: The app has race-oriented IPC only; there is no session-oriented runtime for bidirectional interactive control.
+- Scope: Implement interactive session manager in `hydra-app` state with IPC commands for `start`, `write`, `resize`, `poll`, and `stop`. Include per-session lifecycle state and cleanup hooks.
+- Acceptance Criteria:
+1. Multiple interactive sessions can coexist with isolated state.
+2. IPC commands validate session ownership and lifecycle transitions.
+3. Session cleanup runs on stop, failure, and app shutdown.
+- Out of Scope: UI layout; scoring/merge integration.
+
+### M4.3 Interactive UI Shell and Terminal Panel
+
+- Labels: `phase-4`, `area-ui`, `type-feature`
+- Estimate: `M`
+- Dependencies: `M4.2`, `M3.1`
+- Problem: There is no dedicated interactive workspace in the GUI for terminal-first collaboration with agents.
+- Scope: Add a new Interactive mode/tab with session rail, selected-session terminal panel, and launch controls aligned with existing design system tokens.
+- Acceptance Criteria:
+1. Interactive tab is available and wired to session IPC.
+2. Terminal panel renders ANSI/color output in a readable format.
+3. Session rail reflects running/paused/completed/failed lifecycle.
+- Out of Scope: race scoreboard and merge review interactions.
+
+### M4.4 Mid-Flight Intervention Controls
+
+- Labels: `phase-4`, `area-ui`, `type-feature`
+- Estimate: `M`
+- Dependencies: `M4.2`, `M4.3`
+- Problem: Even with a terminal panel, users need explicit UX controls to intervene safely during execution.
+- Scope: Add intervention controls (send instruction/input, interrupt, resume where supported) and clear status feedback when commands are accepted/rejected.
+- Acceptance Criteria:
+1. User can send input while agent is running.
+2. Interrupt/cancel actions update lifecycle state and UI feedback.
+3. Intervention actions are logged as structured session events.
+- Out of Scope: branching conversation history; collaborative multi-user editing.
+
+### M4.5 Interactive Safety and Capability Gating
+
+- Labels: `phase-4`, `area-core`, `type-feature`
+- Estimate: `S`
+- Dependencies: `M2.1`, `M4.2`
+- Problem: Interactive mode can accidentally bypass adapter safety assumptions unless capability gates and guardrails are explicit.
+- Scope: Gate interactive mode by adapter capability and tier policy, enforce preflight checks (e.g., working tree readiness), and require explicit confirmation for experimental/unsafe modes.
+- Acceptance Criteria:
+1. Unsupported adapters are blocked with actionable reason.
+2. Experimental adapters require explicit risk confirmation.
+3. Safety checks run before session start and block unsafe launch by default.
+- Out of Scope: automatic policy override; remote execution sandboxing.
+
+### M4.6 Interactive Transcript Artifacts and E2E Tests
+
+- Labels: `phase-4`, `area-test`, `type-test`
+- Estimate: `M`
+- Dependencies: `M4.3`, `M4.4`, `M4.5`
+- Problem: Interactive sessions are hard to debug and regressions are likely without persisted transcripts and automated test coverage.
+- Scope: Persist interactive session transcripts/artifacts and add integration/smoke coverage for start, mid-flight input, interrupt, and cleanup paths.
+- Acceptance Criteria:
+1. Session transcripts are persisted under run/session artifacts.
+2. End-to-end tests validate interactive start/input/stop flows.
+3. Existing race-mode tests remain green and behavior remains unchanged.
+- Out of Scope: long-term analytics dashboard; transcript semantic search.
+
+## 8. Phase 5 Tickets (Collaboration Workflows)
+
+### M5.1 Workflow Engine Core
+
+- Labels: `phase-5`, `area-workflow`, `type-feature`
 - Estimate: `M`
 - Dependencies: `M2.10`
 - Problem: Race mode only supports independent parallel execution. Structured cooperation patterns (builder/reviewer, specialization, iterative refinement) require a DAG-based workflow engine that manages step execution, artifact passing, and conditional branching.
@@ -511,11 +592,11 @@ Out of Scope
 3. Workflow run summary is persisted.
 - Out of Scope: visual workflow editor; custom node types.
 
-### M4.2 Builder-Reviewer-Refiner Preset
+### M5.2 Builder-Reviewer-Refiner Preset
 
-- Labels: `phase-4`, `area-workflow`, `type-feature`
+- Labels: `phase-5`, `area-workflow`, `type-feature`
 - Estimate: `M`
-- Dependencies: `M4.1`
+- Dependencies: `M5.1`
 - Problem: The builder-reviewer-refiner pattern is a common code quality improvement loop, but there is no preset that orchestrates it. Users would have to manually chain agent runs and pass artifacts between them.
 - Scope: Implement the builder-reviewer-refiner workflow preset. Builder generates code, reviewer critiques via structured rubric, refiner applies feedback. Persist reviewer artifact for reuse. Score and gate the final output.
 - Acceptance Criteria:
@@ -524,11 +605,11 @@ Out of Scope
 3. Final output is scored and gated.
 - Out of Scope: multi-round review loops; reviewer read-only enforcement.
 
-### M4.3 Specialization Preset
+### M5.3 Specialization Preset
 
-- Labels: `phase-4`, `area-workflow`, `type-feature`
+- Labels: `phase-5`, `area-workflow`, `type-feature`
 - Estimate: `M`
-- Dependencies: `M4.1`
+- Dependencies: `M5.1`
 - Problem: Some features naturally split into bounded scopes (e.g., backend + frontend). Without a specialization preset, users cannot assign different agents to different scopes and then integrate results automatically.
 - Scope: Implement the specialization workflow preset. Create shared contract artifact, launch parallel scoped agent tasks, detect out-of-scope edits, merge specialized branches into integration branch, and score the result.
 - Acceptance Criteria:
@@ -537,11 +618,11 @@ Out of Scope
 3. Integration branch result is scored.
 - Out of Scope: automatic path-revert for out-of-scope edits; dynamic scope assignment.
 
-### M4.4 Iterative Refinement Preset
+### M5.4 Iterative Refinement Preset
 
-- Labels: `phase-4`, `area-workflow`, `type-feature`
+- Labels: `phase-5`, `area-workflow`, `type-feature`
 - Estimate: `M`
-- Dependencies: `M4.1`, `M2.7`
+- Dependencies: `M5.1`, `M2.7`
 - Problem: A single agent pass may not achieve the desired quality threshold. Iterative refinement uses scoring feedback as a correction signal, but without a preset, users must manually re-run agents with synthesized prompts.
 - Scope: Implement the iterative refinement workflow preset. Run agent, score result, synthesize refinement prompt from failures, repeat until threshold or max iterations. Include convergence guard (stop if score decreases twice or no improvement after N iterations). Persist iteration history.
 - Acceptance Criteria:
@@ -550,11 +631,11 @@ Out of Scope
 3. Iteration history artifacts are persisted.
 - Out of Scope: cross-agent iteration (switching agents between iterations); auto-tuning thresholds.
 
-### M4.5 Workflow CLI and GUI Timeline
+### M5.5 Workflow CLI and GUI Timeline
 
-- Labels: `phase-4`, `area-ui`, `type-feature`
+- Labels: `phase-5`, `area-ui`, `type-feature`
 - Estimate: `M`
-- Dependencies: `M4.2`, `M4.3`, `M4.4`
+- Dependencies: `M5.2`, `M5.3`, `M5.4`
 - Problem: Workflow execution involves multiple steps with dependencies and artifacts. Without a timeline view, users cannot track progress, understand step relationships, or diagnose failures across the workflow.
 - Scope: Add CLI step timeline with per-node status indicators. Add GUI node timeline view with artifact links and drilldown. Include retry guidance in failure states.
 - Acceptance Criteria:
@@ -563,11 +644,11 @@ Out of Scope
 3. Failure states include retry guidance.
 - Out of Scope: drag-and-drop workflow editing; real-time timeline animation.
 
-### M4.6 Workflow Integration Tests
+### M5.6 Workflow Integration Tests
 
-- Labels: `phase-4`, `area-test`, `type-test`
+- Labels: `phase-5`, `area-test`, `type-test`
 - Estimate: `M`
-- Dependencies: `M4.2`, `M4.3`, `M4.4`
+- Dependencies: `M5.2`, `M5.3`, `M5.4`
 - Problem: Workflow presets involve complex multi-step interactions that can fail in non-obvious ways. Without dedicated integration tests, workflow regressions may go undetected.
 - Scope: Write one golden-path and one failure-path integration test per workflow preset. Add deterministic artifact graph snapshot tests to detect structural regressions.
 - Acceptance Criteria:
@@ -576,13 +657,13 @@ Out of Scope
 3. Artifact graph snapshot test is stable.
 - Out of Scope: performance benchmarks; fuzz testing.
 
-## 8. Phase 5 Tickets (Windows Parity and Release Hardening)
+## 9. Phase 6 Tickets (Windows Parity and Release Hardening)
 
-### M5.1 ConPTY and Process Control Validation
+### M6.1 ConPTY and Process Control Validation
 
-- Labels: `phase-5`, `area-core`, `type-test`
+- Labels: `phase-6`, `area-core`, `type-test`
 - Estimate: `M`
-- Dependencies: `M3.7`
+- Dependencies: `M4.6`
 - Problem: PTY behavior on Windows (ConPTY) differs from Unix and has not been validated under real workloads. Process termination semantics, orphan process prevention, and ANSI rendering may behave differently than on Linux.
 - Scope: Validate PTY and fallback stream paths on Windows. Test cancel/timeout behavior with real agent CLIs. Verify no orphan processes remain after cancellation. Document any Windows-specific behavior differences.
 - Acceptance Criteria:
@@ -591,9 +672,9 @@ Out of Scope
 3. No orphan process remains after cancellation.
 - Out of Scope: macOS PTY testing; custom terminal emulator support.
 
-### M5.2 Path and Filesystem Edge Cases
+### M6.2 Path and Filesystem Edge Cases
 
-- Labels: `phase-5`, `area-core`, `type-feature`
+- Labels: `phase-6`, `area-core`, `type-feature`
 - Estimate: `M`
 - Dependencies: `M1.3`
 - Problem: Windows has distinct path length limits (260 chars default), separator conventions, and file locking behavior that can cause failures in worktree creation, artifact writes, and cleanup operations.
@@ -604,9 +685,9 @@ Out of Scope
 3. Artifact writes are robust under locked files.
 - Out of Scope: network drive support; junction point handling.
 
-### M5.3 Crash Recovery and Resume Metadata
+### M6.3 Crash Recovery and Resume Metadata
 
-- Labels: `phase-5`, `area-core`, `type-feature`
+- Labels: `phase-6`, `area-core`, `type-feature`
 - Estimate: `M`
 - Dependencies: `M2.10`
 - Problem: Interrupted runs (system crash, power loss, OOM kill) can leave the `.hydra/` directory in an inconsistent state with stale worktrees, partial artifacts, and incomplete manifests. Users need tools to inspect and recover from these states.
@@ -617,11 +698,11 @@ Out of Scope
 3. Recovery metadata is included in run manifest.
 - Out of Scope: automatic run resumption; partial result scoring.
 
-### M5.4 Packaging and Release Automation
+### M6.4 Packaging and Release Automation
 
-- Labels: `phase-5`, `area-release`, `type-feature`
+- Labels: `phase-6`, `area-release`, `type-feature`
 - Estimate: `M`
-- Dependencies: `M5.1`, `M5.2`
+- Dependencies: `M6.1`, `M6.2`
 - Problem: There is no automated pipeline for producing versioned release artifacts. Manual packaging is error-prone and blocks release cadence.
 - Scope: Set up CI/CD release pipeline for Linux and Windows. Produce versioned binaries with checksums. Generate release notes from milestone labels. Define version numbering scheme.
 - Acceptance Criteria:
@@ -630,11 +711,11 @@ Out of Scope
 3. Release notes generated from milestone labels.
 - Out of Scope: macOS builds; Homebrew formula; auto-update mechanism.
 
-### M5.5 Release Candidate Acceptance Suite
+### M6.5 Release Candidate Acceptance Suite
 
-- Labels: `phase-5`, `area-test`, `type-test`
+- Labels: `phase-6`, `area-test`, `type-test`
 - Estimate: `M`
-- Dependencies: `M5.1`, `M5.2`, `M5.3`, `M5.4`
+- Dependencies: `M6.1`, `M6.2`, `M6.3`, `M6.4`
 - Problem: There is no comprehensive acceptance test that validates the full product surface before release. Without a release gate, regressions in core flows could ship to users.
 - Scope: Write an acceptance test suite covering Tier-1 race and merge paths on Linux and Windows. Verify experimental adapter behavior remains opt-in. Confirm no P0 bugs are open at RC cut.
 - Acceptance Criteria:
@@ -643,11 +724,11 @@ Out of Scope
 3. No P0 bugs open at RC cut.
 - Out of Scope: performance regression tests; security audit.
 
-### M5.6 Artifact and Schema Migration Strategy
+### M6.6 Artifact and Schema Migration Strategy
 
-- Labels: `phase-5`, `area-core`, `type-feature`
+- Labels: `phase-6`, `area-core`, `type-feature`
 - Estimate: `M`
-- Dependencies: `M2.12`, `M5.3`
+- Dependencies: `M2.12`, `M6.3`
 - Problem: As Hydra evolves, the artifact format (manifest.json, events.jsonl, score output) and configuration schema (hydra.toml) will change. Without a migration strategy, users upgrading Hydra may encounter broken run history, unreadable artifacts, or invalid configuration files.
 - Scope: Implement versioned manifest and event schema with forward-compatibility rules. Add a migration tool that upgrades older artifacts/configs to current schema. Write forward/backward compatibility tests for at least one schema transition. Document upgrade path in release notes.
 - Acceptance Criteria:
@@ -657,7 +738,7 @@ Out of Scope
 4. Upgrade path is documented.
 - Out of Scope: automatic background migration; multi-version concurrent support.
 
-## 9. Backlog Hygiene Rules
+## 10. Backlog Hygiene Rules
 
 1. No ticket closes without explicit acceptance evidence.
 2. Adapter-related tickets must include fixture updates.

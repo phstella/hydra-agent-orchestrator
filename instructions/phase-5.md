@@ -1,56 +1,50 @@
-# Phase 5: Windows Parity + Release Hardening
+# Phase 5: Collaboration Workflows
 
-**Goal**: Stabilize Windows runtime behavior and achieve release readiness.
+**Goal**: Move beyond race mode into structured multi-agent cooperation.
 
-**Duration estimate**: 2 weeks
+**Duration estimate**: 2-3 weeks
 
 ## Milestones
 
 | ID | Title | Estimate | Dependencies |
 |----|-------|----------|--------------|
-| M5.1 | ConPTY and Process Control Validation | M | M3.7 |
-| M5.2 | Path and Filesystem Edge Cases | M | M1.3 |
-| M5.3 | Crash Recovery and Resume Metadata | M | M2.10 |
-| M5.4 | Packaging and Release Automation | M | M5.1, M5.2 |
-| M5.5 | Release Candidate Acceptance Suite | M | M5.1, M5.2, M5.3, M5.4 |
-| M5.6 | Artifact and Schema Migration Strategy | M | M2.12, M5.3 |
+| M5.1 | Workflow Engine Core | M | M2.10 |
+| M5.2 | Builder-Reviewer-Refiner Preset | M | M5.1 |
+| M5.3 | Specialization Preset | M | M5.1 |
+| M5.4 | Iterative Refinement Preset | M | M5.1, M2.7 |
+| M5.5 | Workflow CLI and GUI Timeline | M | M5.2, M5.3, M5.4 |
+| M5.6 | Workflow Integration Tests | M | M5.2, M5.3, M5.4 |
 
 ## Parallelization
 
-Three items can start in parallel (given their Phase 2/3 dependencies are met):
+After M5.1 (workflow engine core), the three presets build in parallel:
 
-- M5.1 (ConPTY validation)
-- M5.2 (path edge cases)
-- M5.3 (crash recovery)
-
-Then: M5.4 follows M5.1+M5.2, M5.5 follows all, M5.6 follows M5.3+M2.12.
+- M5.2, M5.3, M5.4 can be developed concurrently.
+- M5.5 and M5.6 follow once all presets are complete.
 
 ## What to Build
 
-- **ConPTY validation** (M5.1): Test PTY and fallback stream paths on Windows.
-  Verify cancel/timeout behavior. See `docs/architecture.md` section 7 for
-  cross-platform notes.
+- **Workflow engine** (M5.1): DAG step executor with artifact passing and
+  per-node timeout/retry. See `docs/collaboration-workflows.md` section 2
+  for runtime model.
 
-- **Path edge cases** (M5.2): Long paths, spaces, Unicode, file locking on Windows.
+- **Presets** (M5.2-M5.4): Builder/reviewer/refiner, specialization (parallel
+  domain ownership), iterative refinement with convergence guard.
+  See `docs/collaboration-workflows.md` sections 4-6 for specifications.
 
-- **Crash recovery** (M5.3): Recovery metadata in manifests, stale state cleanup tool.
+- **Timeline UI** (M5.5): CLI step timeline and GUI node timeline with
+  artifact links.
 
-- **Release pipeline** (M5.4): CI/CD for Linux + Windows, versioned binaries,
-  checksums, release notes.
-
-- **Acceptance suite** (M5.5): Full product surface validation before RC cut.
-
-- **Schema migration** (M5.6): Versioned manifests, migration tool,
-  forward/backward compatibility tests.
+- **Integration tests** (M5.6): One golden-path and one failure-path test
+  per preset.
 
 ## Exit Criteria
 
-1. Parity acceptance suite passes on Linux and Windows.
-2. Schema migration tool upgrades v1 artifacts to current format.
-3. Forward/backward compatibility tests pass.
+1. Each preset has one golden integration test.
+2. Workflow failures degrade gracefully with clear status.
 
 ## References
 
 - Acceptance criteria: `planning/implementation-checklist.md` section 8
+- Workflow specifications: `docs/collaboration-workflows.md`
 - Issue bodies: `planning/issues/phase-5.md`
-- Risk register: `planning/roadmap.md` section 10

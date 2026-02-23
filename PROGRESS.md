@@ -75,7 +75,7 @@ Last updated: 2026-02-23
 | 2026-02-23 | Restructured repo: `research/` split into `docs/` and `planning/` | Separate reference docs from project management; add agent entry points |
 | 2026-02-23 | Used `which` crate for binary resolution in probes | Cross-platform PATH lookup without reinventing |
 | 2026-02-23 | `CapabilityEntry` pairs `supported: bool` with `confidence` tag | Matches docs/agent-adapters.md confidence model (verified/observed/unknown) |
-| 2026-02-23 | `RunManifest` includes `schema_version: 1` from day one | Forward-compatibility per ADR 7; supports future migration (M5.6) |
+| 2026-02-23 | `RunManifest` includes `schema_version: 1` from day one | Forward-compatibility per ADR 7; supports future migration (M6.6) |
 | 2026-02-23 | `resolve_binary` does not fall back to PATH when configured path is set but missing | Explicit config takes precedence; prevents unexpected binary resolution |
 | 2026-02-23 | M0.8 satisfied by existing docs/architecture.md content | ADR 6 and 7 were already documented during planning phase |
 | 2026-02-23 | Shared adapter version parser extracted to `adapter/mod.rs` | Removes duplication across Claude/Codex/Cursor probes and centralizes version parsing behavior |
@@ -146,8 +146,9 @@ Last updated: 2026-02-23
 | 1 | Core Orchestrator + Single Agent | **Complete** | 8/8 |
 | 2 | Multi-Agent Race + Scoring | **Complete** | 12/12 |
 | 3 | GUI Alpha | **In Progress** | Original M3: 6/7 complete (M3.1 partial); Supplemental P3: 8/8 complete |
-| 4 | Collaboration Workflows | Not started | 0/6 |
-| 5 | Windows Parity + Hardening | Not started | 0/6 |
+| 4 | Interactive Session Mode (PTY) | Not started | 0/6 |
+| 5 | Collaboration Workflows | Not started | 0/6 |
+| 6 | Windows Parity + Hardening | Not started | 0/6 |
 
 ## Instructions for Next Agent
 
@@ -158,7 +159,8 @@ Last updated: 2026-02-23
 5. **System package requirement**: `hydra-app` needs `webkit2gtk-4.1` (`pacman -S webkit2gtk-4.1` on Arch). Install before attempting `cargo check -p hydra-app`.
 6. **Next priorities**:
    - Close original M3.1 acceptance criterion #3 with Linux packaging smoke evidence in published CI results
-   - Phase 4: Collaboration Workflows
+   - Phase 4: Interactive Session Mode (PTY)
+   - Phase 5: Collaboration Workflows
 7. Key files added for P3-UI-05 and P3-QA-01:
    - `crates/hydra-cli/src/race.rs` — diff.patch persistence via `generate_diff_patch()` before worktree cleanup
    - `crates/hydra-app/src/ipc_types.rs` — CandidateDiffPayload, MergePreviewPayload, MergeExecutionPayload, DiffFile

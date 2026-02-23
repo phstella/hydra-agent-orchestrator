@@ -102,7 +102,26 @@ Exit criteria:
 - Linux GUI can start and monitor multi-agent race
 - results are equivalent to CLI data
 
-## 8. Phase 4 (2-3 weeks): Collaboration Workflows
+## 8. Phase 4 (2-3 weeks): Interactive Session Mode (PTY)
+
+Goal:
+- provide a dedicated interactive mode where users can intervene mid-flight
+
+Deliverables:
+- PTY-backed supervisor path (stdin/write, resize, cancel) for interactive sessions
+- interactive session runtime and IPC commands (start, write, resize, poll, stop)
+- dedicated GUI interactive workspace with terminal emulator panel
+- mid-flight intervention controls (send prompt/input, interrupt, resume)
+- adapter capability and safety gating for interactive mode
+- transcript and session artifact persistence plus e2e coverage
+
+Exit criteria:
+- user can start interactive session and send input to a running agent
+- terminal rendering is human-readable with ANSI support and stable under load
+- interactive session artifacts persist and replay is available
+- race/scoring mode behavior remains unchanged and deterministic
+
+## 9. Phase 5 (2-3 weeks): Collaboration Workflows
 
 Goal:
 - move beyond race mode into structured cooperation
@@ -117,7 +136,7 @@ Exit criteria:
 - each preset has one golden integration test
 - workflow failures degrade gracefully with clear status
 
-## 9. Phase 5 (2 weeks): Windows Parity + Hardening
+## 10. Phase 6 (2 weeks): Windows Parity + Hardening
 
 Goal:
 - stabilize Windows runtime behavior and release readiness
@@ -134,21 +153,22 @@ Exit criteria:
 - schema migration tool upgrades v1 artifacts to current format
 - forward/backward compatibility tests pass
 
-## 10. Milestone Risk Register
+## 11. Milestone Risk Register
 
 | Risk | Phase | Impact | Mitigation |
 |---|---|---|---|
-| Adapter flag drift | 0-5 | High | runtime capability probes + versioned fixtures |
-| PTY instability on Windows | 3-5 | High | fallback raw stream mode and adapter-specific toggles |
-| Scoring false positives | 2-4 | Medium | baseline normalization + per-repo profiles |
-| Merge automation distrust | 2-5 | Medium | default dry-run and explicit human gate |
-| Scope creep from workflow editor | 4 | Medium | ship presets first, postpone graph editor |
-| Secret leakage in logs/artifacts | 0-5 | High | secret redaction rules + log scrubbing tests (M0.7) |
-| Uncontrolled API cost in race mode | 2-5 | High | budget stop conditions + cost visibility in output (M2.11) |
-| Schema drift breaking run history | 3-5 | Medium | versioned event schema + migration tool (M2.12, M5.6) |
+| Adapter flag drift | 0-6 | High | runtime capability probes + versioned fixtures |
+| PTY instability on Windows | 4-6 | High | fallback raw stream mode and adapter-specific toggles |
+| Interactive mode undermines deterministic race scoring | 4-5 | High | strict separation: interactive session artifacts are excluded from race scoring/merge gates |
+| Scoring false positives | 2-5 | Medium | baseline normalization + per-repo profiles |
+| Merge automation distrust | 2-6 | Medium | default dry-run and explicit human gate |
+| Scope creep from workflow editor | 5 | Medium | ship presets first, postpone graph editor |
+| Secret leakage in logs/artifacts | 0-6 | High | secret redaction rules + log scrubbing tests (M0.7) |
+| Uncontrolled API cost in race mode | 2-6 | High | budget stop conditions + cost visibility in output (M2.11) |
+| Schema drift breaking run history | 3-6 | Medium | versioned event schema + migration tool (M2.12, M6.6) |
 | Competitor adds scoring feature | 2-3 | High | prioritize Phases 0-2 as single push to market |
 
-## 11. Metrics by Phase
+## 12. Metrics by Phase
 
 ### Engineering metrics
 
@@ -169,7 +189,7 @@ Exit criteria:
 | User override rate (picks non-top score winner) | tracked, no target yet |
 | Cost visibility coverage (runs with cost data when adapter supports it) | 100% |
 
-## 12. Suggested Backlog Order (Immediate)
+## 13. Suggested Backlog Order (Immediate)
 
 1. `hydra doctor` and adapter probes
 2. worktree service with strong cleanup semantics
@@ -177,7 +197,7 @@ Exit criteria:
 4. artifact persistence and replay primitives
 5. scoring engine baseline capture
 
-## 13. Release Gates
+## 14. Release Gates
 
 Pre-release checklist:
 1. Linux and Windows smoke tests green.
@@ -185,16 +205,17 @@ Pre-release checklist:
 3. Scoring outputs reproducible from saved artifacts.
 4. No known data-loss paths in cleanup/merge logic.
 
-## 14. Issue Tracking Note
+## 15. Issue Tracking Note
 
 - Milestone-to-ticket breakdown is maintained in `planning/implementation-checklist.md`.
 - Use milestone IDs (`M0.1`, `M1.1`, etc.) as canonical issue prefixes.
 
-## 15. Resolved Roadmap Questions
+## 16. Resolved Roadmap Questions
 
 1. ~~Should cost tracking move earlier (Phase 2) since it affects run-policy decisions?~~ **Decided: Yes.** Cost and budget engine added to Phase 2 as M2.11. Race mode multiplies API cost; users need visibility before workflows add further complexity.
+2. ~~Should interactive user-in-the-loop mode wait until after Windows parity?~~ **Decided: No.** Interactive mode is now Phase 4 to establish the control plane before collaboration workflows and cross-platform hardening.
 
-## 16. Open Roadmap Questions
+## 17. Open Roadmap Questions
 
-1. Should Windows parity happen before GUI alpha, if early users are mixed-OS teams?
+1. Should interactive mode support multiple concurrent terminals by default, or ship single-session first?
 2. Should we publish plugin API in v1 or keep adapters internal until stabilized?

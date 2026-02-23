@@ -259,7 +259,7 @@ Write integration tests for interrupt scenarios: Ctrl+C during agent execution, 
 - [ ] No orphan worktrees after test run.
 
 ## Out of Scope
-Crash recovery metadata (Phase 5); Windows-specific interrupt behavior (Phase 5).
+Crash recovery metadata (Phase 6); Windows-specific interrupt behavior (Phase 6).
 
 ## Dependencies
 - M1.3, M1.4, M1.7

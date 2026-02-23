@@ -64,7 +64,7 @@ crates/
 
 ## Milestone ID Format
 
-`M<phase>.<sequence>` - e.g., `M0.1`, `M2.11`, `M5.6`.
+`M<phase>.<sequence>` - e.g., `M0.1`, `M2.11`, `M6.6`.
 Use as commit prefix and issue title prefix.
 
 ## PROGRESS.md Protocol
@@ -81,6 +81,6 @@ Use as commit prefix and issue title prefix.
 - Adapter contracts: `docs/agent-adapters.md`
 - Scoring formulas: `docs/scoring-engine.md`
 - Roadmap & phases: `planning/roadmap.md`
-- Full checklist (47 milestones): `planning/implementation-checklist.md`
+- Full checklist (53 milestones): `planning/implementation-checklist.md`
 - Sprint 1 cut (10 tickets): `planning/sprint-1-cut.md`
-- Phase instructions: `instructions/phase-0.md` through `phase-5.md`
+- Phase instructions: `instructions/phase-0.md` through `phase-6.md`
