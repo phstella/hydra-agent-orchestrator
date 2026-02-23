@@ -3,6 +3,7 @@ pub mod artifact;
 pub mod config;
 pub mod doctor;
 pub mod error;
+pub mod orchestrator;
 pub mod scoring;
 pub mod security;
 pub mod supervisor;

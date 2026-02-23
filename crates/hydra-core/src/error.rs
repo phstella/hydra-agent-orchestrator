@@ -34,6 +34,14 @@ pub enum HydraError {
     /// Git command error.
     #[error("git error: {0}")]
     Git(String),
+
+    /// Merge operation error.
+    #[error("merge error: {0}")]
+    Merge(String),
+
+    /// Budget exceeded error.
+    #[error("budget error: {0}")]
+    Budget(String),
 }
 
 /// Convenience alias used throughout the library.

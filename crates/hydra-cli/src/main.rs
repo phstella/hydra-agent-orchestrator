@@ -1,10 +1,14 @@
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use hydra_core::adapter::probe::{AdapterTier, ProbeStatus};
+use hydra_core::artifact::manifest::AgentStatus;
+use hydra_core::config::HydraConfig;
 use hydra_core::doctor::DoctorReport;
+use hydra_core::orchestrator::Orchestrator;
 
 #[derive(Parser)]
 #[command(name = "hydra", version, about = "Hydra agent orchestrator")]
@@ -22,7 +26,17 @@ enum Command {
         json: bool,
     },
     /// Start an agent race on the current task.
-    Race,
+    Race {
+        /// Agent to use (claude, codex).
+        #[arg(long, default_value = "claude")]
+        agents: String,
+        /// Task prompt describing what the agent should do.
+        #[arg(short, long)]
+        prompt: String,
+        /// Path to hydra.toml config file.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     /// Merge a completed run result into the main branch.
     Merge,
 }
@@ -35,10 +49,11 @@ async fn main() -> Result<ExitCode> {
 
     match cli.command {
         Some(Command::Doctor { json }) => Ok(run_doctor(json)),
-        Some(Command::Race) => {
-            tracing::info!("race subcommand (stub)");
-            Ok(ExitCode::SUCCESS)
-        }
+        Some(Command::Race {
+            agents,
+            prompt,
+            config,
+        }) => run_race(&agents, &prompt, config.as_deref()).await,
         Some(Command::Merge) => {
             tracing::info!("merge subcommand (stub)");
             Ok(ExitCode::SUCCESS)
@@ -48,6 +63,91 @@ async fn main() -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+async fn run_race(
+    agent_key: &str,
+    prompt: &str,
+    config_path: Option<&std::path::Path>,
+) -> Result<ExitCode> {
+    // Load config.
+    let config = match config_path {
+        Some(path) => HydraConfig::load(path)
+            .context(format!("failed to load config from {}", path.display()))?,
+        None => HydraConfig::load_or_default(),
+    };
+
+    // Detect repo root.
+    let repo_root = detect_repo_root()
+        .await
+        .context("failed to detect git repository root")?;
+
+    // Register cleanup handler for Ctrl+C.
+    hydra_core::worktree::register_cleanup_handler(repo_root.clone());
+
+    let orchestrator = Orchestrator::new(config, repo_root);
+
+    println!("Starting race with agent: {agent_key}");
+    println!("Prompt: {prompt}");
+    println!();
+
+    let result = orchestrator
+        .race_single(agent_key, prompt)
+        .await
+        .context("race failed")?;
+
+    // Print summary.
+    println!();
+    println!("Race Summary");
+    println!("============");
+    println!("Run ID:       {}", result.run_id);
+    println!("Artifact dir: {}", result.artifact_dir.display());
+
+    let mut all_success = true;
+    for agent in &result.agents {
+        let status_str = match &agent.status {
+            AgentStatus::Completed => "completed",
+            AgentStatus::Failed => "failed",
+            AgentStatus::TimedOut => "timed out",
+            AgentStatus::Cancelled => "cancelled",
+            AgentStatus::Running => "running",
+        };
+        let exit_str = agent
+            .exit_code
+            .map(|c| format!(" (exit code: {c})"))
+            .unwrap_or_default();
+
+        println!("Agent:        {} - {status_str}{exit_str}", agent.agent_key);
+        println!("Branch:       {}", agent.branch);
+        println!("Worktree:     {}", agent.worktree_path.display());
+
+        if agent.status != AgentStatus::Completed {
+            all_success = false;
+        }
+    }
+
+    if all_success {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(1))
+    }
+}
+
+/// Detect the git repository root via `git rev-parse --show-toplevel`.
+async fn detect_repo_root() -> Result<PathBuf> {
+    let output = tokio::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .await
+        .context("failed to run git rev-parse")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("not inside a git repository: {stderr}");
+    }
+
+    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(PathBuf::from(root))
 }
 
 fn run_doctor(json_output: bool) -> ExitCode {
