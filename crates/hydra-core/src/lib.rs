@@ -10,6 +10,7 @@ pub mod orchestrator;
 pub mod scoring;
 pub mod security;
 pub mod supervisor;
+pub mod workflow;
 pub mod worktree;
 
 pub use error::{HydraError, Result};

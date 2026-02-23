@@ -10,6 +10,7 @@ use hydra_core::config::HydraConfig;
 use hydra_core::doctor::DoctorReport;
 use hydra_core::merge::MergeService;
 use hydra_core::orchestrator::Orchestrator;
+use hydra_core::workflow;
 
 #[derive(Parser)]
 #[command(name = "hydra", version, about = "Hydra agent orchestrator")]
@@ -37,6 +38,27 @@ enum Command {
         /// Path to hydra.toml config file.
         #[arg(long)]
         config: Option<PathBuf>,
+    },
+    /// Run a multi-agent collaboration workflow.
+    Workflow {
+        /// Workflow preset to run (builder-reviewer, specialization, iterative).
+        #[arg(long)]
+        preset: String,
+        /// Task prompt describing what the agents should do.
+        #[arg(short, long)]
+        prompt: String,
+        /// Agents (comma-separated for multi-agent workflows).
+        #[arg(long)]
+        agents: String,
+        /// Maximum iterations (for iterative preset).
+        #[arg(long, default_value_t = 3)]
+        max_iterations: u32,
+        /// Score threshold (for iterative preset).
+        #[arg(long, default_value_t = 85.0)]
+        score_threshold: f64,
+        /// Output results as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Merge a completed run result into the main branch.
     Merge {
@@ -71,6 +93,24 @@ async fn main() -> Result<ExitCode> {
             prompt,
             config,
         }) => run_race(&agents, &prompt, config.as_deref()).await,
+        Some(Command::Workflow {
+            preset,
+            prompt,
+            agents,
+            max_iterations,
+            score_threshold,
+            json,
+        }) => {
+            run_workflow(
+                &preset,
+                &prompt,
+                &agents,
+                max_iterations,
+                score_threshold,
+                json,
+            )
+            .await
+        }
         Some(Command::Merge {
             source,
             target,
@@ -151,6 +191,131 @@ async fn run_race(
     } else {
         Ok(ExitCode::from(1))
     }
+}
+
+async fn run_workflow(
+    preset: &str,
+    prompt: &str,
+    agents: &str,
+    max_iterations: u32,
+    score_threshold: f64,
+    json_output: bool,
+) -> Result<ExitCode> {
+    let agent_list: Vec<&str> = agents.split(',').map(|s| s.trim()).collect();
+
+    // Build workflow definition from preset.
+    let workflow_def = match preset {
+        "builder-reviewer" => {
+            let builder = agent_list.first().context("need at least 1 agent")?;
+            let reviewer = agent_list.get(1).unwrap_or(builder);
+            let refiner = agent_list.get(2).unwrap_or(builder);
+            workflow::builder_reviewer_refiner(builder, reviewer, refiner, prompt)
+        }
+        "specialization" => {
+            // For specialization, each agent gets its own scope.
+            let scopes: Vec<(String, String, String)> = agent_list
+                .iter()
+                .enumerate()
+                .map(|(i, agent)| (format!("scope-{i}"), agent.to_string(), prompt.to_string()))
+                .collect();
+            let integration_agent = agent_list.first().map(|s| s.to_string());
+            workflow::specialization(scopes, integration_agent)
+        }
+        "iterative" => {
+            let agent = agent_list.first().context("need at least 1 agent")?;
+            workflow::iterative_refinement(agent, prompt, max_iterations, score_threshold)
+        }
+        other => {
+            anyhow::bail!("unknown workflow preset '{other}'; available: builder-reviewer, specialization, iterative");
+        }
+    };
+
+    let repo_root = detect_repo_root()
+        .await
+        .context("failed to detect git repository root")?;
+
+    let config = HydraConfig::load_or_default();
+    let engine = workflow::WorkflowEngine::new(repo_root, config);
+
+    if !json_output {
+        println!("Workflow: {}", workflow_def.name);
+        println!("{}", "=".repeat(40));
+    }
+
+    let result = engine
+        .execute(&workflow_def)
+        .await
+        .context("workflow execution failed")?;
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).expect("serialize WorkflowResult")
+        );
+    } else {
+        print_workflow_timeline(&result, &workflow_def);
+    }
+
+    match result.status {
+        workflow::WorkflowStatus::Completed => Ok(ExitCode::SUCCESS),
+        _ => Ok(ExitCode::from(1)),
+    }
+}
+
+fn print_workflow_timeline(
+    result: &workflow::WorkflowResult,
+    definition: &workflow::WorkflowDefinition,
+) {
+    let total = result.node_results.len();
+    let node_map: std::collections::HashMap<&str, &workflow::WorkflowNode> = definition
+        .nodes
+        .iter()
+        .map(|n| (n.id.as_str(), n))
+        .collect();
+
+    for (i, nr) in result.node_results.iter().enumerate() {
+        let agent_label = node_map
+            .get(nr.node_id.as_str())
+            .and_then(|n| n.agent_key.as_deref())
+            .map(|a| format!(" ({a})"))
+            .unwrap_or_default();
+
+        let (icon, status_text) = match nr.status {
+            workflow::NodeStatus::Completed => ("\u{2713}", "completed"),
+            workflow::NodeStatus::Failed => ("\u{2717}", "failed"),
+            workflow::NodeStatus::Skipped => ("-", "skipped"),
+            workflow::NodeStatus::Running => ("~", "running"),
+            workflow::NodeStatus::Pending => (".", "pending"),
+            workflow::NodeStatus::Retrying => ("~", "retrying"),
+        };
+
+        let duration = format!("{:.1}s", nr.duration_ms as f64 / 1000.0);
+
+        println!(
+            "[{}/{}] {}{:<16} {} {:<12} {:>8}",
+            i + 1,
+            total,
+            nr.node_id,
+            agent_label,
+            icon,
+            status_text,
+            duration
+        );
+    }
+
+    println!();
+
+    if let Some(score) = result.final_score {
+        let mergeable = if score >= 70.0 {
+            "mergeable"
+        } else {
+            "below threshold"
+        };
+        println!("Final Score: {score:.1} ({mergeable})");
+    }
+
+    let total_duration = result.duration_ms as f64 / 1000.0;
+    println!("Total Duration: {total_duration:.1}s");
 }
 
 /// Detect the git repository root via `git rev-parse --show-toplevel`.

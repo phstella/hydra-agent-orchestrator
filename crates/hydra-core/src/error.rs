@@ -42,6 +42,10 @@ pub enum HydraError {
     /// Budget exceeded error.
     #[error("budget error: {0}")]
     Budget(String),
+
+    /// Workflow execution error.
+    #[error("workflow error: {0}")]
+    Workflow(String),
 }
 
 /// Convenience alias used throughout the library.
