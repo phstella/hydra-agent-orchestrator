@@ -56,7 +56,7 @@ Cross-lane sync points:
 ## 5. Per-Ticket Definition of Ready
 
 For each of the 10 tickets:
-1. Acceptance criteria copied from `research/implementation-checklist.md`.
+1. Acceptance criteria copied from `planning/implementation-checklist.md`.
 2. Test strategy stated (unit/fixture/integration).
 3. Owner and estimate assigned.
 4. Dependencies linked in issue.

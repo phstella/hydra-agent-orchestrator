@@ -187,7 +187,7 @@ Pre-release checklist:
 
 ## 14. Issue Tracking Note
 
-- Milestone-to-ticket breakdown is maintained in `research/implementation-checklist.md`.
+- Milestone-to-ticket breakdown is maintained in `planning/implementation-checklist.md`.
 - Use milestone IDs (`M0.1`, `M1.1`, etc.) as canonical issue prefixes.
 
 ## 15. Resolved Roadmap Questions

@@ -2,7 +2,7 @@
 
 Last updated: 2026-02-22
 
-This folder contains per-phase issue body packs generated from `research/implementation-checklist.md`.
+This folder contains per-phase issue body packs generated from `planning/implementation-checklist.md`.
 
 ## Files
 
@@ -20,5 +20,5 @@ This folder contains per-phase issue body packs generated from `research/impleme
 ## Notes
 
 - Global label prefix for all issues: `hydra`
-- Source of truth for milestone definitions: `research/implementation-checklist.md`
+- Source of truth for milestone definitions: `planning/implementation-checklist.md`
 - Regenerate phase files after any checklist changes to avoid drift

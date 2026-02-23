@@ -132,7 +132,7 @@ Out of Scope
 - Problem: Two architecture decisions (process model and storage model) were deferred as open questions but affect implementation choices in Phase 1 and Phase 3.
 - Scope: Document locked decisions for process model (short-lived CLI, embedded GUI) and storage model (JSONL source of truth, SQLite derived index from Phase 3) in architecture.md.
 - Acceptance Criteria:
-1. ADR entries 6 and 7 are present in `research/architecture.md`.
+1. ADR entries 6 and 7 are present in `docs/architecture.md`.
 2. Open questions section is updated to reflect resolved status.
 3. No implementation is blocked by unresolved architecture questions.
 - Out of Scope: implementing the SQLite index (Phase 3).

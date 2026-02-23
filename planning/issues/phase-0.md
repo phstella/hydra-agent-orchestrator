@@ -2,7 +2,7 @@
 
 Last updated: 2026-02-22
 
-Generated from `research/implementation-checklist.md`.
+Generated from `planning/implementation-checklist.md`.
 
 Global label prefix: `hydra`
 
@@ -255,7 +255,7 @@ Two architecture decisions (process model and storage model) were deferred as op
 Document locked decisions for process model (short-lived CLI, embedded GUI) and storage model (JSONL source of truth, SQLite derived index from Phase 3) in architecture.md.
 
 ## Acceptance Criteria
-- [ ] ADR entries 6 and 7 are present in research/architecture.md.
+- [ ] ADR entries 6 and 7 are present in docs/architecture.md.
 - [ ] Open questions section is updated to reflect resolved status.
 - [ ] No implementation is blocked by unresolved architecture questions.
 

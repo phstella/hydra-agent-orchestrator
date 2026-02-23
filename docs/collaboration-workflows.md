@@ -206,6 +206,6 @@ For each workflow preset:
 
 ## 16. Related Docs
 
-- `research/architecture.md`
-- `research/scoring-engine.md`
-- `research/roadmap.md`
+- `docs/architecture.md`
+- `docs/scoring-engine.md`
+- `planning/roadmap.md`

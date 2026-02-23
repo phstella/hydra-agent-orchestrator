@@ -245,6 +245,6 @@ CLI and GUI should receive:
 
 ## 15. Related Docs
 
-- `research/architecture.md`
-- `research/collaboration-workflows.md`
-- `research/roadmap.md`
+- `docs/architecture.md`
+- `docs/collaboration-workflows.md`
+- `planning/roadmap.md`

@@ -9,23 +9,23 @@ This file records the quality audit of the research package and the concrete imp
 ## 2. What Was Audited
 
 - `research.md`
-- `research/architecture.md`
-- `research/agent-adapters.md`
-- `research/scoring-engine.md`
-- `research/collaboration-workflows.md`
-- `research/tech-stack.md`
-- `research/competitive-analysis.md`
-- `research/roadmap.md`
-- `research/implementation-checklist.md`
-- `research/github-issues.md`
-- `research/sprint-1-cut.md`
-- `research/issues/README.md`
-- `research/issues/phase-0.md`
-- `research/issues/phase-1.md`
-- `research/issues/phase-2.md`
-- `research/issues/phase-3.md`
-- `research/issues/phase-4.md`
-- `research/issues/phase-5.md`
+- `docs/architecture.md`
+- `docs/agent-adapters.md`
+- `docs/scoring-engine.md`
+- `docs/collaboration-workflows.md`
+- `docs/tech-stack.md`
+- `docs/competitive-analysis.md`
+- `planning/roadmap.md`
+- `planning/implementation-checklist.md`
+- `planning/github-issues.md`
+- `planning/sprint-1-cut.md`
+- `planning/issues/README.md`
+- `planning/issues/phase-0.md`
+- `planning/issues/phase-1.md`
+- `planning/issues/phase-2.md`
+- `planning/issues/phase-3.md`
+- `planning/issues/phase-4.md`
+- `planning/issues/phase-5.md`
 
 ## 3. Key Gaps Found Before Revision
 
@@ -56,7 +56,7 @@ Triggered by external review (`research-review-2026-02-23.md`) that identified h
 
 ### High-priority gaps addressed
 
-1. **Architecture decisions locked.** Resolved all three open architecture questions in `research/architecture.md`:
+1. **Architecture decisions locked.** Resolved all three open architecture questions in `docs/architecture.md`:
    - ADR 6: Short-lived process model for v1 (no daemon).
    - ADR 7: JSONL source of truth, SQLite derived index from Phase 3.
    - Remote repo orchestration confirmed out of scope for v1.

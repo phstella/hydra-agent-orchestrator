@@ -272,4 +272,4 @@ Suggested implementation:
 
 ## 13. Source Notes
 
-Architecture here combines product design choices with external constraints from current agent CLIs and tooling ecosystems. CLI capability assumptions are detailed in `research/agent-adapters.md` with confidence markers and links.
+Architecture here combines product design choices with external constraints from current agent CLIs and tooling ecosystems. CLI capability assumptions are detailed in `docs/agent-adapters.md` with confidence markers and links.
