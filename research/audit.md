@@ -17,6 +17,8 @@ This file records the quality audit of the research package and the concrete imp
 - `research/competitive-analysis.md`
 - `research/roadmap.md`
 - `research/implementation-checklist.md`
+- `research/github-issues.md`
+- `research/sprint-1-cut.md`
 
 ## 3. Key Gaps Found Before Revision
 
@@ -37,6 +39,8 @@ This file records the quality audit of the research package and the concrete imp
 7. Rewrote top-level `research.md` as index + scope anchor.
 8. Added issue-ready milestone checklist with ticket templates and acceptance criteria.
 9. Locked launch adapter tiering to Claude/Codex (Tier-1) and Cursor experimental opt-in.
+10. Generated copy-paste GitHub issue bodies for all milestones (`M0.1` to `M5.5`).
+11. Produced dependency-safe sprint-1 cut for the first 8 tickets.
 
 ## 5. Remaining Uncertainties
 

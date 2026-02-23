@@ -49,6 +49,8 @@ Out-of-scope for initial product:
 - `research/competitive-analysis.md`: market scan and differentiation
 - `research/roadmap.md`: phased delivery plan, gates, and risks
 - `research/implementation-checklist.md`: issue-ready execution checklist by milestone
+- `research/github-issues.md`: copy-paste-ready GitHub issue bodies (`M0.1` to `M5.5`)
+- `research/sprint-1-cut.md`: dependency-safe first sprint ticket cut
 - `research/audit.md`: quality audit summary and unresolved gaps
 
 ## Quality Bar For This Research Package
