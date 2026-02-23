@@ -34,11 +34,11 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Doctor { json } => {
-            let adapter_paths = doctor::load_adapter_path_overrides();
+            let adapter_cfg = doctor::load_adapter_config();
             let adapters: Vec<Box<dyn AgentAdapter>> = vec![
-                Box::new(ClaudeAdapter::new(adapter_paths.claude)),
-                Box::new(CodexAdapter::new(adapter_paths.codex)),
-                Box::new(CursorAdapter::new(adapter_paths.cursor)),
+                Box::new(ClaudeAdapter::new(adapter_cfg.claude)),
+                Box::new(CodexAdapter::new(adapter_cfg.codex)),
+                Box::new(CursorAdapter::new(adapter_cfg.cursor)),
             ];
 
             let runner = ProbeRunner::new(adapters);
