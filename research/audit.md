@@ -16,6 +16,7 @@ This file records the quality audit of the research package and the concrete imp
 - `research/tech-stack.md`
 - `research/competitive-analysis.md`
 - `research/roadmap.md`
+- `research/implementation-checklist.md`
 
 ## 3. Key Gaps Found Before Revision
 
@@ -34,6 +35,8 @@ This file records the quality audit of the research package and the concrete imp
 5. Rebuilt roadmap with phase gates, metrics, and risk register.
 6. Reframed tech stack as decision record with tradeoff table.
 7. Rewrote top-level `research.md` as index + scope anchor.
+8. Added issue-ready milestone checklist with ticket templates and acceptance criteria.
+9. Locked launch adapter tiering to Claude/Codex (Tier-1) and Cursor experimental opt-in.
 
 ## 5. Remaining Uncertainties
 

@@ -4,7 +4,11 @@ Last updated: 2026-02-23
 
 ## Product Summary
 
-Hydra is a local **code-agent orchestration control center**. It runs multiple coding agents (Claude Code, OpenAI Codex CLI, Cursor Agent CLI, and future adapters) on isolated git workspaces, compares their outcomes, and helps users merge the best result safely.
+Hydra is a local **code-agent orchestration control center**. It runs multiple coding agents on isolated git workspaces, compares their outcomes, and helps users merge the best result safely.
+
+Launch adapter policy:
+1. Tier-1 adapters: `claude`, `codex`
+2. Tier-2 experimental: `cursor-agent` (opt-in only until probe and conformance gates pass)
 
 Primary platform priority:
 1. Linux (first-class)
@@ -44,6 +48,7 @@ Out-of-scope for initial product:
 - `research/tech-stack.md`: technology decisions and tradeoffs
 - `research/competitive-analysis.md`: market scan and differentiation
 - `research/roadmap.md`: phased delivery plan, gates, and risks
+- `research/implementation-checklist.md`: issue-ready execution checklist by milestone
 - `research/audit.md`: quality audit summary and unresolved gaps
 
 ## Quality Bar For This Research Package
@@ -56,7 +61,7 @@ This folder is considered "release ready" when:
 
 ## Open Product Questions
 
-1. Which three adapters are Tier-1 at launch: `claude`, `codex`, `cursor-agent` only, or include `aider`?
+1. Should `aider` be the next experimental adapter after `cursor-agent`?
 2. Should merge automation default to "suggest only" or "auto-merge above threshold"?
 3. Do we persist complete run artifacts by default, or keep only summaries unless opted in?
 4. Should workflow composition ship in v1, or after race-mode hardening?

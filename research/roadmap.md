@@ -7,29 +7,42 @@ Last updated: 2026-02-23
 - Team assumption: solo developer or very small team.
 - Priority: Linux-first reliability, then Windows parity.
 - Delivery style: incremental vertical slices with working CLI at every phase.
+- Launch adapter tiering is fixed: Tier-1 = `claude`, `codex`; `cursor-agent` remains experimental.
 
-## 2. Definition of Done (Global)
+## 2. Adapter Tier Policy
+
+Tier definitions:
+- Tier-1: enabled by default, release-blocking reliability requirements.
+- Experimental: disabled by default, explicit opt-in, non-blocking for release.
+
+Policy rules:
+1. Tier-1 adapters require passing probe + conformance test suite.
+2. Experimental adapters cannot become default without explicit milestone decision.
+3. Experimental adapter failures must not impact Tier-1 run reliability.
+
+## 3. Definition of Done (Global)
 
 A phase is complete when:
 1. Exit criteria are met.
 2. Automated tests pass for new scope.
 3. Known risks are documented with mitigation or accepted debt.
 
-## 3. Phase 0 (1 week): Validation and Guardrails
+## 4. Phase 0 (1 week): Validation and Guardrails
 
 Goal:
 - lock adapter assumptions
 - verify local run architecture on Linux
 
 Deliverables:
-- adapter probe command for Claude/Codex/Cursor
+- adapter probe command for Claude/Codex (Tier-1)
+- experimental probe path for Cursor
 - run artifact directory convention
 - baseline `hydra doctor` command
 
 Exit criteria:
 - `hydra doctor` reports adapter readiness and repo prerequisites.
 
-## 4. Phase 1 (2-3 weeks): Core Orchestrator + Single Agent
+## 5. Phase 1 (2-3 weeks): Core Orchestrator + Single Agent
 
 Goal:
 - stable end-to-end loop for one agent in isolated worktree
@@ -46,7 +59,7 @@ Exit criteria:
 - worktree isolation works
 - cleanup is deterministic on success/failure/interrupt
 
-## 5. Phase 2 (3-4 weeks): Multi-Agent Race + Scoring
+## 6. Phase 2 (3-4 weeks): Multi-Agent Race + Scoring
 
 Goal:
 - concurrent runs and objective ranking
@@ -57,13 +70,14 @@ Deliverables:
 - scoring engine v1 (build/tests/lint/diff/speed)
 - mergeable flag and ranking output
 - CLI merge command with dry-run
+- experimental adapter opt-in gate (`--allow-experimental-adapters`)
 
 Exit criteria:
-- 2-3 agents run concurrently without collisions
+- 2+ Tier-1 agents run concurrently without collisions
 - score output includes breakdown and artifacts
 - merge dry-run and real merge both tested
 
-## 6. Phase 3 (3-4 weeks): GUI Alpha (Tauri)
+## 7. Phase 3 (3-4 weeks): GUI Alpha (Tauri)
 
 Goal:
 - visual monitoring and result review
@@ -74,12 +88,13 @@ Deliverables:
 - score dashboard
 - diff viewer
 - merge action panel
+- explicit experimental-adapter warnings and opt-in UX
 
 Exit criteria:
 - Linux GUI can start and monitor multi-agent race
 - results are equivalent to CLI data
 
-## 7. Phase 4 (2-3 weeks): Collaboration Workflows
+## 8. Phase 4 (2-3 weeks): Collaboration Workflows
 
 Goal:
 - move beyond race mode into structured cooperation
@@ -94,7 +109,7 @@ Exit criteria:
 - each preset has one golden integration test
 - workflow failures degrade gracefully with clear status
 
-## 8. Phase 5 (2 weeks): Windows Parity + Hardening
+## 9. Phase 5 (2 weeks): Windows Parity + Hardening
 
 Goal:
 - stabilize Windows runtime behavior and release readiness
@@ -108,7 +123,7 @@ Deliverables:
 Exit criteria:
 - parity acceptance suite passes on Linux and Windows
 
-## 9. Milestone Risk Register
+## 10. Milestone Risk Register
 
 | Risk | Phase | Impact | Mitigation |
 |---|---|---|---|
@@ -118,7 +133,7 @@ Exit criteria:
 | Merge automation distrust | 2-5 | Medium | default dry-run and explicit human gate |
 | Scope creep from workflow editor | 4 | Medium | ship presets first, postpone graph editor |
 
-## 10. Metrics by Phase
+## 11. Metrics by Phase
 
 ### Engineering metrics
 
@@ -133,7 +148,7 @@ Exit criteria:
 - percent of runs ending in mergeable candidate
 - user override rate (when user picks non-top score winner)
 
-## 11. Suggested Backlog Order (Immediate)
+## 12. Suggested Backlog Order (Immediate)
 
 1. `hydra doctor` and adapter probes
 2. worktree service with strong cleanup semantics
@@ -141,7 +156,7 @@ Exit criteria:
 4. artifact persistence and replay primitives
 5. scoring engine baseline capture
 
-## 12. Release Gates
+## 13. Release Gates
 
 Pre-release checklist:
 1. Linux and Windows smoke tests green.
@@ -149,7 +164,12 @@ Pre-release checklist:
 3. Scoring outputs reproducible from saved artifacts.
 4. No known data-loss paths in cleanup/merge logic.
 
-## 13. Open Roadmap Questions
+## 14. Issue Tracking Note
+
+- Milestone-to-ticket breakdown is maintained in `research/implementation-checklist.md`.
+- Use milestone IDs (`M0.1`, `M1.1`, etc.) as canonical issue prefixes.
+
+## 15. Open Roadmap Questions
 
 1. Should Windows parity happen before GUI alpha, if early users are mixed-OS teams?
 2. Should cost tracking move earlier (Phase 2) since it affects run-policy decisions?

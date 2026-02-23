@@ -10,6 +10,20 @@ This document separates:
 - **Verified behavior**: backed by current docs/source
 - **Inferred behavior**: plausible but not fully confirmed in docs
 
+## 1.1 Launch Tiering Decision (Locked)
+
+Tier-1 adapters for launch:
+- `claude`
+- `codex`
+
+Experimental adapter at launch:
+- `cursor-agent` (or `cursor` fallback binary name)
+
+Promotion rules from experimental to Tier-1:
+1. Probe suite passes on Linux and Windows for two consecutive release cycles.
+2. Conformance fixtures cover parser stability and timeout behavior.
+3. No unresolved P1 reliability issues remain for adapter runtime path.
+
 ## 2. Adapter Contract
 
 Each adapter implements:
@@ -155,6 +169,7 @@ Commonly referenced:
 - Treat Cursor adapter as `observed` confidence until probe passes.
 - Require explicit warning in UI when adapter is using inferred flags.
 - Enforce idle timeout due known hang reports in headless operation.
+- Keep adapter disabled by default unless user passes experimental opt-in flag.
 
 ## 7. Standard SpawnRequest and BuiltCommand
 
@@ -224,7 +239,13 @@ crates/hydra-core/tests/fixtures/adapters/
 |---|---|---|---|---|
 | Claude Code | Verified | Verified (`stream-json`) | Verified (permission mode / tool flags) | High |
 | OpenAI Codex | Verified (`exec`) | Verified (`--json`) | Verified (`--full-auto`, bypass flag) | High |
-| Cursor Agent CLI | Partially verified | Partially verified | Partially verified | Medium |
+| Cursor Agent CLI | Partially verified | Partially verified | Partially verified | Medium (experimental only) |
+
+## 10.1 Runtime Enablement Policy
+
+1. Tier-1 adapters are auto-enabled when probes pass.
+2. Experimental adapters require explicit runtime opt-in (`--allow-experimental-adapters`).
+3. If an experimental adapter fails probe at startup, Hydra logs warning and continues with Tier-1 set.
 
 ## 11. Source Links
 

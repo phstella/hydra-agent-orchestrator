@@ -120,7 +120,7 @@ Example:
 [[workflow.steps]]
 id = "race1"
 type = "race"
-agents = ["claude", "codex", "cursor-agent"]
+agents = ["claude", "codex"]
 
 [[workflow.steps]]
 id = "review1"
@@ -137,6 +137,8 @@ agent = "claude"
 max_iterations = 2
 score_threshold = 90
 ```
+
+Use `cursor-agent` only when experimental adapters are explicitly enabled for the run.
 
 ## 9. Policy Controls
 

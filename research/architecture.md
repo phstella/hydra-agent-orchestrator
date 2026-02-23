@@ -92,6 +92,10 @@ Responsibilities:
 - capability probing (`--help` parse and/or static manifest)
 - adapter-specific invocation building
 
+Launch policy:
+- Tier-1 adapters (`claude`, `codex`) are enabled by default after probe success.
+- Experimental adapters (including `cursor-agent`) require explicit user opt-in.
+
 ### 4.3 Process Supervisor
 
 Per-agent supervision with:
