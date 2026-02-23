@@ -353,11 +353,21 @@ fn parse_cli_race_summary(stdout: &[u8]) -> Result<RaceResult, IpcError> {
 
     let race_duration_ms = json
         .get("duration_ms")
-        .and_then(|v| v.as_u64());
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            json.get("health")
+                .and_then(|h| h.get("duration_ms"))
+                .and_then(|v| v.as_u64())
+        });
 
     let total_cost = json
         .get("total_cost")
-        .and_then(|v| v.as_f64());
+        .and_then(|v| v.as_f64())
+        .or_else(|| {
+            json.get("cost")
+                .and_then(|c| c.get("estimated_cost_usd"))
+                .and_then(|v| v.as_f64())
+        });
 
     let agents = json
         .get("agents")
@@ -433,7 +443,38 @@ fn parse_cli_race_summary(stdout: &[u8]) -> Result<RaceResult, IpcError> {
 }
 
 fn normalize_status(raw: &str) -> String {
-    raw.trim().to_ascii_lowercase().replace(' ', "_")
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "unknown".to_string();
+    }
+
+    let mut out = String::with_capacity(trimmed.len() + 4);
+    let mut prev_was_lower_or_digit = false;
+
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if ch.is_ascii_uppercase() && prev_was_lower_or_digit && !out.ends_with('_') {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+            prev_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        } else {
+            if !out.is_empty() && !out.ends_with('_') {
+                out.push('_');
+            }
+            prev_was_lower_or_digit = false;
+        }
+    }
+
+    while out.ends_with('_') {
+        out.pop();
+    }
+
+    if out.is_empty() {
+        "unknown".to_string()
+    } else {
+        out
+    }
 }
 
 fn build_race_command(repo_root: &Path, run_id: &str, request: &RaceRequest) -> TokioCommand {
@@ -725,5 +766,43 @@ mod tests {
         assert_eq!(parsed.agents[0].dimensions.len(), 2);
         assert_eq!(parsed.agents[0].dimensions[0].name, "build");
         assert!((parsed.agents[0].dimensions[0].score - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_cli_summary_supports_nested_cost_and_camel_statuses() {
+        let payload = serde_json::json!({
+            "run_id": "run-2",
+            "status": "TimedOut",
+            "duration_ms": 2200,
+            "cost": {
+                "estimated_cost_usd": 1.25
+            },
+            "agents": [
+                {
+                    "agent": "codex",
+                    "status": "TimedOut",
+                    "duration_ms": 2200,
+                    "score": {
+                        "composite": 0.0,
+                        "mergeable": false,
+                        "gate_failures": ["timed_out"],
+                        "dimensions": []
+                    }
+                }
+            ]
+        });
+
+        let parsed = parse_cli_race_summary(payload.to_string().as_bytes()).unwrap();
+        assert_eq!(parsed.status, "timed_out");
+        assert_eq!(parsed.duration_ms, Some(2200));
+        assert_eq!(parsed.total_cost, Some(1.25));
+        assert_eq!(parsed.agents[0].status, "timed_out");
+    }
+
+    #[test]
+    fn normalize_status_handles_mixed_delimiters_and_camel_case() {
+        assert_eq!(normalize_status("TimedOut"), "timed_out");
+        assert_eq!(normalize_status("timed-out"), "timed_out");
+        assert_eq!(normalize_status("Already Fine"), "already_fine");
     }
 }

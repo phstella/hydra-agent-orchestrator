@@ -400,6 +400,7 @@ export default function App() {
             raceResult ? (
               <ResultsScoreboard
                 result={raceResult}
+                selectedWinner={selectedWinner}
                 onSelectWinner={handleWinnerSelect}
               />
             ) : (

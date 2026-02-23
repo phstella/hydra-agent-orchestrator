@@ -12,10 +12,33 @@ export interface AgentStatus {
 
 const TERMINAL_EVENT_MAP: Record<string, AgentLifecycle> = {
   agent_completed: 'completed',
-  agent_failed: 'failed',
   agent_timed_out: 'timed_out',
   agent_timeout: 'timed_out',
 };
+
+function inferTerminalLifecycle(evt: AgentStreamEvent): AgentLifecycle | undefined {
+  if (evt.eventType === 'agent_failed') {
+    return looksLikeTimeoutFailure(evt) ? 'timed_out' : 'failed';
+  }
+  return TERMINAL_EVENT_MAP[evt.eventType];
+}
+
+function looksLikeTimeoutFailure(evt: AgentStreamEvent): boolean {
+  if (typeof evt.data !== 'object' || evt.data === null) {
+    return false;
+  }
+  const data = evt.data as Record<string, unknown>;
+  const error = typeof data.error === 'string' ? data.error.toLowerCase() : '';
+  const status = typeof data.status === 'string' ? data.status.toLowerCase() : '';
+
+  return (
+    error.includes('timed out') ||
+    error.includes('timeout') ||
+    status.includes('timed_out') ||
+    status.includes('timedout') ||
+    status.includes('timeout')
+  );
+}
 
 /**
  * Derives per-agent lifecycle status from the event stream.
@@ -54,7 +77,7 @@ export function useAgentStatuses(
       entry.eventCount += 1;
       entry.lastEventTime = evt.timestamp;
 
-      const terminal = TERMINAL_EVENT_MAP[evt.eventType];
+      const terminal = inferTerminalLifecycle(evt);
       if (terminal) {
         entry.lifecycle = terminal;
       }

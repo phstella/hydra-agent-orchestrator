@@ -43,6 +43,8 @@ pub struct RaceOpts {
 }
 
 pub async fn run_race(opts: RaceOpts) -> Result<()> {
+    let run_started_at = Instant::now();
+
     let config = load_race_config()?;
     let repo_root = discover_repo_root()?;
     let run_id = opts.run_id.unwrap_or_else(Uuid::new_v4);
@@ -380,6 +382,8 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
     let (run_input_tokens, run_output_tokens, run_total_tokens, run_estimated_cost) =
         aggregate_run_cost(&results);
 
+    let run_duration_ms = run_started_at.elapsed().as_millis() as u64;
+
     // Output
     if opts.json {
         let agent_summaries: Vec<serde_json::Value> = results
@@ -441,6 +445,8 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
         let summary = serde_json::json!({
             "run_id": run_id.to_string(),
             "status": format!("{overall_status:?}"),
+            "duration_ms": run_duration_ms,
+            "total_cost": run_estimated_cost,
             "agents": agent_summaries,
             "rankings": ranked_scores,
             "artifacts": layout.base_dir().display().to_string(),
@@ -474,6 +480,10 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
         println!("===========");
         println!("  Run ID:    {run_id}");
         println!("  Status:    {overall_status:?}");
+        println!("  Duration:  {:.1}s", run_duration_ms as f64 / 1000.0);
+        if let Some(cost) = run_estimated_cost {
+            println!("  Cost:      ${cost:.4}");
+        }
         println!("  Artifacts: {}", layout.base_dir().display());
         println!("  Baseline:  {}", layout.baseline_result().display());
         println!();

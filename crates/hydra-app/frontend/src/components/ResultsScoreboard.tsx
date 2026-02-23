@@ -1,10 +1,11 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import type { RaceResult, AgentResult, DimensionScore } from '../types';
 import { Card, Badge, Button, Panel, ProgressBar } from './design-system';
 
 interface ResultsScoreboardProps {
   result: RaceResult;
+  selectedWinner: string | null;
   onSelectWinner: (agentKey: string) => void;
 }
 
@@ -88,9 +89,7 @@ function progressVariant(score: number): 'green' | 'warning' | 'gradient' {
   return 'gradient';
 }
 
-export function ResultsScoreboard({ result, onSelectWinner }: ResultsScoreboardProps) {
-  const [selectedWinner, setSelectedWinner] = useState<string | null>(null);
-
+export function ResultsScoreboard({ result, selectedWinner, onSelectWinner }: ResultsScoreboardProps) {
   const sortedAgents = useMemo(
     () =>
       [...result.agents].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
@@ -111,7 +110,6 @@ export function ResultsScoreboard({ result, onSelectWinner }: ResultsScoreboardP
 
   const handleSelectWinner = useCallback(
     (agentKey: string) => {
-      setSelectedWinner(agentKey);
       onSelectWinner(agentKey);
     },
     [onSelectWinner],
