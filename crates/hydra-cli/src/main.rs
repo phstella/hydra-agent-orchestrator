@@ -9,6 +9,7 @@ use hydra_core::adapter::{AgentAdapter, ProbeRunner};
 mod doctor;
 mod merge;
 mod race;
+mod run;
 
 #[derive(Parser)]
 #[command(name = "hydra", about = "Multi-agent orchestration control center")]
@@ -81,6 +82,11 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect stored run artifacts and scores
+    Run {
+        #[command(subcommand)]
+        command: run::RunCommand,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -150,6 +156,9 @@ fn main() -> anyhow::Result<()> {
                 force,
                 json,
             })?;
+        }
+        Commands::Run { command } => {
+            run::run_command(command)?;
         }
     }
 
