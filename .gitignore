@@ -1,0 +1,6 @@
+/target/
+.hydra/
+*.swp
+*.swo
+*~
+.DS_Store
