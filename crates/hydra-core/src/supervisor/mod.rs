@@ -64,15 +64,17 @@ pub enum SupervisorEvent {
     },
 }
 
-/// Configuration for the supervisor timeout and buffer policies.
+/// Runtime policy for supervisor timeout and buffer limits.
+///
+/// Distinct from `config::SupervisorConfig` which is the TOML-deserialized schema type.
 #[derive(Debug, Clone)]
-pub struct SupervisorConfig {
+pub struct SupervisorPolicy {
     pub hard_timeout: Duration,
     pub idle_timeout: Duration,
     pub output_buffer_bytes: usize,
 }
 
-impl Default for SupervisorConfig {
+impl Default for SupervisorPolicy {
     fn default() -> Self {
         Self {
             hard_timeout: Duration::from_secs(1800),
@@ -82,7 +84,7 @@ impl Default for SupervisorConfig {
     }
 }
 
-impl SupervisorConfig {
+impl SupervisorPolicy {
     pub fn from_hydra_config(cfg: &crate::config::SupervisorConfig) -> Self {
         Self {
             hard_timeout: Duration::from_secs(cfg.hard_timeout_seconds),
@@ -110,7 +112,7 @@ impl SupervisorHandle {
 /// The line_parser closure converts raw stdout lines into optional `AgentEvent`s.
 pub async fn supervise<F>(
     cmd: BuiltCommand,
-    config: SupervisorConfig,
+    policy: SupervisorPolicy,
     event_tx: mpsc::Sender<SupervisorEvent>,
     line_parser: F,
 ) -> Result<SupervisorHandle, SupervisorError>
@@ -136,9 +138,9 @@ where
         cancel_tx: cancel_tx.clone(),
     };
 
-    let hard_timeout = config.hard_timeout;
-    let idle_timeout = config.idle_timeout;
-    let max_buffer = config.output_buffer_bytes;
+    let hard_timeout = policy.hard_timeout;
+    let idle_timeout = policy.idle_timeout;
+    let max_buffer = policy.output_buffer_bytes;
 
     tokio::spawn(async move {
         let start = Instant::now();
@@ -472,7 +474,7 @@ mod tests {
     async fn supervise_echo_completes_successfully() {
         let (tx, mut rx) = mpsc::channel(64);
         let cmd = echo_command("hello hydra");
-        let config = SupervisorConfig {
+        let config = SupervisorPolicy {
             hard_timeout: Duration::from_secs(10),
             idle_timeout: Duration::from_secs(5),
             output_buffer_bytes: 1024,
@@ -506,7 +508,7 @@ mod tests {
     async fn supervise_failing_command_reports_failure() {
         let (tx, mut rx) = mpsc::channel(64);
         let cmd = failing_command();
-        let config = SupervisorConfig::default();
+        let config = SupervisorPolicy::default();
 
         let _handle = supervise(cmd, config, tx, |_| None).await.unwrap();
 
@@ -525,7 +527,7 @@ mod tests {
     async fn supervise_cancellation() {
         let (tx, mut rx) = mpsc::channel(64);
         let cmd = sleep_command(60.0);
-        let config = SupervisorConfig {
+        let config = SupervisorPolicy {
             hard_timeout: Duration::from_secs(120),
             idle_timeout: Duration::from_secs(120),
             ..Default::default()
@@ -552,7 +554,7 @@ mod tests {
     async fn supervise_hard_timeout() {
         let (tx, mut rx) = mpsc::channel(64);
         let cmd = sleep_command(60.0);
-        let config = SupervisorConfig {
+        let config = SupervisorPolicy {
             hard_timeout: Duration::from_millis(200),
             idle_timeout: Duration::from_secs(120),
             ..Default::default()
@@ -575,7 +577,7 @@ mod tests {
     async fn supervise_captures_multiline_stdout() {
         let (tx, mut rx) = mpsc::channel(64);
         let cmd = multiline_command();
-        let config = SupervisorConfig::default();
+        let config = SupervisorPolicy::default();
 
         let _handle = supervise(cmd, config, tx, |_| None).await.unwrap();
 
@@ -598,7 +600,7 @@ mod tests {
     async fn supervise_with_line_parser() {
         let (tx, mut rx) = mpsc::channel(64);
         let cmd = echo_command(r#"{"type":"message","content":"hello"}"#);
-        let config = SupervisorConfig::default();
+        let config = SupervisorPolicy::default();
 
         let _handle = supervise(cmd, config, tx, |line| {
             if line.contains("hello") {
@@ -641,7 +643,7 @@ mod tests {
             env: vec![],
             cwd: test_cwd(),
         };
-        let config = SupervisorConfig::default();
+        let config = SupervisorPolicy::default();
 
         let result = supervise(cmd, config, tx, |_| None).await;
         assert!(result.is_err());
@@ -652,7 +654,7 @@ mod tests {
     async fn hard_timeout_kills_background_child_process() {
         let (tx, mut rx) = mpsc::channel(64);
         let cmd = background_child_command();
-        let config = SupervisorConfig {
+        let config = SupervisorPolicy {
             hard_timeout: Duration::from_millis(200),
             idle_timeout: Duration::from_secs(30),
             ..Default::default()
