@@ -1,4 +1,6 @@
 /target
+crates/hydra-app/target/
+crates/hydra-app/frontend/tsconfig.tsbuildinfo
 .hydra/
 *.swp
 *.swo

@@ -3,8 +3,8 @@ resolver = "2"
 members = [
     "crates/hydra-core",
     "crates/hydra-cli",
-    "crates/hydra-app",
 ]
+exclude = ["crates/hydra-app"]
 default-members = [
     "crates/hydra-core",
     "crates/hydra-cli",

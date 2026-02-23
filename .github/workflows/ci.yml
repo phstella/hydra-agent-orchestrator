@@ -43,3 +43,44 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  gui-linux:
+    name: ubuntu-latest / gui
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: crates/hydra-app/frontend/package-lock.json
+
+      - name: Install GUI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check hydra-app
+        run: cargo check --manifest-path crates/hydra-app/Cargo.toml --locked
+
+      - name: Build hydra-app
+        run: cargo build --manifest-path crates/hydra-app/Cargo.toml --locked
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix crates/hydra-app/frontend
+
+      - name: Frontend lint
+        run: npm run lint --prefix crates/hydra-app/frontend
+
+      - name: Frontend build
+        run: npm run build --prefix crates/hydra-app/frontend
