@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"abc123","tools":["Read","Write","Edit","Bash"]}
+{"type":"assistant","message":{"role":"assistant","content":"I'll help with that task."},"session_id":"abc123"}
+{"type":"assistant","message":{"role":"assistant","content":"","tool_use":{"name":"Read","input":{"file_path":"src/main.rs"}}},"session_id":"abc123"}
+{"type":"result","subtype":"tool_result","tool_use_id":"t1","content":"fn main() {}","session_id":"abc123"}
+{"type":"assistant","message":{"role":"assistant","content":"Here's the updated file."},"session_id":"abc123"}
+{"type":"result","subtype":"success","cost_usd":0.003,"duration_ms":2500,"session_id":"abc123","usage":{"input_tokens":1200,"output_tokens":450}}

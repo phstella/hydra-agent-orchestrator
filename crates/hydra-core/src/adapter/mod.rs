@@ -1,3 +1,6 @@
+pub mod claude;
+pub mod codex;
+pub mod cursor;
 mod error;
 mod probe;
 mod types;
@@ -38,12 +41,13 @@ pub trait AgentAdapter: Send + Sync {
 }
 
 /// Resolve binary by checking configured path, then `$PATH` candidates.
+///
+/// If a configured path is provided but doesn't exist, returns `None`
+/// without falling back to PATH discovery (explicit config takes precedence).
 pub fn resolve_binary(configured: Option<&str>, candidates: &[&str]) -> Option<PathBuf> {
     if let Some(path) = configured {
         let p = PathBuf::from(path);
-        if p.exists() {
-            return Some(p);
-        }
+        return if p.exists() { Some(p) } else { None };
     }
     for name in candidates {
         if let Ok(p) = which::which(name) {
