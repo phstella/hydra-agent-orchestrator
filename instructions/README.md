@@ -21,4 +21,5 @@ exit criteria, and pointers to detailed docs.
 2. Open the phase file matching the current phase in `PROGRESS.md`.
 3. Follow the milestone order and parallelization guidance.
 4. Check acceptance criteria in `planning/implementation-checklist.md`.
-5. Update `PROGRESS.md` as you complete milestones.
+5. Open any linked implementation guide in `planning/` for milestone-level contracts.
+6. Update `PROGRESS.md` as you complete milestones.

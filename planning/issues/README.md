@@ -23,3 +23,7 @@ This folder contains per-phase issue body packs generated from `planning/impleme
 - Global label prefix for all issues: `hydra`
 - Source of truth for milestone definitions: `planning/implementation-checklist.md`
 - Regenerate phase files after any checklist changes to avoid drift
+- For implementation detail beyond issue bodies, use:
+  - `planning/p3-ui05-p3-qa01-implementation-guide.md` (Phase 3 closeout)
+  - `planning/p4-interactive-session-implementation-guide.md` (Phase 4)
+  - `planning/p5-collaboration-workflows-implementation-guide.md` (Phase 5)

@@ -65,4 +65,5 @@ Then complete M4.6 as the final convergence milestone.
 
 - Acceptance criteria: `planning/implementation-checklist.md` section 7
 - Issue bodies: `planning/issues/phase-4.md`
+- Detailed implementation contract: `planning/p4-interactive-session-implementation-guide.md`
 - Design direction: `docs/ui-mocks/main_screen.png`

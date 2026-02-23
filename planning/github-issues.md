@@ -11,6 +11,9 @@ This repository now maintains canonical copy-paste issue bodies in per-phase fil
 ## Source of Truth
 
 - Milestone definitions and dependencies: `planning/implementation-checklist.md`
+- Detailed implementation guides for active phases:
+  - `planning/p4-interactive-session-implementation-guide.md`
+  - `planning/p5-collaboration-workflows-implementation-guide.md`
 - Per-phase issue bodies:
   - `planning/issues/phase-0.md` (M0.1-M0.8)
   - `planning/issues/phase-1.md` (M1.1-M1.8)

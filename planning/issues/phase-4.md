@@ -6,6 +6,8 @@ Generated from `planning/implementation-checklist.md`.
 
 Global label prefix: `hydra`
 
+Implementation guide: `planning/p4-interactive-session-implementation-guide.md`
+
 ## [M4.1] PTY Supervisor Path for Interactive Sessions
 
 - Phase: Phase 4 Tickets (Interactive Session Mode)
@@ -37,6 +39,9 @@ Windows parity hardening (Phase 6); replacing deterministic race-mode supervisio
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p4-interactive-session-implementation-guide.md` (`M4.1`)
 ```
 
 
@@ -70,6 +75,9 @@ UI layout; scoring/merge integration.
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p4-interactive-session-implementation-guide.md` (`M4.2`)
 ```
 
 
@@ -103,6 +111,9 @@ Race scoreboard and merge review interactions.
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p4-interactive-session-implementation-guide.md` (`M4.3`)
 ```
 
 
@@ -136,6 +147,9 @@ Branching conversation history; collaborative multi-user editing.
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p4-interactive-session-implementation-guide.md` (`M4.4`)
 ```
 
 
@@ -169,6 +183,9 @@ Automatic policy override; remote execution sandboxing.
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p4-interactive-session-implementation-guide.md` (`M4.5`)
 ```
 
 
@@ -202,6 +219,9 @@ Long-term analytics dashboard; transcript semantic search.
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p4-interactive-session-implementation-guide.md` (`M4.6`)
 ```
 
 

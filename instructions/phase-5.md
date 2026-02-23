@@ -48,3 +48,4 @@ After M5.1 (workflow engine core), the three presets build in parallel:
 - Acceptance criteria: `planning/implementation-checklist.md` section 8
 - Workflow specifications: `docs/collaboration-workflows.md`
 - Issue bodies: `planning/issues/phase-5.md`
+- Detailed implementation contract: `planning/p5-collaboration-workflows-implementation-guide.md`

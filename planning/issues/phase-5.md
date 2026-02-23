@@ -6,6 +6,8 @@ Generated from `planning/implementation-checklist.md`.
 
 Global label prefix: `hydra`
 
+Implementation guide: `planning/p5-collaboration-workflows-implementation-guide.md`
+
 ## [M5.1] Workflow Engine Core
 
 - Phase: Phase 5 Tickets (Collaboration Workflows)
@@ -37,6 +39,9 @@ Implement a DAG step executor that runs workflow nodes sequentially or in parall
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p5-collaboration-workflows-implementation-guide.md` (`M5.1`)
 ```
 
 
@@ -71,6 +76,9 @@ Implement the builder-reviewer-refiner workflow preset. Builder generates code, 
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p5-collaboration-workflows-implementation-guide.md` (`M5.2`)
 ```
 
 
@@ -105,6 +113,9 @@ Implement the specialization workflow preset. Create shared contract artifact, l
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p5-collaboration-workflows-implementation-guide.md` (`M5.3`)
 ```
 
 
@@ -139,6 +150,9 @@ Implement the iterative refinement workflow preset. Run agent, score result, syn
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p5-collaboration-workflows-implementation-guide.md` (`M5.4`)
 ```
 
 
@@ -173,6 +187,9 @@ Add CLI step timeline with per-node status indicators. Add GUI node timeline vie
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p5-collaboration-workflows-implementation-guide.md` (`M5.5`)
 ```
 
 
@@ -207,4 +224,7 @@ Write one golden-path and one failure-path integration test per workflow preset.
 ## Notes
 - Tier-1 launch adapters are claude and codex.
 - Experimental adapters require explicit opt-in.
+
+## Implementation Reference
+- `planning/p5-collaboration-workflows-implementation-guide.md` (`M5.6`)
 ```
