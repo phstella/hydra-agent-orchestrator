@@ -99,12 +99,7 @@ impl CodexAdapter {
 
     /// Parse a single line of Codex `--json` JSONL output into an `AgentEvent`.
     ///
-    /// Codex JSONL event types:
-    /// - `start` -> Progress
-    /// - `message` -> Message
-    /// - `tool_call` -> ToolCall
-    /// - `tool_result` -> ToolResult
-    /// - `completed` -> Completed + optional Usage
+    /// Supports both legacy and current Codex JSON event envelopes.
     pub fn parse_json_line(line: &str) -> Option<AgentEvent> {
         let v: serde_json::Value = serde_json::from_str(line).ok()?;
         let obj = v.as_object()?;
@@ -124,6 +119,14 @@ impl CodexAdapter {
                     percent: Some(0.0),
                 })
             }
+            "thread.started" => Some(AgentEvent::Progress {
+                message: "thread started".to_string(),
+                percent: Some(0.0),
+            }),
+            "turn.started" => Some(AgentEvent::Progress {
+                message: "turn started".to_string(),
+                percent: None,
+            }),
             "message" => {
                 let content = obj
                     .get("content")
@@ -134,6 +137,48 @@ impl CodexAdapter {
                     return None;
                 }
                 Some(AgentEvent::Message { content })
+            }
+            "item.completed" => {
+                let item = obj.get("item").and_then(|i| i.as_object())?;
+                let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match item_type {
+                    "agent_message" | "reasoning" => {
+                        let content = item
+                            .get("text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if content.is_empty() {
+                            return None;
+                        }
+                        Some(AgentEvent::Message { content })
+                    }
+                    "tool_call" => {
+                        let tool = item
+                            .get("name")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let input = item
+                            .get("input")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        Some(AgentEvent::ToolCall { tool, input })
+                    }
+                    "tool_result" => {
+                        let tool = item
+                            .get("name")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let output = item
+                            .get("output")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        Some(AgentEvent::ToolResult { tool, output })
+                    }
+                    _ => None,
+                }
             }
             "tool_call" => {
                 let tool = obj
@@ -156,19 +201,28 @@ impl CodexAdapter {
                     .unwrap_or(serde_json::Value::Null);
                 Some(AgentEvent::ToolResult { tool, output })
             }
-            "completed" => {
+            "completed" | "turn.completed" => {
                 if let Some(usage) = obj.get("usage").and_then(|u| u.as_object()) {
                     let input_tokens = usage
                         .get("input_tokens")
+                        .or_else(|| usage.get("prompt_tokens"))
                         .and_then(|t| t.as_u64())
                         .unwrap_or(0);
                     let output_tokens = usage
                         .get("output_tokens")
+                        .or_else(|| usage.get("completion_tokens"))
                         .and_then(|t| t.as_u64())
                         .unwrap_or(0);
                     let mut extra = HashMap::new();
                     if let Some(cost) = obj.get("cost_usd").and_then(|c| c.as_f64()) {
                         extra.insert("cost_usd".to_string(), serde_json::Value::from(cost));
+                    }
+                    if let Some(cached) = usage.get("cached_input_tokens").and_then(|t| t.as_u64())
+                    {
+                        extra.insert(
+                            "cached_input_tokens".to_string(),
+                            serde_json::Value::from(cached),
+                        );
                     }
                     return Some(AgentEvent::Usage {
                         input_tokens,
@@ -181,6 +235,25 @@ impl CodexAdapter {
                     .and_then(|c| c.as_f64())
                     .map(|c| format!("cost: ${c:.4}"));
                 Some(AgentEvent::Completed { summary })
+            }
+            "turn.failed" => {
+                let error = obj
+                    .get("error")
+                    .and_then(|e| e.as_object())
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .or_else(|| obj.get("message").and_then(|m| m.as_str()))
+                    .unwrap_or("turn failed")
+                    .to_string();
+                Some(AgentEvent::Failed { error })
+            }
+            "error" => {
+                let error = obj
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("codex error")
+                    .to_string();
+                Some(AgentEvent::Failed { error })
             }
             _ => None,
         }
@@ -649,6 +722,67 @@ mod tests {
         let line = r#"{"type":"completed"}"#;
         let evt = CodexAdapter::parse_json_line(line).unwrap();
         assert!(matches!(evt, AgentEvent::Completed { .. }));
+    }
+
+    #[test]
+    fn parse_line_turn_completed_with_usage() {
+        let line = r#"{"type":"turn.completed","usage":{"input_tokens":7645,"cached_input_tokens":6656,"output_tokens":42}}"#;
+        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        match evt {
+            AgentEvent::Usage {
+                input_tokens,
+                output_tokens,
+                extra,
+            } => {
+                assert_eq!(input_tokens, 7645);
+                assert_eq!(output_tokens, 42);
+                assert_eq!(
+                    extra
+                        .get("cached_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap(),
+                    6656
+                );
+            }
+            other => panic!("expected Usage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_line_item_completed_agent_message() {
+        let line = r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"codex ok"}}"#;
+        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        match evt {
+            AgentEvent::Message { content } => {
+                assert_eq!(content, "codex ok");
+            }
+            other => panic!("expected Message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_line_turn_failed_event() {
+        let line =
+            r#"{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}"#;
+        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        match evt {
+            AgentEvent::Failed { error } => {
+                assert!(error.contains("stream disconnected"));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_line_error_event() {
+        let line = r#"{"type":"error","message":"reconnecting"}"#;
+        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        match evt {
+            AgentEvent::Failed { error } => {
+                assert_eq!(error, "reconnecting");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 
     #[test]

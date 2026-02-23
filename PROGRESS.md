@@ -7,7 +7,7 @@ Last updated: 2026-02-23
 - **Phase**: 2 **complete**
 - **Milestone**: M2.12 complete; Phase 2 finished (12/12 milestones)
 - **Sprint**: Phase 2 complete
-- **Status**: All Phase 0 + Phase 1 + Phase 2 milestones implemented. `cargo check/build/test/clippy` clean. 225 tests passing (208 unit + 12 integration + 5 CLI).
+- **Status**: All Phase 0 + Phase 1 + Phase 2 milestones implemented. `cargo check/build/test/clippy` clean. 237 tests passing (218 hydra-core unit + 12 integration + 7 hydra-cli). Live budget-stop validation now verified for single-agent and multi-agent runs (`run_id=5021b0e3-9848-464f-91ef-6e14a92cc092`, `run_id=31032e95-dad2-4d83-a18e-151a80bcd8f5`).
 
 ## Completed Milestones
 
@@ -25,8 +25,8 @@ Last updated: 2026-02-23
 | M1.2 | Config Parser and Defaults | 2026-02-23 | `hydra.toml` parser via `serde` + `toml` in `hydra-core::config`. Full typed schema: scoring (profile, weights, gates, diff_scope), adapters, worktree, supervisor. `deny_unknown_fields` catches typos. 11 unit tests. |
 | M1.3 | Worktree Lifecycle Service | 2026-02-23 | `WorktreeService` with async create/list/remove/force_cleanup via git CLI. Branch naming: `hydra/<run_id>/agent/<agent_key>`. Porcelain parser for worktree list. 7 unit tests. |
 | M1.4 | Process Supervisor (Single Agent) | 2026-02-23 | `supervise()` function with hard timeout, idle timeout, cancellation, bounded output buffering. 8 unit tests. |
-| M1.5 | Claude Adapter Runtime Path | 2026-02-23 | `build_command()`, `parse_stream_json_line()`, `parse_line/raw()`. 14 new tests. |
-| M1.6 | Codex Adapter Runtime Path | 2026-02-23 | `build_command()`, `parse_json_line()`, flag fallback logic. 13 new tests. |
+| M1.5 | Claude Adapter Runtime Path | 2026-02-23 | `build_command()`, `parse_stream_json_line()`, `parse_line/raw()`. Runtime command now adds `--verbose` when supported to satisfy current CLI stream-json requirements. |
+| M1.6 | Codex Adapter Runtime Path | 2026-02-23 | `build_command()`, `parse_json_line()`, flag fallback logic. Parser now supports current Codex JSON events (`thread.started`, `item.completed`, `turn.completed`, `turn.failed`) for runtime usage capture. |
 | M1.7 | CLI Race Command (Single Agent) | 2026-02-23 | `hydra race --agents <agent>` end-to-end pipeline. |
 | M1.8 | Interrupt and Recovery Tests | 2026-02-23 | 6 integration tests covering all interrupt/cleanup paths. |
 | M2.1 | Adapter Registry and Tier Policy | 2026-02-23 | `AdapterRegistry` in hydra-core with tier-policy enforcement. `from_config()`, `resolve()`, `resolve_many()`, `tier1()`, `available()`. `--allow-experimental-adapters` flag on CLI. 10 unit tests. |
@@ -39,7 +39,7 @@ Last updated: 2026-02-23
 | M2.8 | CLI Merge Command with Dry-Run | 2026-02-23 | `hydra merge --run-id <UUID> [--agent] [--dry-run\|--confirm] [--force]`. Dry-run with conflict detection. Winner auto-selection from scores. Merge report artifact. |
 | M2.9 | Experimental Cursor Opt-In Path | 2026-02-23 | `CursorAdapter.build_command()` and `parse_line()`/`parse_raw()` implemented. Stream-json parsing. `[experimental]` label in race output. 8 new tests. |
 | M2.10 | End-to-End Race Integration Test | 2026-02-23 | 6 integration tests: two-agent concurrent completion, one-agent failure isolation, scoring ranking correctness, scoring reproducibility from artifacts, baseline capture roundtrip, artifact layout completeness. |
-| M2.11 | Cost and Budget Engine | 2026-02-23 | `UsageAccumulator` for token capture, `CostEstimate`, `BudgetAction::Continue\|Stop`, token-based budget enforcement. 6 tests. |
+| M2.11 | Cost and Budget Engine | 2026-02-23 | `UsageAccumulator` for token capture, `CostEstimate`, `BudgetAction::Continue\|Stop`, token/cost budget enforcement. Live-validated token budget stop from real adapter usage in single-agent (`5021b0e3-9848-464f-91ef-6e14a92cc092`) and multi-agent (`31032e95-dad2-4d83-a18e-151a80bcd8f5`) races. |
 | M2.12 | Observability Contract | 2026-02-23 | `schema_version` bumped to 2, `event_schema_version` added. `EventSchemaDefinition` enumerates all 13 event kinds. `RunHealthMetrics` computed from events (success_rate, overhead, adapter_errors). 4 tests. |
 
 ## In-Progress Work
@@ -84,18 +84,20 @@ Last updated: 2026-02-23
 | 2026-02-23 | Diff scope uses `git diff --numstat` for machine-parseable output | Avoids fragile stat parsing; gives per-file line counts |
 | 2026-02-23 | Manifest schema_version bumped to 2 for Phase 2 | Adds `event_schema_version` field; breaking change from v1 |
 | 2026-02-23 | `RunHealthMetrics` computed from events, not manifest | Events are source of truth; metrics are derived |
+| 2026-02-23 | Codex parser now handles current `--json` event envelope (`turn.completed` usage) | Restores runtime token capture and budget-stop behavior after upstream CLI event-shape drift |
 
 ## Open Issues
 
 - `which` v7 pinned; v8 available but not yet evaluated.
 - CI workflow not yet pushed to remote/tested on GitHub Actions.
+- Multi-agent budget stop may cancel slower adapters before they emit usage, resulting in expected per-agent `usage_status: missing` for canceled peers.
 
 ## Crate Status
 
 | Crate | Exists | Compiles | Tests |
 |-------|--------|----------|-------|
-| hydra-core | Yes | Yes | 208 unit + 12 integration = 220 passing |
-| hydra-cli | Yes | Yes | 5 passing |
+| hydra-core | Yes | Yes | 218 unit + 12 integration = 230 passing |
+| hydra-cli | Yes | Yes | 7 passing |
 | hydra-app | No | - | - |
 
 ## Phase Progress
@@ -113,7 +115,7 @@ Last updated: 2026-02-23
 
 1. Read `CLAUDE.md` for project overview and conventions.
 2. Phase 2 is **complete** — all 12 milestones done (M2.1 through M2.12).
-3. Current baseline: `hydra-core` 220 passing (208 unit + 12 integration), `hydra-cli` 5 passing. `cargo check --workspace`, `cargo build --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo fmt --all` are clean.
+3. Current baseline: `hydra-core` 230 passing (218 unit + 12 integration), `hydra-cli` 7 passing. `cargo check --workspace`, `cargo build --workspace`, `cargo test --workspace --locked --offline`, `cargo clippy --workspace --all-targets --locked --offline -- -D warnings`, and `cargo fmt --all` are clean.
 4. **Next**: Phase 3 — GUI Alpha, starting with M3.1 (Tauri App Bootstrap).
 5. Key files added/modified in Phase 2:
    - `crates/hydra-core/src/adapter/registry.rs` — NEW: `AdapterRegistry` with tier policy
@@ -130,3 +132,7 @@ Last updated: 2026-02-23
 6. Dependencies added: `sha2`, `regex` in hydra-core; `sha2` in hydra-cli.
 7. Race command flow now supports N agents: `load_config()` → registry.resolve_many() → create worktrees per agent → JoinSet parallel spawn → per-agent event writers → aggregate results → cleanup → summary output.
 8. Scoring pipeline: capture_baseline() → per-agent: score_build/tests/lint/diff_scope → rank_agents() with composite + gates → score.json per agent.
+9. Live validation evidence:
+   - Successful real Codex run with parsed usage: `run_id=189d1fc1-4f08-4e71-8c8a-484b0c4e2e37`.
+   - Budget-stop enforced from real token usage: `run_id=5021b0e3-9848-464f-91ef-6e14a92cc092` (`max_tokens_total=1`).
+   - Two-adapter live race (`claude,codex`) with shared budget stop: `run_id=31032e95-dad2-4d83-a18e-151a80bcd8f5`.

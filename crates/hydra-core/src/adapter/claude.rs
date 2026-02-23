@@ -65,6 +65,7 @@ impl ClaudeAdapter {
             "--disallowedTools",
             "--max-turns",
             "--input-format",
+            "--verbose",
         ];
         for flag in &optional {
             if Self::contains_flag_token(help_text, flag) {
@@ -289,6 +290,10 @@ impl AgentAdapter for ClaudeAdapter {
             "stream-json".to_string(),
         ];
 
+        if req.supported_flags.iter().any(|f| f == "--verbose") {
+            args.push("--verbose".to_string());
+        }
+
         if req.force_edit {
             args.push("--permission-mode".to_string());
             args.push("bypassPermissions".to_string());
@@ -340,6 +345,13 @@ mod tests {
         assert!(flags.contains(&"--allowedTools".to_string()));
         assert!(flags.contains(&"--disallowedTools".to_string()));
         assert!(flags.contains(&"--max-turns".to_string()));
+    }
+
+    #[test]
+    fn parse_help_detects_verbose_flag() {
+        let help = "Options:\n  --verbose  Enables verbose logging";
+        let flags = ClaudeAdapter::parse_help_flags(help);
+        assert!(flags.contains(&"--verbose".to_string()));
     }
 
     #[test]
@@ -431,6 +443,23 @@ mod tests {
         };
         let cmd = adapter.build_command(&req).unwrap();
         assert!(!cmd.args.contains(&"--permission-mode".to_string()));
+    }
+
+    #[test]
+    fn build_command_includes_verbose_when_supported() {
+        let adapter = ClaudeAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "describe the code".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: false,
+            force_edit: true,
+            output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec!["--verbose".to_string()],
+        };
+        let cmd = adapter.build_command(&req).unwrap();
+        assert!(cmd.args.contains(&"--verbose".to_string()));
     }
 
     #[test]
