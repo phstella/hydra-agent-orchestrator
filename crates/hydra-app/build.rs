@@ -66,10 +66,20 @@ export type CheckStatus = typeof CHECK_STATUS_VALUES[number];\n",
         check_statuses = check_statuses.join(", "),
     );
 
-    fs::write(out_dir.join("rust-enums.ts"), generated)?;
+    write_if_changed(out_dir.join("rust-enums.ts"), &generated)?;
     Ok(())
 }
 
 fn enum_literal<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string(value).expect("enum should serialize to string")
+}
+
+fn write_if_changed(path: PathBuf, contents: &str) -> Result<(), Box<dyn std::error::Error>> {
+    match fs::read_to_string(&path) {
+        Ok(existing) if existing == contents => Ok(()),
+        _ => {
+            fs::write(path, contents)?;
+            Ok(())
+        }
+    }
 }
