@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod artifact;
 pub mod config;
+pub mod doctor;
 pub mod error;
 pub mod security;
 pub mod supervisor;

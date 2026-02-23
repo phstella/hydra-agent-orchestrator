@@ -12,6 +12,7 @@ path = "src/main.rs"
 hydra-core = { path = "../hydra-core" }
 anyhow.workspace = true
 clap.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true
