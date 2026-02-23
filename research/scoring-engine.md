@@ -1,293 +1,250 @@
 # Scoring Engine
 
-## Purpose
+Last updated: 2026-02-23
 
-The scoring engine is Hydra's core differentiator. After agents complete a task in their isolated worktrees, the engine evaluates each solution across multiple quality dimensions, computes a weighted score, and ranks them. This transforms a subjective "which diff looks better" into an objective, reproducible comparison.
+## 1. Objective
 
----
+Hydra scoring converts "which diff feels better" into a reproducible ranking.
 
-## Scoring Dimensions
+Scoring must be:
+- deterministic from captured artifacts
+- interpretable (dimension breakdown visible)
+- configurable per repository
+- resistant to common AI-agent failure patterns (scope creep, broken tests, noisy refactors)
 
-### 1. Build (default weight: 30)
+## 2. Scoring Principles
 
-Does the agent's code compile/build successfully?
+1. Correctness over speed.
+2. Regressions are penalized more than no-op outcomes.
+3. Baseline normalization is mandatory.
+4. Missing dimensions should renormalize, not silently bias totals.
 
-**Process:**
-1. Run the configured `build_command` inside the agent's worktree directory
-2. Capture exit code, stdout, and stderr
-3. Score:
-   - Exit code 0 → 100 points
-   - Exit code non-zero → 0 points
+## 3. Dimension Set (Default)
 
-**Rationale:** A solution that doesn't build is fundamentally broken. This is a binary pass/fail gate with the highest default weight.
+| Dimension | Default Weight | Purpose |
+|---|---:|---|
+| Build | 30 | Hard viability gate |
+| Tests | 30 | Correctness and regression control |
+| Lint | 15 | Maintainability signal |
+| Diff Scope | 15 | Focus and reviewability |
+| Speed | 10 | Throughput/cost proxy |
 
-```rust
-pub async fn score_build(worktree: &Path, command: &str) -> BuildScore {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(worktree)
-        .output()
-        .await;
+Total = 100.
 
-    match output {
-        Ok(o) if o.status.success() => BuildScore { passed: true, score: 100.0 },
-        Ok(o) => BuildScore {
-            passed: false,
-            score: 0.0,
-            // stderr captured for display in results
-        },
-        Err(e) => BuildScore { passed: false, score: 0.0 },
-    }
-}
+## 4. Baseline Capture
+
+Before agents run, Hydra captures baseline signals on base ref:
+
+- `build_baseline`: pass/fail and duration
+- `test_baseline`: pass/fail counts and failures
+- `lint_baseline`: warning/error counts
+
+Why this matters:
+- some repos already fail tests/lint
+- agents should not be punished for pre-existing failures unless they worsen them
+
+## 5. Dimension Definitions
+
+### 5.1 Build score
+
+Binary by default:
+- pass => 100
+- fail => 0
+
+Optional gradient mode (future):
+- partial credit for specific build targets
+
+### 5.2 Test score
+
+Let:
+- `B_pass`: baseline passed tests
+- `A_pass`: agent passed tests
+- `A_total`: agent total tests
+- `new_tests = max(0, A_total - baseline_total)`
+
+Formula:
+
+```text
+pass_rate = if A_total == 0 then 0 else A_pass / A_total
+regression = max(0, B_pass - A_pass)
+reg_penalty = if B_pass == 0 then 0 else (regression / B_pass) * 60
+new_test_bonus = if new_tests > 0 then min(10, new_tests * 0.5) else 0
+score = clamp((pass_rate * 100) - reg_penalty + new_test_bonus, 0, 100)
 ```
 
-### 2. Tests (default weight: 30)
+### 5.3 Lint score
 
-How many tests pass in the agent's worktree?
+Let:
+- `new_errors = max(0, A_errors - B_errors)`
+- `new_warnings = max(0, A_warnings - B_warnings)`
+- `resolved = max(0, (B_errors + B_warnings) - (A_errors + A_warnings))`
 
-**Process:**
-1. Run the baseline test suite in the original repo to get `baseline_pass_count` and `baseline_total_count`
-2. Run the configured `test_command` inside the agent's worktree
-3. Parse test output for pass/fail counts (adapter-specific parsers for common frameworks)
-4. Score formula:
+Formula:
 
-```
-pass_rate = agent_pass_count / agent_total_count
-
-If agent_total_count > baseline_total_count:
-    bonus = (new_tests / agent_total_count) * 10  // reward adding tests
-Else:
-    bonus = 0
-
-If agent_pass_count >= baseline_pass_count:
-    regression_penalty = 0
-Else:
-    regression_penalty = ((baseline_pass_count - agent_pass_count) / baseline_pass_count) * 50
-
-score = (pass_rate * 100) + bonus - regression_penalty
-score = clamp(score, 0, 100)
+```text
+score = clamp(100 - (new_errors * 12) - (new_warnings * 2) + (resolved * 1), 0, 100)
 ```
 
-**Rationale:** Tests are the strongest signal for correctness. Agents that break existing tests are heavily penalized. Agents that add new passing tests get a small bonus.
+### 5.4 Diff scope score
 
-**Test output parsing:** Hydra ships parsers for common test runners:
-- `npm test` / `jest` → look for "Tests: X passed, Y failed"
-- `cargo test` → look for "test result: ok. X passed; Y failed"
-- `pytest` → look for "X passed, Y failed"
-- `go test` → look for "ok" or "FAIL" lines
-- Fallback: exit code only (pass = 100, fail = 0)
+Inputs:
+- lines added/removed
+- files touched
+- optional path scope policy
 
-### 3. Lint (default weight: 15)
+Heuristics:
+- modest churn scores highest
+- broad unrelated edits penalized
+- out-of-scope path edits can trigger hard penalty
 
-How clean is the agent's code compared to the baseline?
+Formula skeleton:
 
-**Process:**
-1. Run the configured `lint_command` in the original repo → `baseline_warnings`, `baseline_errors`
-2. Run the same command in the agent's worktree → `agent_warnings`, `agent_errors`
-3. Score formula:
-
-```
-new_errors = max(0, agent_errors - baseline_errors)
-new_warnings = max(0, agent_warnings - baseline_warnings)
-resolved_issues = max(0, (baseline_errors + baseline_warnings) - (agent_errors + agent_warnings))
-
-error_penalty = new_errors * 10
-warning_penalty = new_warnings * 2
-resolution_bonus = resolved_issues * 1
-
-score = 100 - error_penalty - warning_penalty + resolution_bonus
-score = clamp(score, 0, 100)
+```text
+scope_score = weighted(churn_score, files_score, scope_violation_score)
 ```
 
-**Rationale:** New lint errors indicate sloppy code. Agents that resolve pre-existing lint issues get a small bonus. Errors weigh 5x more than warnings.
+Recommended hard guard:
+- if "protected paths" changed unexpectedly, cap diff scope score at 30.
 
-### 4. Diff Size (default weight: 15)
+### 5.5 Speed score
 
-How focused is the agent's change?
+Relative to fastest successful agent:
 
-**Process:**
-1. Run `git diff --stat <base_branch>..<agent_branch>` in the worktree
-2. Extract lines added, lines removed, files changed
-3. Score formula:
-
-```
-total_churn = lines_added + lines_removed
-files_touched = files_changed
-
-// Penalize excessive churn (more than 500 lines is suspicious for most tasks)
-if total_churn <= 100:
-    churn_score = 100
-elif total_churn <= 500:
-    churn_score = 100 - ((total_churn - 100) / 400) * 40  // linear decay 100→60
-else:
-    churn_score = max(20, 60 - ((total_churn - 500) / 1000) * 40)
-
-// Penalize touching too many files
-if files_touched <= 5:
-    file_score = 100
-elif files_touched <= 15:
-    file_score = 100 - ((files_touched - 5) / 10) * 30
-else:
-    file_score = max(30, 70 - ((files_touched - 15) / 20) * 40)
-
-score = (churn_score * 0.6) + (file_score * 0.4)
+```text
+fastest = min(successful_agent_durations)
+score = clamp((fastest / agent_duration) * 100, 0, 100)
 ```
 
-**Rationale:** AI agents have a tendency to make unnecessary changes, refactor unrelated code, or produce verbose implementations. Smaller, focused diffs are generally better — they are easier to review, less likely to introduce regressions, and indicate the agent understood the task scope.
+If agent fails, speed is still computed but only used if policy allows (default: keep).
 
-### 5. Speed (default weight: 10)
+## 6. Composite Score
 
-How fast did the agent complete the task?
-
-**Process:**
-1. Record `started_at` and `completed_at` for each agent
-2. Compute `duration_seconds` for each
-3. Rank agents by duration: fastest gets 100, others scaled relative to fastest
-
-```
-fastest = min(all agent durations)
-
-for each agent:
-    ratio = fastest / agent.duration
-    score = ratio * 100
-    // Agent twice as slow as fastest → 50 points
-    // Agent same speed as fastest → 100 points
+```text
+composite = sum(dimension_score * dimension_weight) / sum(active_weights)
 ```
 
-**Rationale:** Speed matters when you're paying per-token. A slower agent is burning more money for the same task. However, speed has the lowest default weight because a fast wrong answer is worse than a slow right one.
+`active_weights` excludes missing/disabled dimensions.
 
----
+## 7. Gating Rules (Recommended)
 
-## Composite Score Calculation
+Before ranking, apply policy gates:
 
-```rust
-pub fn calculate_composite(breakdown: &ScoreBreakdown, weights: &Weights) -> f64 {
-    let total_weight = weights.build + weights.tests + weights.lint
-        + weights.diff_size + weights.speed;
+1. If build fails => mark `not_mergeable`.
+2. If tests regress beyond threshold => mark `not_mergeable`.
+3. If security check (optional command) fails => mark `not_mergeable`.
 
-    let weighted_sum =
-        breakdown.build.unwrap_or(0.0) * weights.build as f64
-        + breakdown.tests.unwrap_or(0.0) * weights.tests as f64
-        + breakdown.lint.unwrap_or(0.0) * weights.lint as f64
-        + breakdown.diff_size.unwrap_or(0.0) * weights.diff_size as f64
-        + breakdown.speed.unwrap_or(0.0) * weights.speed as f64;
+Ranking still shown, but merge action disabled by default for non-mergeable candidates.
 
-    weighted_sum / total_weight as f64
-}
-```
+## 8. Language/Repo Profiles
 
-### Example Calculation
+Hydra should ship profile presets:
 
-Three agents complete a task. Weights: build=30, tests=30, lint=15, diff_size=15, speed=10.
+- `js-node`:
+  - build: `npm run build`
+  - test: `npm test -- --runInBand`
+  - lint: `npm run lint`
+- `rust`:
+  - build: `cargo build --all-targets`
+  - test: `cargo test`
+  - lint: `cargo clippy --all-targets -- -D warnings`
+- `python`:
+  - build: optional
+  - test: `pytest -q`
+  - lint: `ruff check .`
 
-| Dimension | Claude Code | Codex CLI | Cursor CLI |
-|---|---|---|---|
-| Build | 100 (passes) | 100 (passes) | 0 (fails) |
-| Tests | 95 (1 new test, all pass) | 80 (all pass, no new) | 0 (can't run, build failed) |
-| Lint | 90 (2 new warnings) | 100 (clean) | 0 |
-| Diff size | 75 (moderate churn) | 95 (minimal changes) | 60 (scattered changes) |
-| Speed | 80 (45s) | 100 (36s, fastest) | 70 (51s) |
+## 9. Determinism and Reproducibility
 
-Composite:
-- **Claude Code:** (100×30 + 95×30 + 90×15 + 75×15 + 80×10) / 100 = **91.0**
-- **Codex CLI:** (100×30 + 80×30 + 100×15 + 95×15 + 100×10) / 100 = **93.3** (winner)
-- **Cursor CLI:** (0×30 + 0×30 + 0×15 + 60×15 + 70×10) / 100 = **16.0**
+Store all scoring artifacts:
+- raw command outputs
+- parsed summaries
+- formulas and effective weights
+- scoring engine version
 
----
+This supports exact replay and audit.
 
-## Evaluation Pipeline
+## 10. Anti-Gaming Controls
 
-The scoring engine runs sequentially through each dimension to avoid resource contention:
+Potential gaming pattern: agent reduces tests to inflate pass rate.
 
-```
-1. Baseline capture (once per race)
-   ├── Run build_command in original repo → baseline build state
-   ├── Run test_command in original repo → baseline test counts
-   └── Run lint_command in original repo → baseline lint counts
+Mitigations:
+1. Compare total test count against baseline.
+2. Penalize dropped tests.
+3. Optionally fail score if test discovery drops unexpectedly.
 
-2. Per-agent evaluation (parallel across agents)
-   ├── Build score     (run build_command in worktree)
-   ├── Test score      (run test_command in worktree)
-   ├── Lint score      (run lint_command in worktree)
-   ├── Diff size score (git diff --stat)
-   └── Speed score     (from AgentProcess metadata)
+Potential gaming pattern: formatting-only huge diff.
 
-3. Ranking
-   ├── Calculate composite scores
-   ├── Sort descending
-   └── Emit ScoringResult event
-```
+Mitigations:
+1. Diff scope penalty for excessive churn.
+2. Optional formatter-aware diff normalization (future).
 
-Steps within "per-agent evaluation" run sequentially per agent (build before tests, since a failed build makes tests meaningless), but different agents can be evaluated in parallel.
+## 11. Performance Model
 
-### Short-Circuit Optimization
+Scoring execution plan:
+- baseline commands once per run
+- per-agent checks run in parallel with per-check timeout
+- command stdout/stderr truncated for UI but full logs saved to artifact files
 
-If an agent's build fails (score = 0), skip tests and lint for that agent — they would all fail anyway. This saves time and compute:
+Recommended default timeouts:
+- build: 300s
+- test: 600s
+- lint: 300s
 
-```rust
-let build = score_build(worktree, &config.build_command).await;
-if !build.passed {
-    return AgentScore {
-        breakdown: ScoreBreakdown {
-            build: Some(0.0),
-            tests: Some(0.0),
-            lint: Some(0.0),
-            diff_size: Some(score_diff_size(worktree, base_branch).await),
-            speed: Some(speed_score),
-        },
-        ..
-    };
-}
-```
-
----
-
-## Configuration
-
-Via `hydra.toml`:
+## 12. Example `hydra.toml`
 
 ```toml
 [scoring]
-weights = { build = 30, tests = 30, lint = 15, diff_size = 15, speed = 10 }
-build_command = "npm run build"
-test_command = "npm test"
-lint_command = "npm run lint"
-timeout_per_check_seconds = 120
+profile = "js-node"
+timeout_per_check_seconds = 300
 
-[scoring.thresholds]
-auto_merge_minimum = 85.0    # Auto-merge if winner scores above this
-fail_maximum = 30.0          # Flag as "all agents failed" below this
+[scoring.weights]
+build = 30
+tests = 30
+lint = 15
+diff_scope = 15
+speed = 10
+
+[scoring.gates]
+require_build_pass = true
+max_test_regression_percent = 0
+
+[scoring.diff_scope]
+max_files_soft = 20
+max_churn_soft = 800
+protected_paths = ["infra/", "scripts/release/"]
 ```
 
-### Defaults When Commands Are Missing
+## 13. Output Contract
 
-If a project doesn't configure a `build_command`, `test_command`, or `lint_command`, the corresponding dimension is excluded from scoring and the remaining weights are renormalized.
+CLI and GUI should receive:
 
-Example: no `test_command` configured → weights become build=30, lint=15, diff_size=15, speed=10 → total=70 → normalized to 100.
-
----
-
-## Output Format
-
-### CLI Output
-
+```json
+{
+  "run_id": "...",
+  "rankings": [
+    {
+      "agent": "codex",
+      "mergeable": true,
+      "total": 91.2,
+      "breakdown": {
+        "build": 100,
+        "tests": 92,
+        "lint": 88,
+        "diff_scope": 90,
+        "speed": 84
+      }
+    }
+  ]
+}
 ```
-Race Results — Task: "implement JWT auth"
-============================================
 
-  #1  Codex CLI      93.3 / 100    [BUILD: ✓] [TESTS: 80] [LINT: 100] [DIFF: 95] [SPEED: 100]
-  #2  Claude Code    91.0 / 100    [BUILD: ✓] [TESTS: 95] [LINT: 90]  [DIFF: 75] [SPEED: 80]
-  #3  Cursor CLI     16.0 / 100    [BUILD: ✗] [TESTS: --] [LINT: --]  [DIFF: 60] [SPEED: 70]
+## 14. Open Scoring Questions
 
-Winner: Codex CLI (branch: hydra/codex-1708646400)
-Run `hydra merge codex-1708646400` to merge into your branch.
-```
+1. Should speed be replaced with direct cost-per-success once token pricing capture is stable?
+2. Should we add security scan dimension by default (`npm audit`, `cargo audit`, `pip-audit`), or keep optional?
+3. Should we support pairwise preference learning from user merge choices for weight auto-tuning?
 
-### GUI Output
+## 15. Related Docs
 
-The `ScoreBoard` React component receives `ScoringResult` events and renders:
-- Ranked cards with agent name, total score, and a breakdown bar chart
-- Color coding: green (>80), yellow (50-80), red (<50)
-- Expandable detail panels showing raw build/test/lint output
-- "Merge Winner" button on the top-ranked card
+- `research/architecture.md`
+- `research/collaboration-workflows.md`
+- `research/roadmap.md`

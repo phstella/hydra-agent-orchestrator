@@ -1,194 +1,143 @@
-# Competitive Analysis — AI Agent Orchestration Tools (Feb 2026)
+# Competitive Analysis
 
-## Executive Summary
+Last updated: 2026-02-23
 
-The AI coding agent orchestration space has matured rapidly. At least five tools now address multi-agent parallel execution with workspace isolation. However, none combine automated quality scoring, agent collaboration workflows, and a polished cross-platform desktop GUI. Hydra targets that gap.
+## 1. Scope and Method
 
----
+This analysis focuses on tools that orchestrate multiple AI coding agents or parallel coding sessions.
 
-## Existing Tools
+Evidence policy:
+- **Verified**: directly documented in official docs/README/source.
+- **Inferred**: likely true but not clearly documented.
 
-### Claude Squad
+## 2. Tools Reviewed
 
-| Attribute | Detail |
-|---|---|
-| **Repository** | [smtg-ai/claude-squad](https://github.com/smtg-ai/claude-squad) |
-| **Language** | Go |
-| **Interface** | TUI (terminal) |
-| **Platforms** | Linux, macOS (requires tmux + gh CLI) |
-| **Agents supported** | Claude Code, Codex, Gemini, Aider, custom |
-| **Isolation** | Git worktrees per task |
-| **Collaboration** | None — agents run independently |
-| **Scoring/evaluation** | None |
+1. Claude Squad (`smtg-ai/claude-squad`)
+2. Parallel Code (`johannesjo/parallel-code`)
+3. Mux (`coder/mux`)
+4. cmux (`manaflow-ai/cmux`)
+5. Claude Code subagents (native Anthropic workflow)
 
-**Strengths:**
-- Lightweight, runs inside any terminal
-- Supports auto-accept mode for fully autonomous operation
-- Clean tmux-based session management
-- Active community, Homebrew install
+## 3. Tool Snapshots
 
-**Weaknesses:**
-- Hard dependency on tmux — not portable to Windows without WSL
-- No quality evaluation of agent outputs; user must manually diff
-- No collaboration or chaining between agents
-- No GUI — review requires switching between tmux panes and running git diff manually
-- No cost or token tracking
+### 3.1 Claude Squad
 
----
+Verified observations:
+- Terminal-first orchestration tool.
+- Supports parallel coding with multiple providers.
+- Uses `tmux` and git worktrees in its model.
+- Has CLI automation commands for task orchestration.
 
-### Parallel Code
+Implications:
+- Strong for power users already living in terminal/tmux.
+- Higher setup friction for teams wanting GUI-first workflows.
 
-| Attribute | Detail |
-|---|---|
-| **Repository** | [johannesjo/parallel-code](https://github.com/johannesjo/parallel-code) |
-| **Language** | TypeScript (Electron-based GUI) |
-| **Interface** | Desktop GUI |
-| **Platforms** | Linux, macOS, Windows |
-| **Agents supported** | Claude Code, Codex CLI, Gemini CLI |
-| **Isolation** | Git worktrees with automatic branch creation |
-| **Collaboration** | None |
-| **Scoring/evaluation** | None |
+### 3.2 Parallel Code
 
-**Strengths:**
-- GUI with keyboard shortcuts and mobile monitoring via QR code
-- Automatic `node_modules` symlink management across worktrees
-- Up to 5 agents simultaneously
-- Git branch management built in
+Verified observations:
+- Desktop application with side-by-side multi-agent execution.
+- Emphasizes git worktrees and branch isolation.
+- Supports multiple providers (OpenAI, Anthropic, Google) via CLI agents.
 
-**Weaknesses:**
-- Electron-based — heavy footprint alongside resource-intensive agents
-- No quality scoring or automated evaluation
-- No collaboration/chaining workflows
-- Limited to three specific agents; no plugin system for custom agents
-- No diff comparison view between agent outputs
+Implications:
+- Strong usability for visual monitoring.
+- Differentiation opportunity remains around deterministic scoring and workflow composition depth.
 
----
+### 3.3 Mux (Coder)
 
-### Mux (by Coder)
+Verified observations:
+- Positions as multi-agent coding tool with local/worktree/SSH execution modes.
+- Supports concurrent model runs and comparison workflows.
+- Has a docs/install surface and active repo.
 
-| Attribute | Detail |
-|---|---|
-| **Repository** | [coder/mux](https://github.com/coder/cmux) |
-| **Language** | TypeScript |
-| **Interface** | Desktop app + browser |
-| **Platforms** | Linux, macOS, Windows |
-| **Agents supported** | Multi-model (Sonnet, Grok, GPT-5, Opus) |
-| **Isolation** | Local, git worktrees, or SSH |
-| **Collaboration** | None |
-| **Scoring/evaluation** | Cost/token tracking only |
+Implications:
+- Strong competitor for advanced execution environments.
+- Opportunity remains in repo-specific quality gates and merge policy automation.
 
-**Strengths:**
-- Three isolation modes (local, worktrees, SSH) — most flexible
-- Multi-model support including commercial APIs
-- VS Code integration
-- Opportunistic compaction for context management
-- Cost and token tracking per session
+### 3.4 cmux (manaflow-ai)
 
-**Weaknesses:**
-- Still in nightly development (v0.18.1) — unstable
-- No automated quality evaluation of outputs
-- No agent collaboration/chaining
-- Heavy runtime (browser-based rendering)
-- No race-mode scoring concept
+Verified observations:
+- Native terminal-style app focused on coordinating coding agents.
+- Supports CLI agents and split/tab monitoring patterns.
+- Current communication and docs are highly macOS-oriented.
 
----
+Implications:
+- UX ideas are relevant (attention routing/terminal ergonomics).
+- Platform focus leaves room for Linux+Windows-first execution parity.
 
-### cmux (by manaflow-ai)
+### 3.5 Claude Code Subagents (native)
 
-| Attribute | Detail |
-|---|---|
-| **Repository** | [manaflow-ai/cmux](https://github.com/manaflow-ai/cmux) |
-| **Language** | Swift / AppKit |
-| **Interface** | Native macOS terminal (Ghostty-based) |
-| **Platforms** | macOS only |
-| **Agents supported** | Any CLI agent (terminal-native) |
-| **Isolation** | Git branches (visual tracking via tabs) |
-| **Collaboration** | None |
-| **Scoring/evaluation** | None |
+Verified observations:
+- Anthropic docs describe subagents and settings for agent behavior.
+- Native collaboration exists within Claude ecosystem.
 
-**Strengths:**
-- Native macOS performance — GPU-accelerated rendering
-- Notification system (blue rings, lit tabs) when agents need attention
-- In-app scriptable browser for testing
-- Compatible with Ghostty configuration ecosystem
+Implications:
+- Collaboration quality bar is rising.
+- Cross-vendor orchestration remains an open gap.
 
-**Weaknesses:**
-- macOS-only — no Linux or Windows support
-- No automated scoring or quality comparison
-- No collaboration workflows
-- Terminal-only UI — no diff viewer or merge tooling built in
+## 4. Comparative Feature Matrix
 
----
+Legend:
+- `Y` = clearly verified
+- `P` = partial/inferred
+- `N` = no evidence in reviewed sources
 
-### Claude Code Agent Teams (Native)
-
-| Attribute | Detail |
-|---|---|
-| **Source** | Built into Claude Code (Opus 4.6+) |
-| **Language** | N/A (native feature) |
-| **Interface** | CLI |
-| **Platforms** | Wherever Claude Code runs |
-| **Agents supported** | Claude Code only |
-| **Isolation** | Separate context windows |
-| **Collaboration** | Direct messaging, shared task lists |
-| **Scoring/evaluation** | None |
-
-**Strengths:**
-- True inter-agent messaging and shared task coordination
-- No extra tooling required — built into Claude Code itself
-- Lead coordinator + teammate model avoids bottlenecks
-
-**Weaknesses:**
-- Claude-only — cannot orchestrate Codex, Cursor, or Aider
-- No quality scoring or automated evaluation
-- No visual diff/merge interface
-- Tied to Anthropic's ecosystem
-
----
-
-## Feature Matrix
-
-| Feature | Claude Squad | Parallel Code | Mux | cmux | Agent Teams | **Hydra** |
+| Feature | Claude Squad | Parallel Code | Mux | cmux | Claude Subagents | Hydra (target) |
 |---|---|---|---|---|---|---|
-| Cross-platform (Linux + Windows) | Partial (WSL) | Yes | Yes | No | Yes | **Yes** |
-| Desktop GUI | No | Yes (Electron) | Yes | Yes (macOS) | No | **Yes (Tauri)** |
-| CLI mode | Yes | No | No | No | Yes | **Yes** |
-| Git worktree isolation | Yes | Yes | Yes | Partial | No | **Yes** |
-| Multi-agent support | Yes | Yes | Yes | Yes | No | **Yes** |
-| Custom/plugin agents | Yes | No | Partial | Yes | No | **Yes** |
-| Automated quality scoring | No | No | No | No | No | **Yes** |
-| Race mode with ranking | No | No | No | No | No | **Yes** |
-| Collaboration workflows | No | No | No | No | Yes | **Yes** |
-| Builder/Reviewer chaining | No | No | No | No | Partial | **Yes** |
-| Cost/token tracking | No | No | Yes | No | No | **Yes** |
-| Diff comparison view | No | No | No | No | No | **Yes** |
-| One-click merge | No | No | No | No | No | **Yes** |
-| Lightweight footprint | Yes | No | No | Yes | Yes | **Yes** |
+| Multi-agent parallel execution | Y | Y | Y | Y | P | Y |
+| Git worktree-centric isolation | Y | Y | Y | P | N | Y |
+| GUI monitoring | N | Y | Y | Y | N | Y |
+| CLI automation surface | Y | P | P | P | Y | Y |
+| Deterministic quality scoring | N | N | N | N | N | Y |
+| Cross-vendor collaboration workflows | P | P | P | P | N | Y |
+| Merge policy gates | P | P | P | P | N | Y |
+| Linux + Windows first-class target | P | Y | Y | P | P | Y |
 
----
+## 5. Strategic Opportunity for Hydra
 
-## Hydra's Differentiation Strategy
+### Primary wedge
 
-### Primary moat — automated quality scoring
+**Deterministic evaluation and merge safety** across multiple agents in one run:
+- baseline-aware scoring
+- policy gates (`mergeable` vs `non-mergeable`)
+- artifact-backed audit trail
 
-No existing tool evaluates agent output quality. Users manually read diffs and pick a winner. Hydra automates this with a scoring engine that runs compilation, tests, lint, and diff-size analysis against each agent's worktree, then ranks solutions. This transforms "race multiple agents" from a novelty into a measurable productivity tool.
+### Secondary wedge
 
-### Secondary moat — collaboration workflows
+**Composable collaboration workflows** that are vendor-neutral:
+- builder/reviewer/refiner
+- specialization with scope checks
+- iterative loops with convergence guards
 
-Claude Code Agent Teams shows inter-agent collaboration is valuable, but it is locked to a single vendor. Hydra enables cross-vendor collaboration: Claude writes code, Codex reviews it, Cursor refines it. Builder/Reviewer loops, specialization by directory, and iterative refinement via scoring feedback are workflows no competitor offers.
+### Tertiary wedge
 
-### Tertiary moat — lightweight cross-platform GUI + CLI
+**Dual-surface product**:
+- CLI for automation
+- Tauri GUI for monitoring/comparison
 
-Hydra ships as both a CLI (for terminal users and CI) and a Tauri desktop app (for visual users). At ~2-5MB, it avoids the Electron tax that Parallel Code and Mux impose. Linux-first with Windows support covers the platforms cmux ignores.
+## 6. Competitive Risks
 
----
+1. Existing tools can add scorecards quickly (UI-level scoring without deep determinism).
+2. Vendor-native ecosystems may reduce need for cross-vendor orchestration.
+3. Adapter fragility can erase product trust if CLIs drift often.
 
-## Risks and Mitigations
+## 7. Mitigations
 
-| Risk | Mitigation |
-|---|---|
-| Claude Code Agent Teams becomes cross-vendor | Hydra's scoring engine and GUI remain unique regardless |
-| Mux stabilizes and adds scoring | First-mover advantage on scoring + collaboration; Tauri weight advantage |
-| Agent CLI interfaces change/break | Adapter pattern isolates breakage to a single module per agent |
-| Cursor CLI headless mode is unstable | Implement timeout/watchdog; degrade gracefully to Claude + Codex |
-| Resource exhaustion running 3+ agents | Configurable concurrency limits; agent queuing in hydra-core |
+1. Treat adapter compatibility as a first-class product feature with versioned probes.
+2. Publish transparent scoring formulas and artifact logs.
+3. Keep core orchestration engine usable from CLI even if GUI is unavailable.
+
+## 8. Open Market Questions
+
+1. Is desktop GUI mandatory for initial adoption, or is CLI + optional web report enough?
+2. Which user segment is primary: solo power users, platform teams, or agency teams?
+3. Is token/cost optimization more valuable than raw quality ranking for early users?
+
+## 9. Sources
+
+- Claude Squad repo: https://github.com/smtg-ai/claude-squad
+- Parallel Code repo: https://github.com/johannesjo/parallel-code
+- Mux repo: https://github.com/coder/mux
+- cmux repo: https://github.com/manaflow-ai/cmux
+- Anthropic Claude Code docs: https://docs.anthropic.com/en/docs/claude-code/overview
+- Anthropic Claude Code subagents/settings: https://docs.anthropic.com/en/docs/claude-code/settings

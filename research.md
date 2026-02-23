@@ -1,75 +1,76 @@
-This is a brilliant concept for a power-user tool. The AI coding landscape in 2026 is heavily shifting toward autonomous CLI agents (like Claude Code, Codex CLI, Aider, and Gemini CLI). Building an orchestration layer to "race" them against each other or have them collaborate on local code is the exact kind of tool that 10x developers will want.
+# Hydra Research Index
 
-However, running multiple AI agents simultaneously on the same local repository introduces a massive physical constraint: **file collisions**. If Claude Code and Aider are modifying the same physical directory at the same time, they will overwrite each other's work and break your Git state.
+Last updated: 2026-02-23
 
-Here is a breakdown of the architecture, tech stack, and a step-by-step plan to build this control center safely.
+## Product Summary
 
-### The Secret Sauce: Git Worktrees
+Hydra is a local **code-agent orchestration control center**. It runs multiple coding agents (Claude Code, OpenAI Codex CLI, Cursor Agent CLI, and future adapters) on isolated git workspaces, compares their outcomes, and helps users merge the best result safely.
 
-To allow multiple agents to work simultaneously on different branches without destroying your local files, your app must use **Git Worktrees**.
+Primary platform priority:
+1. Linux (first-class)
+2. Windows (first-class after Linux parity)
+3. macOS (best effort in early phases)
 
-Unlike standard branching (where you switch branches in a single directory), a Git worktree allows you to check out multiple branches of the *same* repository into completely separate physical directories on your hard drive.
+## Core Hypothesis
 
-* **How the app uses it:** When you start a task, your app creates a base branch (e.g., `feature/login`). It then creates three sub-branches and three *worktrees* (temporary folders).
-* Claude Code runs in `/repo-claude-worktree`.
-* Codex CLI runs in `/repo-codex-worktree`.
-* This isolates their file modifications entirely, allowing them to run in parallel.
+Teams using multiple coding agents lose time in manual orchestration:
+- manually creating branches/worktrees
+- manually launching each agent
+- manually diffing and evaluating outputs
+- manually merging winner changes
 
----
+Hydra should reduce this overhead by making parallel execution, comparison, and merge decisions deterministic, auditable, and fast.
 
-### The Recommended Tech Stack
+## Scope Baseline
 
-Since the primary target is Linux (with Windows/Mac as secondary) and we need robust process management, here is the ideal stack:
+In-scope for initial product:
+- CLI-agent orchestration (headless/non-interactive mode)
+- worktree-per-agent isolation
+- race mode (same task, multiple agents)
+- score-based ranking and merge guidance
+- Linux-first runtime and UX
 
-* **Framework:** **Tauri v2**.
-* *Why:* Electron is too heavy, especially when you are already running multiple CPU/RAM-intensive AI agents locally. Tauri uses a lightweight Rust backend with a web frontend. Rust is unmatched for safely managing concurrent child processes and streams.
+Out-of-scope for initial product:
+- cloud-hosted remote execution fabric
+- long-lived autonomous agent swarms
+- natural-language-only git conflict resolution without human review
 
+## Document Map
 
-* **Frontend:** **React + TypeScript + TailwindCSS**.
-* *Why:* Fast UI development with a massive ecosystem.
+- `research/architecture.md`: system and runtime design
+- `research/agent-adapters.md`: per-agent adapter contracts and CLI specifics
+- `research/scoring-engine.md`: evaluation model and calibration
+- `research/collaboration-workflows.md`: multi-agent workflow definitions
+- `research/tech-stack.md`: technology decisions and tradeoffs
+- `research/competitive-analysis.md`: market scan and differentiation
+- `research/roadmap.md`: phased delivery plan, gates, and risks
+- `research/audit.md`: quality audit summary and unresolved gaps
 
+## Quality Bar For This Research Package
 
-* **Terminal Emulator:** **Xterm.js**.
-* *Why:* You need to display the live output of these CLI tools. Xterm.js is what VS Code uses; it will perfectly render the color codes and interactive prompts from Claude Code and Codex.
+This folder is considered "release ready" when:
+1. Every major product claim maps to an implementation section.
+2. CLI integration assumptions are either source-verified or explicitly marked uncertain.
+3. Linux and Windows behavior differences are documented for each critical subsystem.
+4. Open questions are explicit and assigned to a discovery phase or milestone.
 
+## Open Product Questions
 
-* **Backend OS Interaction:** **Rust (std::process & PTY libraries)**.
-* *Why:* You will need Pseudo-Terminals (PTY) to wrap the CLI agents so your app can read their live stdout/stderr and inject your own prompts programmatically.
+1. Which three adapters are Tier-1 at launch: `claude`, `codex`, `cursor-agent` only, or include `aider`?
+2. Should merge automation default to "suggest only" or "auto-merge above threshold"?
+3. Do we persist complete run artifacts by default, or keep only summaries unless opted in?
+4. Should workflow composition ship in v1, or after race-mode hardening?
 
+## External Sources Used During This Update
 
-
----
-
-### The Execution Plan
-
-#### Phase 1: The Single-Agent Wrapper (MVP)
-
-Before orchestrating multiple agents, prove you can control *one* securely.
-
-1. Build a simple Tauri window with a text input for the prompt and an Xterm.js canvas.
-2. Write the Rust backend logic to spawn a child process (e.g., `claude -p "your prompt"`).
-3. Pipe the stdout from the Rust child process to the React frontend to display in the terminal.
-
-#### Phase 2: Worktree Automation & Parallel Execution
-
-This is where the app becomes a "Control Center."
-
-1. Implement Rust functions to execute Git commands: create a new branch, and spin up isolated Git worktrees in a `.agent-workspaces/` temp folder.
-2. Update the UI to a grid layout.
-3. Allow the user to select multiple installed CLI tools. Spawn simultaneous Rust child processes, pointing each agent to its specific worktree directory.
-
-#### Phase 3: The Diff & Merge Dashboard
-
-Once the agents finish their tasks, you need to see who did it best.
-
-1. Build a "Review" screen.
-2. The app runs a `git diff` comparing each agent's worktree branch against the original base branch.
-3. Display a side-by-side or unified diff.
-4. Add a "Merge" button that takes the winning agent's code, merges it into the main repository, and safely deletes the temporary worktrees.
-
-#### Phase 4: Agent Collaboration Workflows
-
-Instead of just racing them, chain them together.
-
-1. **The Builder/Reviewer Loop:** Agent A (e.g., Claude Code) writes the feature. The app automatically captures the diff and feeds it to Agent B (e.g., Aider) with the prompt: *"Review this diff for security vulnerabilities and optimize the logic."*
-2. **Specialization:** Point Agent A exclusively at the `/backend` folder and Agent B exclusively at the `/frontend` folder, passing shared API schemas between them as context.
+- https://developers.openai.com/codex/cli
+- https://docs.anthropic.com/en/docs/claude-code/overview
+- https://docs.anthropic.com/en/docs/claude-code/settings
+- https://docs.cursor.com/en/cli/headless
+- https://docs.cursor.com/cli/reference/parameters
+- https://docs.cursor.com/en/cli/reference/output-format
+- https://github.com/openai/codex
+- https://github.com/smtg-ai/claude-squad
+- https://github.com/johannesjo/parallel-code
+- https://github.com/coder/mux
+- https://github.com/manaflow-ai/cmux

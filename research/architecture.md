@@ -1,430 +1,269 @@
 # System Architecture
 
-## Overview
+Last updated: 2026-02-23
 
-Hydra follows a **layered architecture** with a shared Rust core (`hydra-core`) consumed by two front-ends: a CLI binary (`hydra-cli`) and a Tauri v2 desktop application (`hydra-app`). All orchestration logic — worktree management, agent spawning, event routing, scoring, and merging — lives in `hydra-core` so that both interfaces share identical behavior.
+## 1. Goals and Constraints
 
----
+### Primary goals
 
-## Crate Structure
+1. Run multiple coding agents concurrently on one repository without file collisions.
+2. Make execution deterministic enough to compare outputs fairly.
+3. Provide both CLI and GUI control surfaces backed by the same orchestration core.
+4. Preserve auditability: each run must be replayable from recorded metadata.
 
-```
-hydra/
-├── Cargo.toml                 # Workspace root
-├── hydra.toml                 # Example project configuration
-├── crates/
-│   ├── hydra-core/            # Library crate — the engine
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── config.rs          # hydra.toml parsing and defaults
-│   │       ├── worktree.rs        # Git worktree lifecycle
-│   │       ├── adapter/
-│   │       │   ├── mod.rs         # AgentAdapter trait
-│   │       │   ├── claude.rs      # Claude Code adapter
-│   │       │   ├── codex.rs       # Codex CLI adapter
-│   │       │   └── cursor.rs      # Cursor CLI adapter
-│   │       ├── runner.rs          # Agent process spawning and supervision
-│   │       ├── events.rs          # Event types and EventBus
-│   │       ├── scoring.rs         # Scoring engine
-│   │       ├── merge.rs           # Merge engine
-│   │       └── workflow.rs        # Collaboration workflow definitions
-│   │
-│   ├── hydra-cli/             # Binary crate — terminal interface
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── main.rs
-│   │       ├── commands/
-│   │       │   ├── race.rs        # `hydra race` subcommand
-│   │       │   ├── collab.rs      # `hydra collab` subcommand
-│   │       │   ├── merge.rs       # `hydra merge` subcommand
-│   │       │   └── status.rs      # `hydra status` subcommand
-│   │       └── output.rs         # Terminal formatting and progress bars
-│   │
-│   └── hydra-app/             # Tauri v2 binary crate — desktop GUI
-│       ├── Cargo.toml
-│       ├── tauri.conf.json
-│       ├── build.rs
-│       └── src/
-│           ├── main.rs
-│           └── commands.rs    # Tauri command handlers (IPC bridge)
-│
-├── frontend/                  # React + TypeScript + TailwindCSS
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── src/
-│   │   ├── App.tsx
-│   │   ├── components/
-│   │   │   ├── Terminal.tsx        # xterm.js wrapper
-│   │   │   ├── AgentGrid.tsx      # Multi-terminal grid layout
-│   │   │   ├── DiffViewer.tsx     # Side-by-side diff display
-│   │   │   ├── ScoreBoard.tsx     # Scoring results dashboard
-│   │   │   ├── MergePanel.tsx     # One-click merge controls
-│   │   │   └── TaskInput.tsx      # Prompt input + agent selection
-│   │   ├── hooks/
-│   │   │   ├── useAgent.ts        # Agent state management
-│   │   │   └── useEvents.ts       # Tauri event listener bindings
-│   │   └── lib/
-│   │       ├── tauri.ts           # Tauri invoke wrappers
-│   │       └── types.ts           # Shared TypeScript types
-│   └── index.html
-│
-└── research/                  # Documentation (this folder)
+### Hard constraints
+
+- Linux-first operation must be robust.
+- Windows must be supported without requiring WSL for the Hydra runtime itself.
+- macOS support is a plus, not a launch gate.
+- Agent CLIs are external dependencies with changing interfaces.
+
+### Non-goals (v1)
+
+- Executing agents on remote workers.
+- Stateful agent conversations shared across unrelated runs.
+- Automatic conflict resolution with no human approval.
+
+## 2. Runtime Topology
+
+Hydra should be a shared engine with two frontends:
+
+- `hydra-core` (Rust library): orchestration, isolation, scoring, merge safety
+- `hydra-cli` (Rust binary): automation-first, scripting-friendly
+- `hydra-app` (Tauri v2 + React): interactive monitoring and comparison
+
+```text
+User (CLI or GUI)
+    -> Task API (start_race/start_workflow)
+        -> Run Orchestrator
+            -> Worktree Service
+            -> Adapter Manager
+            -> Process Supervisor
+            -> Event Bus
+            -> Scoring Engine
+            -> Merge Coordinator
 ```
 
----
+## 3. Repository and Branch Isolation
 
-## Core Components
+### Isolation model
 
-### WorktreeManager
+Hydra uses **git worktrees** as the default isolation primitive.
 
-Manages the lifecycle of git worktrees for agent isolation.
+Per run:
+1. Determine base ref (`HEAD` by default or user-selected branch).
+2. Create run namespace: `hydra/<run_id>/...`.
+3. Create one worktree per agent:
+   - `.hydra/worktrees/<run_id>/<agent_key>/`
+4. Execute each agent with `cwd` set to its worktree path.
+
+### Branch naming convention
+
+- Base snapshot: `hydra/<run_id>/base`
+- Agent branches: `hydra/<run_id>/agent/<agent_key>`
+- Integration branch (for composed workflows): `hydra/<run_id>/integration`
+
+### Cleanup policy
+
+- Default: keep worktrees for failed runs, cleanup successful run worktrees after merge.
+- Configurable retention:
+  - `retain = none | failed | all`
+  - time-based garbage collection (e.g., 7 days)
+
+## 4. Core Components
+
+### 4.1 Orchestrator
+
+Coordinates run lifecycle:
+- validate config
+- prepare worktrees
+- spawn agents
+- collect events and artifacts
+- trigger scoring
+- expose merge candidates
+
+### 4.2 Adapter Manager
+
+Manages installed agent adapters and capability detection.
+
+Responsibilities:
+- binary discovery (`PATH`, configured absolute path)
+- version probing (`--version` or equivalent)
+- capability probing (`--help` parse and/or static manifest)
+- adapter-specific invocation building
+
+### 4.3 Process Supervisor
+
+Per-agent supervision with:
+- start deadline
+- idle timeout
+- hard timeout
+- cancellation support (`SIGTERM` then `SIGKILL` on Unix; terminate fallback on Windows)
+- bounded output buffering (prevent unbounded memory)
+
+### 4.4 Event Bus
+
+Normalizes events from all agents and hydra subsystems.
+
+Event categories:
+- run events (`run_started`, `run_completed`, `run_failed`)
+- agent lifecycle (`agent_started`, `agent_completed`, `agent_failed`)
+- agent stream (`agent_stdout`, `agent_stderr`, parsed semantic events)
+- scoring (`score_started`, `score_finished`)
+- merge (`merge_ready`, `merge_succeeded`, `merge_conflict`)
+
+### 4.5 Scoring Engine
+
+Post-run evaluator with configurable dimensions (build/tests/lint/diff/speed).
+
+Design rule:
+- score dimensions must be deterministic from recorded artifacts whenever possible.
+
+### 4.6 Merge Coordinator
+
+Safety-first merge operations:
+- pre-merge checks
+- dry-run support
+- conflict detection and reporting
+- optional auto-merge with threshold and policy gates
+
+## 5. Data Model (Core Records)
+
+### Run record
 
 ```rust
-pub struct WorktreeManager {
+struct RunRecord {
+    run_id: Uuid,
     repo_root: PathBuf,
-    workspace_dir: PathBuf,  // .hydra-workspaces/
-}
-
-impl WorktreeManager {
-    pub fn create(&self, agent_id: &str, base_branch: &str) -> Result<Worktree>;
-    pub fn list(&self) -> Result<Vec<Worktree>>;
-    pub fn remove(&self, worktree: &Worktree) -> Result<()>;
-    pub fn cleanup_all(&self) -> Result<()>;
-}
-
-pub struct Worktree {
-    pub path: PathBuf,
-    pub branch: String,
-    pub agent_id: String,
-    pub base_branch: String,
+    base_ref: String,
+    task_prompt_hash: String,
+    started_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
+    status: RunStatus,
 }
 ```
 
-Internally calls `git worktree add` / `git worktree remove` via `std::process::Command`. Worktrees live in `.hydra-workspaces/<agent_id>-<timestamp>/` relative to the repo root.
-
-### AgentAdapter Trait
-
-The abstraction boundary between hydra-core and any CLI agent.
+### Agent run record
 
 ```rust
-#[async_trait]
-pub trait AgentAdapter: Send + Sync {
-    fn name(&self) -> &str;
-
-    fn capabilities(&self) -> AgentCapabilities;
-
-    async fn spawn(
-        &self,
-        task: &Task,
-        worktree: &Worktree,
-        config: &AgentConfig,
-    ) -> Result<AgentProcess>;
-
-    async fn stream_events(
-        &self,
-        process: &mut AgentProcess,
-    ) -> Result<Pin<Box<dyn Stream<Item = AgentEvent> + Send>>>;
-
-    async fn interrupt(&self, process: &mut AgentProcess) -> Result<()>;
-}
-
-pub struct AgentCapabilities {
-    pub supports_streaming: bool,
-    pub supports_json_output: bool,
-    pub supports_tool_restrictions: bool,
-    pub supports_auto_approve: bool,
+struct AgentRunRecord {
+    run_id: Uuid,
+    agent_key: String,
+    adapter_version: Option<String>,
+    worktree_path: PathBuf,
+    branch: String,
+    started_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
+    status: AgentStatus,
+    token_usage: Option<TokenUsage>,
+    cost_estimate_usd: Option<f64>,
 }
 ```
 
-### AgentProcess
-
-Wraps a running child process with metadata.
+### Artifact record
 
 ```rust
-pub struct AgentProcess {
-    pub id: Uuid,
-    pub agent_name: String,
-    pub worktree: Worktree,
-    pub child: Child,            // tokio::process::Child
-    pub started_at: Instant,
-    pub status: AgentStatus,
-}
-
-pub enum AgentStatus {
-    Running,
-    Completed { duration: Duration },
-    Failed { error: String, duration: Duration },
-    Interrupted,
+struct ArtifactRecord {
+    run_id: Uuid,
+    agent_key: String,
+    kind: ArtifactKind, // diff, logs, score_json, test_output, lint_output
+    path: PathBuf,
+    sha256: String,
 }
 ```
 
-### EventBus
+## 6. Execution Flows
 
-Central pub/sub bus routing events from agents to all subscribers (GUI, CLI, scoring engine).
+### 6.1 Race mode (parallel)
 
-```rust
-pub struct EventBus {
-    sender: broadcast::Sender<HydraEvent>,
-}
+1. Validate all selected adapters are installed.
+2. Capture baseline metrics (build/test/lint on base).
+3. Create one worktree per agent.
+4. Spawn all agent processes concurrently.
+5. Stream events to CLI/GUI.
+6. Wait for completion/timeouts.
+7. Score each agent output.
+8. Publish ranked results and merge options.
 
-pub enum HydraEvent {
-    AgentStarted { agent_id: Uuid, agent_name: String },
-    AgentOutput { agent_id: Uuid, line: String, stream: OutputStream },
-    AgentCompleted { agent_id: Uuid, duration: Duration },
-    AgentFailed { agent_id: Uuid, error: String },
-    ScoringStarted,
-    ScoringResult { rankings: Vec<AgentScore> },
-    MergeCompleted { winner: Uuid, branch: String },
-}
+### 6.2 Collaboration workflow mode (staged)
 
-pub enum OutputStream {
-    Stdout,
-    Stderr,
-}
-```
+1. Build workflow graph from preset or user-defined DSL.
+2. Execute node-by-node with explicit artifact passing.
+3. Record transition artifacts (e.g., reviewer feedback).
+4. Score terminal node outputs.
 
-Uses `tokio::sync::broadcast` for fan-out to multiple consumers. The Tauri app subscribes via `tauri::Manager::emit` to push events to the React frontend.
+## 7. Cross-Platform Architecture Notes
 
-### TaskRouter
+### Linux (first-class target)
 
-Entry point for all user-initiated operations. Coordinates worktree creation, agent spawning, and post-completion scoring.
+- PTY path: `portable-pty` with Unix backend.
+- Signal model: full `SIGTERM`/`SIGKILL` support.
+- Locking: file-lock guard for `.hydra/state` to avoid concurrent mutating runs.
 
-```rust
-pub struct TaskRouter {
-    worktree_mgr: WorktreeManager,
-    adapters: HashMap<String, Box<dyn AgentAdapter>>,
-    event_bus: EventBus,
-    scoring: ScoringEngine,
-    merge: MergeEngine,
-}
+### Windows
 
-impl TaskRouter {
-    pub async fn race(&self, task: Task, agent_names: Vec<String>) -> Result<RaceResult>;
-    pub async fn collaborate(&self, workflow: Workflow) -> Result<CollabResult>;
-    pub async fn merge_winner(&self, race_id: Uuid) -> Result<()>;
-    pub async fn status(&self) -> Result<Vec<AgentProcess>>;
-}
-```
+- PTY path: ConPTY via `portable-pty`.
+- Process termination semantics differ from Unix signals.
+- Path handling must normalize separators and long paths.
+- Terminal rendering differences can impact ANSI stream behavior.
 
-### ScoringEngine
+### macOS (bonus)
 
-Evaluates agent outputs after completion. See `research/scoring-engine.md` for full algorithm.
+- Similar to Linux process behavior.
+- Not a launch blocker; parity tracked after Linux/Windows milestone stability.
 
-```rust
-pub struct ScoringEngine {
-    config: ScoringConfig,
-}
+## 8. Safety and Security Model
 
-impl ScoringEngine {
-    pub async fn evaluate(&self, worktrees: &[Worktree]) -> Result<Vec<AgentScore>>;
-}
+### Trust boundaries
 
-pub struct AgentScore {
-    pub agent_id: Uuid,
-    pub agent_name: String,
-    pub total: f64,
-    pub breakdown: ScoreBreakdown,
-}
+Hydra orchestrates external tools that can edit files and run shell commands. Hydra itself must:
+- isolate writes to agent worktrees unless user opts out
+- avoid executing arbitrary shell snippets from untrusted output
+- redact secrets from logs where feasible
 
-pub struct ScoreBreakdown {
-    pub build: Option<f64>,
-    pub tests: Option<f64>,
-    pub lint: Option<f64>,
-    pub diff_size: Option<f64>,
-    pub speed: Option<f64>,
-}
-```
+### Permission strategy
 
-### MergeEngine
+- Default run policy: isolated worktree + explicit adapter arguments.
+- Optional elevated mode must be opt-in per run.
+- Adapter command lines are always persisted for audit.
 
-Handles merging the winning agent's worktree branch back into the base branch.
+## 9. Failure Modes and Recovery
 
-```rust
-pub struct MergeEngine;
+| Failure | Detection | Recovery |
+|---|---|---|
+| Worktree creation fails | non-zero git exit | mark agent failed, continue others if possible |
+| Agent hangs | idle/hard timeout | terminate process, mark timed out |
+| Adapter parse drift | JSON parse errors spike | fall back to raw stream mode + warning |
+| Scoring command fails | missing tool or non-zero | dimension marked unavailable, weights renormalized |
+| Merge conflicts | git merge conflict exit | produce conflict report and keep branches |
 
-impl MergeEngine {
-    pub fn merge_branch(
-        &self,
-        repo_root: &Path,
-        source_branch: &str,
-        target_branch: &str,
-    ) -> Result<MergeOutcome>;
+## 10. Observability
 
-    pub fn generate_diff(
-        &self,
-        worktree: &Worktree,
-    ) -> Result<String>;
-}
+Minimum telemetry for each run:
+- run id, agent set, base ref, timing
+- per-agent duration, exit code, timeout reason
+- score dimension breakdown and normalized weights
+- merge outcome and conflict file list
 
-pub enum MergeOutcome {
-    FastForward,
-    Merged { conflicts: usize },
-    Conflict { files: Vec<PathBuf> },
-}
-```
+Suggested implementation:
+- `tracing` for structured logs
+- JSON logs persisted under `.hydra/runs/<run_id>/events.jsonl`
+- optional SQLite index for history UI
 
----
+## 11. Architecture Decisions (ADR-lite)
 
-## Data Flow
+1. Use git worktrees, not multiple clones.
+2. Keep orchestration logic in shared Rust core.
+3. Prefer normalized event schema over adapter-specific UI handling.
+4. Treat scoring as pluggable, with baseline deterministic dimensions first.
+5. Keep merge operation explicit by default; auto-merge is policy-gated.
 
-### Race Mode
+## 12. Open Architecture Questions
 
-```
-User submits task + agent list
-         │
-         ▼
-    TaskRouter.race()
-         │
-         ├── WorktreeManager.create()  ×N agents
-         │         │
-         │         ▼
-         │   .hydra-workspaces/claude-<ts>/
-         │   .hydra-workspaces/codex-<ts>/
-         │   .hydra-workspaces/cursor-<ts>/
-         │
-         ├── AgentAdapter.spawn()  ×N (concurrent via tokio::join!)
-         │         │
-         │         ▼
-         │   claude -p "task" --output-format stream-json  (in worktree-claude)
-         │   codex exec "task" --json --full-auto           (in worktree-codex)
-         │   cursor --print "task"                          (in worktree-cursor)
-         │
-         ├── AgentAdapter.stream_events()  ×N
-         │         │
-         │         ▼
-         │   EventBus broadcasts AgentOutput events
-         │   (GUI renders in xterm.js, CLI prints to stdout)
-         │
-         ├── All agents complete (or timeout)
-         │
-         ├── ScoringEngine.evaluate()
-         │         │
-         │         ▼
-         │   Run build_command in each worktree
-         │   Run test_command in each worktree
-         │   Run lint_command in each worktree
-         │   Compute diff size for each worktree
-         │   Calculate weighted scores
-         │
-         ├── EventBus broadcasts ScoringResult
-         │
-         └── User reviews scores → MergeEngine.merge_branch()
-                   │
-                   ▼
-             WorktreeManager.cleanup_all()
-```
+1. Should Hydra run as short-lived process per command, or optional background daemon for GUI and CLI sharing?
+2. Should event storage be append-only JSONL only, or dual-write to SQLite in v1?
+3. Should we support "remote repo" orchestration before local parity is complete?
 
-### Collaboration Mode
+## 13. Source Notes
 
-```
-User submits workflow definition
-         │
-         ▼
-    TaskRouter.collaborate()
-         │
-         ├── Phase 1: Builder
-         │   ├── WorktreeManager.create() for builder agent
-         │   ├── AgentAdapter.spawn() with original task
-         │   └── Wait for completion → capture diff
-         │
-         ├── Phase 2: Reviewer
-         │   ├── WorktreeManager.create() for reviewer agent
-         │   ├── AgentAdapter.spawn() with diff as context +
-         │   │   review prompt
-         │   └── Wait for completion → capture review feedback
-         │
-         ├── Phase 3: Refinement (optional loop)
-         │   ├── Feed review feedback back to builder agent
-         │   └── Repeat until scoring threshold met or max iterations
-         │
-         └── ScoringEngine.evaluate() on final output
-```
-
----
-
-## IPC: Tauri Bridge
-
-The Tauri app exposes hydra-core functionality to the React frontend via Tauri commands:
-
-```rust
-// crates/hydra-app/src/commands.rs
-
-#[tauri::command]
-async fn start_race(
-    state: State<'_, AppState>,
-    task: String,
-    agents: Vec<String>,
-) -> Result<Uuid, String>;
-
-#[tauri::command]
-async fn get_scores(
-    state: State<'_, AppState>,
-    race_id: Uuid,
-) -> Result<Vec<AgentScore>, String>;
-
-#[tauri::command]
-async fn merge_winner(
-    state: State<'_, AppState>,
-    race_id: Uuid,
-) -> Result<(), String>;
-
-#[tauri::command]
-async fn get_diff(
-    state: State<'_, AppState>,
-    agent_id: Uuid,
-) -> Result<String, String>;
-```
-
-Events flow from Rust to React via Tauri's event system:
-
-```typescript
-// frontend/src/hooks/useEvents.ts
-import { listen } from "@tauri-apps/api/event";
-
-listen<AgentOutputPayload>("agent-output", (event) => {
-  // Append to xterm.js terminal for the corresponding agent
-});
-
-listen<ScoringResultPayload>("scoring-result", (event) => {
-  // Update scoreboard component
-});
-```
-
----
-
-## Configuration
-
-Project-level configuration via `hydra.toml` at the repository root:
-
-```toml
-[general]
-workspace_dir = ".hydra-workspaces"
-max_concurrent_agents = 3
-timeout_seconds = 600
-
-[agents.claude]
-binary = "claude"
-extra_args = ["--allowedTools", "Edit,Write,Bash"]
-
-[agents.codex]
-binary = "codex"
-extra_args = ["--full-auto"]
-
-[agents.cursor]
-binary = "cursor"
-extra_args = ["--force"]
-timeout_seconds = 300  # Override: Cursor CLI can hang
-
-[scoring]
-weights = { build = 30, tests = 30, lint = 15, diff_size = 15, speed = 10 }
-build_command = "npm run build"
-test_command = "npm test"
-lint_command = "npm run lint"
-
-[collaboration]
-max_iterations = 3
-review_prompt_template = "Review this diff for bugs, security issues, and code quality:\n\n{diff}"
-```
-
-Parsed by `hydra-core/src/config.rs` using the `toml` crate with `serde` deserialization into strongly-typed structs.
+Architecture here combines product design choices with external constraints from current agent CLIs and tooling ecosystems. CLI capability assumptions are detailed in `research/agent-adapters.md` with confidence markers and links.
