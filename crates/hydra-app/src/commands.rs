@@ -181,6 +181,12 @@ pub async fn list_adapters(state: State<'_, AppState>) -> Result<Vec<AdapterInfo
     Ok(report.results.iter().map(AdapterInfo::from).collect())
 }
 
+#[tauri::command]
+pub async fn get_working_tree_status() -> Result<WorkingTreeStatus, String> {
+    let repo_root = discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
+    Ok(read_working_tree_status(&repo_root))
+}
+
 // ---------------------------------------------------------------------------
 // Race commands (M3.2)
 // ---------------------------------------------------------------------------
@@ -360,14 +366,11 @@ fn parse_cli_race_summary(stdout: &[u8]) -> Result<RaceResult, IpcError> {
                 .and_then(|v| v.as_u64())
         });
 
-    let total_cost = json
-        .get("total_cost")
-        .and_then(|v| v.as_f64())
-        .or_else(|| {
-            json.get("cost")
-                .and_then(|c| c.get("estimated_cost_usd"))
-                .and_then(|v| v.as_f64())
-        });
+    let total_cost = json.get("total_cost").and_then(|v| v.as_f64()).or_else(|| {
+        json.get("cost")
+            .and_then(|c| c.get("estimated_cost_usd"))
+            .and_then(|v| v.as_f64())
+    });
 
     let agents = json
         .get("agents")
@@ -390,7 +393,11 @@ fn parse_cli_race_summary(stdout: &[u8]) -> Result<RaceResult, IpcError> {
                                         .get("evidence")
                                         .cloned()
                                         .unwrap_or(serde_json::json!({}));
-                                    Some(DimensionScoreIpc { name, score, evidence })
+                                    Some(DimensionScoreIpc {
+                                        name,
+                                        score,
+                                        evidence,
+                                    })
                                 })
                                 .collect::<Vec<_>>()
                         })
@@ -570,13 +577,8 @@ async fn tail_run_events_file(
     }
 
     let _ = emit_new_events_from_file(&state, &run_id, &events_path, consumed_lines, false).await;
-    emit_new_agent_output_events_from_dir(
-        &state,
-        &run_id,
-        &agents_dir,
-        &mut consumed_agent_lines,
-    )
-    .await;
+    emit_new_agent_output_events_from_dir(&state, &run_id, &agents_dir, &mut consumed_agent_lines)
+        .await;
 }
 
 async fn emit_new_events_from_file(
@@ -690,23 +692,18 @@ pub async fn get_candidate_diff(
     run_id: String,
     agent_key: String,
 ) -> Result<CandidateDiffPayload, String> {
-    let repo_root =
-        discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
+    let repo_root = discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
     let hydra_root = repo_root.join(".hydra");
     let run_uuid = uuid::Uuid::parse_str(&run_id)
         .map_err(|e| format!("[validation_error] invalid run_id: {e}"))?;
     let layout = hydra_core::artifact::RunLayout::new(&hydra_root, run_uuid);
 
     if !layout.base_dir().exists() {
-        return Err(format!(
-            "[validation_error] run {} not found",
-            run_id
-        ));
+        return Err(format!("[validation_error] run {} not found", run_id));
     }
 
-    let manifest =
-        hydra_core::artifact::RunManifest::read_from(&layout.manifest_path())
-            .map_err(|e| format!("[internal_error] failed to read manifest: {e}"))?;
+    let manifest = hydra_core::artifact::RunManifest::read_from(&layout.manifest_path())
+        .map_err(|e| format!("[internal_error] failed to read manifest: {e}"))?;
 
     let entry = manifest
         .agents
@@ -931,8 +928,7 @@ pub async fn execute_merge(
 }
 
 fn resolve_cli_and_repo() -> Result<(Vec<String>, PathBuf), String> {
-    let repo_root =
-        discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
+    let repo_root = discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
 
     if let Ok(bin) = std::env::var("HYDRA_CLI_BIN") {
         Ok((vec![bin], repo_root))
@@ -971,7 +967,7 @@ fn parse_merge_preview_payload(
 
     if status_success {
         return Err(
-            "[internal_error] merge preview did not return expected JSON payload".to_string()
+            "[internal_error] merge preview did not return expected JSON payload".to_string(),
         );
     }
 
@@ -979,6 +975,72 @@ fn parse_merge_preview_payload(
         "[validation_error] {}",
         best_merge_error_message(stderr, stdout)
     ))
+}
+
+fn read_working_tree_status(repo_root: &Path) -> WorkingTreeStatus {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo_root)
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let raw = String::from_utf8_lossy(&output.stdout);
+            let files: Vec<String> = raw.lines().filter_map(parse_porcelain_path).collect();
+            if files.is_empty() {
+                WorkingTreeStatus {
+                    clean: true,
+                    message: None,
+                }
+            } else {
+                let shown: Vec<&str> = files.iter().take(5).map(|s| s.as_str()).collect();
+                let extra = files.len().saturating_sub(shown.len());
+                let suffix = if extra > 0 {
+                    format!(" (+{extra} more)")
+                } else {
+                    String::new()
+                };
+                WorkingTreeStatus {
+                    clean: false,
+                    message: Some(format!(
+                        "Working tree has uncommitted changes in: {}{}. Commit or stash changes before running Preview Merge.",
+                        shown.join(", "),
+                        suffix
+                    )),
+                }
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let message = if stderr.is_empty() {
+                "Unable to inspect working tree status.".to_string()
+            } else {
+                format!("Unable to inspect working tree status: {stderr}")
+            };
+            WorkingTreeStatus {
+                clean: false,
+                message: Some(message),
+            }
+        }
+        Err(err) => WorkingTreeStatus {
+            clean: false,
+            message: Some(format!(
+                "Unable to inspect working tree status: failed to run git status: {err}"
+            )),
+        },
+    }
+}
+
+fn parse_porcelain_path(line: &str) -> Option<String> {
+    let path = line.get(3..)?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    if let Some((_, new_path)) = path.rsplit_once(" -> ") {
+        Some(new_path.to_string())
+    } else {
+        Some(path.to_string())
+    }
 }
 
 fn try_parse_merge_preview_payload(
@@ -1097,11 +1159,7 @@ fn parse_diff_numstat_from_patch(patch: &str) -> Vec<DiffFile> {
 
 fn branch_exists(repo_root: &Path, branch: &str) -> bool {
     std::process::Command::new("git")
-        .args([
-            "rev-parse",
-            "--verify",
-            &format!("refs/heads/{branch}"),
-        ])
+        .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
         .current_dir(repo_root)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1162,7 +1220,9 @@ fn generate_worktree_diff(worktree_path: &Path, base_ref: &str) -> Result<String
         .map_err(|e| format!("failed to list untracked files: {e}"))?;
 
     if !untracked.status.success() {
-        let stderr = String::from_utf8_lossy(&untracked.stderr).trim().to_string();
+        let stderr = String::from_utf8_lossy(&untracked.stderr)
+            .trim()
+            .to_string();
         return Err(format!("git ls-files failed: {stderr}"));
     }
 
@@ -1514,6 +1574,22 @@ index 3333333..4444444 100644
     }
 
     #[test]
+    fn parse_porcelain_path_extracts_modified_added_and_renamed_paths() {
+        assert_eq!(
+            parse_porcelain_path(" M crates/hydra-app/src/main.rs"),
+            Some("crates/hydra-app/src/main.rs".to_string())
+        );
+        assert_eq!(
+            parse_porcelain_path("?? crates/hydra-app/src/new_file.rs"),
+            Some("crates/hydra-app/src/new_file.rs".to_string())
+        );
+        assert_eq!(
+            parse_porcelain_path("R  src/old.rs -> src/new.rs"),
+            Some("src/new.rs".to_string())
+        );
+    }
+
+    #[test]
     fn parse_worktree_path_for_branch_finds_matching_entry() {
         let porcelain = r#"worktree /repo
 HEAD 1111111
@@ -1525,10 +1601,7 @@ branch refs/heads/hydra/run/agent/claude
 "#;
         let found = parse_worktree_path_for_branch(porcelain, "hydra/run/agent/claude")
             .expect("expected worktree path");
-        assert_eq!(
-            found,
-            PathBuf::from("/repo/.hydra/worktrees/run/claude")
-        );
+        assert_eq!(found, PathBuf::from("/repo/.hydra/worktrees/run/claude"));
     }
 
     #[test]
@@ -1537,8 +1610,6 @@ branch refs/heads/hydra/run/agent/claude
 HEAD 1111111
 branch refs/heads/main
 "#;
-        assert!(
-            parse_worktree_path_for_branch(porcelain, "hydra/run/agent/codex").is_none()
-        );
+        assert!(parse_worktree_path_for_branch(porcelain, "hydra/run/agent/codex").is_none());
     }
 }

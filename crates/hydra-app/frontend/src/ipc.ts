@@ -13,6 +13,7 @@ import type {
   RaceStarted,
   RaceResult,
   RaceEventBatch,
+  WorkingTreeStatus,
   CandidateDiffPayload,
   MergePreviewPayload,
   MergeExecutionPayload,
@@ -77,6 +78,11 @@ export async function pollRaceEvents(runId: string, cursor: number): Promise<Rac
 export async function getCandidateDiff(runId: string, agentKey: string): Promise<CandidateDiffPayload> {
   const invoke = await getInvoke();
   return invoke('get_candidate_diff', { runId, agentKey });
+}
+
+export async function getWorkingTreeStatus(): Promise<WorkingTreeStatus> {
+  const invoke = await getInvoke();
+  return invoke('get_working_tree_status');
 }
 
 export async function previewMerge(runId: string, agentKey: string, force: boolean): Promise<MergePreviewPayload> {
@@ -381,6 +387,11 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
         warning: null,
       } as T;
     }
+    case 'get_working_tree_status':
+      return {
+        clean: true,
+        message: null,
+      } as T;
     case 'preview_merge': {
       const args = _args as Record<string, unknown> | undefined;
       const agentKey = (args?.agentKey as string) ?? 'claude';

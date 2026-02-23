@@ -6,8 +6,9 @@ import type {
   MergePreviewPayload,
   MergeExecutionPayload,
   DiffFile,
+  WorkingTreeStatus,
 } from '../types';
-import { getCandidateDiff, previewMerge, executeMerge } from '../ipc';
+import { getCandidateDiff, getWorkingTreeStatus, previewMerge, executeMerge } from '../ipc';
 import { Badge, Button, Card, Panel, Modal } from './design-system';
 
 interface CandidateDiffReviewProps {
@@ -30,6 +31,7 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [forceOverride, setForceOverride] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [workingTreeStatus, setWorkingTreeStatus] = useState<WorkingTreeStatus | null>(null);
 
   useEffect(() => {
     if (selectedWinner && agents.some((a) => a.agentKey === selectedWinner)) {
@@ -72,10 +74,40 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
   const isMergeable = diffPayload?.mergeable === true && (diffPayload?.gateFailures.length ?? 0) === 0;
   const canMerge = isMergeable || forceOverride;
 
+  const refreshWorkingTreeStatus = useCallback(async (): Promise<WorkingTreeStatus> => {
+    try {
+      const status = await getWorkingTreeStatus();
+      setWorkingTreeStatus(status);
+      return status;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const fallback = {
+        clean: false,
+        message: `Unable to inspect working tree status: ${message}`,
+      };
+      setWorkingTreeStatus(fallback);
+      return fallback;
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshWorkingTreeStatus();
+  }, [activeCandidate, refreshWorkingTreeStatus]);
+
   const handlePreview = useCallback(async () => {
     setMergeStatus('previewing');
     setMergeError(null);
     try {
+      const tree = await refreshWorkingTreeStatus();
+      if (!tree.clean) {
+        setMergeStatus('failed');
+        setMergeError(
+          tree.message ??
+          'Working tree has uncommitted changes. Commit or stash changes before running Preview Merge.',
+        );
+        return;
+      }
+
       const result = await previewMerge(runId, activeCandidate, forceOverride);
       setMergePreview(result);
       if (result.hasConflicts) {
@@ -96,7 +128,7 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
       setMergeError(err instanceof Error ? err.message : String(err));
       setMergeStatus('failed');
     }
-  }, [runId, activeCandidate, forceOverride]);
+  }, [runId, activeCandidate, forceOverride, refreshWorkingTreeStatus]);
 
   const handleAccept = useCallback(() => {
     if (mergeStatus !== 'preview_clean') return;
@@ -218,8 +250,10 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
               mergeResult={mergeResult}
               mergeError={mergeError}
               canMerge={canMerge}
+              workingTreeStatus={workingTreeStatus}
               forceOverride={forceOverride}
               onForceToggle={setForceOverride}
+              onRefreshWorkingTreeStatus={refreshWorkingTreeStatus}
               onPreview={handlePreview}
               onAccept={handleAccept}
               onReject={() => { setMergeStatus('idle'); setMergePreview(null); setMergeResult(null); setMergeError(null); }}
@@ -428,6 +462,8 @@ function buildDiffRows(lines: string[]): DiffRow[] {
 function SideBySideRow({ row }: { row: DiffRow }) {
   const leftStyle = sideCellStyle('left', row.kind);
   const rightStyle = sideCellStyle('right', row.kind);
+  const leftPlaceholder = row.kind === 'add' && row.left.length === 0;
+  const rightPlaceholder = row.kind === 'remove' && row.right.length === 0;
 
   return (
     <div
@@ -437,8 +473,12 @@ function SideBySideRow({ row }: { row: DiffRow }) {
         minWidth: 900,
       }}
     >
-      <div style={leftStyle}>{row.left || ' '}</div>
-      <div style={rightStyle}>{row.right || ' '}</div>
+      <div style={placeholderCellStyle(leftStyle, leftPlaceholder)}>
+        {leftPlaceholder ? '<empty>' : (row.left || ' ')}
+      </div>
+      <div style={placeholderCellStyle(rightStyle, rightPlaceholder)}>
+        {rightPlaceholder ? '<empty>' : (row.right || ' ')}
+      </div>
     </div>
   );
 }
@@ -488,6 +528,16 @@ function sideCellStyle(side: 'left' | 'right', kind: DiffRowType): CSSProperties
   return base;
 }
 
+function placeholderCellStyle(base: CSSProperties, isPlaceholder: boolean): CSSProperties {
+  if (!isPlaceholder) return base;
+  return {
+    ...base,
+    color: 'var(--color-text-muted)',
+    fontStyle: 'italic',
+    backgroundColor: 'color-mix(in srgb, var(--color-surface-800) 50%, transparent)',
+  };
+}
+
 function ModifiedFilesList({ files }: { files: DiffFile[] }) {
   return (
     <Panel title="Modified Files" headerRight={<Badge variant="neutral">{files.length}</Badge>}>
@@ -531,8 +581,10 @@ function MergeActionRail({
   mergeResult,
   mergeError,
   canMerge,
+  workingTreeStatus,
   forceOverride,
   onForceToggle,
+  onRefreshWorkingTreeStatus,
   onPreview,
   onAccept,
   onReject,
@@ -544,8 +596,10 @@ function MergeActionRail({
   mergeResult: MergeExecutionPayload | null;
   mergeError: string | null;
   canMerge: boolean;
+  workingTreeStatus: WorkingTreeStatus | null;
   forceOverride: boolean;
   onForceToggle: (v: boolean) => void;
+  onRefreshWorkingTreeStatus: () => Promise<WorkingTreeStatus>;
   onPreview: () => void;
   onAccept: () => void;
   onReject: () => void;
@@ -606,7 +660,12 @@ function MergeActionRail({
           size="sm"
           style={{ width: '100%' }}
           onClick={onPreview}
-          disabled={mergeStatus === 'previewing' || mergeStatus === 'merging' || mergeStatus === 'merged'}
+          disabled={
+            mergeStatus === 'previewing' ||
+            mergeStatus === 'merging' ||
+            mergeStatus === 'merged' ||
+            workingTreeStatus?.clean === false
+          }
           loading={mergeStatus === 'previewing'}
           data-testid="preview-merge-btn"
         >
@@ -620,6 +679,32 @@ function MergeActionRail({
               : mergePreview.success
                 ? <span style={{ color: 'var(--color-green-400)' }}>Clean merge. No conflicts.</span>
                 : <span style={{ color: 'var(--color-danger-400)' }}>Preview failed. Resolve errors before merge.</span>}
+          </div>
+        )}
+
+        {workingTreeStatus && !workingTreeStatus.clean && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--space-2)',
+              padding: 'var(--space-2)',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--color-warning-500)',
+              backgroundColor: 'color-mix(in srgb, var(--color-warning-500) 10%, transparent)',
+            }}
+            data-testid="worktree-warning"
+          >
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-warning-400)' }}>
+              {workingTreeStatus.message ?? 'Working tree is not clean. Preview Merge is blocked.'}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { void onRefreshWorkingTreeStatus(); }}
+            >
+              Re-check Working Tree
+            </Button>
           </div>
         )}
 

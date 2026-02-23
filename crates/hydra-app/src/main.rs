@@ -12,6 +12,7 @@ fn main() {
             hydra_app::health_check,
             hydra_app::run_preflight,
             hydra_app::list_adapters,
+            hydra_app::get_working_tree_status,
             hydra_app::start_race,
             hydra_app::poll_race_events,
             hydra_app::get_race_result,

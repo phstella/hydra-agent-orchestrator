@@ -124,6 +124,13 @@ pub struct RaceEventBatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkingTreeStatus {
+    pub clean: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentResult {
     pub agent_key: String,
     pub status: String,

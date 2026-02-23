@@ -151,6 +151,10 @@ const MOCK_CODEX_DIFF: CandidateDiffPayload = {
 function setupDefaultMocks() {
   vi.mocked(ipc.listAdapters).mockResolvedValue(MOCK_ADAPTERS);
   vi.mocked(ipc.runPreflight).mockResolvedValue(MOCK_PREFLIGHT);
+  vi.mocked(ipc.getWorkingTreeStatus).mockResolvedValue({
+    clean: true,
+    message: null,
+  });
   vi.mocked(ipc.getCandidateDiff).mockImplementation(async (_runId: string, agentKey: string) => {
     if (agentKey === 'codex') return MOCK_CODEX_DIFF;
     return MOCK_DIFF;
@@ -519,5 +523,44 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
 
     const acceptBtn = screen.getByTestId('accept-merge-btn');
     expect(acceptBtn).toBeDisabled();
+  });
+
+  it('disables preview when working tree is dirty and shows actionable warning', async () => {
+    vi.mocked(ipc.getWorkingTreeStatus).mockResolvedValue({
+      clean: false,
+      message: 'Working tree has uncommitted changes in: src/main.rs',
+    });
+
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: /race/i }));
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'Fix bug');
+    await user.click(screen.getByRole('button', { name: /start race/i }));
+    await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
+
+    await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
+    await user.click(screen.getByText('View Scoreboard'));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
+    });
+
+    const selectBtns = screen.getAllByText('Select as Winner');
+    await user.click(selectBtns[0]);
+
+    await waitFor(() => expect(screen.getByTestId('preview-merge-btn')).toBeInTheDocument());
+    await waitFor(() => {
+      expect(screen.getByTestId('worktree-warning')).toBeInTheDocument();
+    });
+
+    const previewBtn = screen.getByTestId('preview-merge-btn');
+    expect(previewBtn).toBeDisabled();
+    expect(screen.getByText(/working tree has uncommitted changes/i)).toBeInTheDocument();
+    expect(ipc.previewMerge).not.toHaveBeenCalled();
   });
 });

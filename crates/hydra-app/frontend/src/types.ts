@@ -119,6 +119,11 @@ export interface RaceEventBatch {
   error: string | null;
 }
 
+export interface WorkingTreeStatus {
+  clean: boolean;
+  message: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Diff / Merge (P3-UI-05)
 // ---------------------------------------------------------------------------
