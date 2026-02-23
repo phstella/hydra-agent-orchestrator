@@ -1,0 +1,10 @@
+{"type":"message","id":"msg_01","role":"assistant","content":[{"type":"text","text":"Starting task..."}]}
+{"type":"tool_use","id":"tool_01","name":"bash","input":{"command":"echo hello"}}
+{"type":"tool_result","tool_use_id":"tool_01","content":"hello\n"}
+{"type":"message_delta","usage":{"input_tokens":100,"output_tokens":50}}
+{"type":"assistant","content":[{"type":"text","text":"I ran the command."}]}
+{"type":"content_block_stop","index":0}
+{"type":"result","result":"Task completed successfully","is_error":false}
+{"type":"usage","usage":{"input_tokens":200,"output_tokens":120}}
+{"type":"error","error":{"message":"rate limit exceeded"}}
+{"type":"unknown_future_type","data":"something new"}

@@ -1,0 +1,10 @@
+{"type":"message","content":"Analyzing the task..."}
+{"type":"function_call","name":"write_file","arguments":{"path":"src/main.rs","content":"fn main() {}"}}
+{"type":"function_call_output","output":"File written successfully"}
+{"type":"tool_call","name":"run_command","arguments":{"command":"cargo build"}}
+{"type":"tool_result","output":"Compiling...done"}
+{"type":"completed","summary":"Task finished"}
+{"type":"done","result":"All changes applied"}
+{"type":"error","message":"Permission denied"}
+{"usage":{"prompt_tokens":500,"completion_tokens":200}}
+{"type":"unknown_codex_type","payload":"future data"}

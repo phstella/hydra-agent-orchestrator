@@ -4,6 +4,70 @@ use super::probe::{
     which_binary, AdapterProbe, AdapterTier, CapabilitySet, CommandRunner, Confidence, ProbeResult,
     ProbeStatus,
 };
+use super::runtime::{AdapterRuntime, AgentEvent, AgentEventType, SpawnRequest};
+use crate::supervisor::AgentCommand;
+
+/// Cursor agent adapter (Experimental).
+///
+/// Stub runtime implementation. The Cursor adapter is experimental and
+/// its CLI output format is not yet stabilized.
+pub struct CursorAdapter;
+
+impl AdapterRuntime for CursorAdapter {
+    fn build_command(&self, req: &SpawnRequest) -> AgentCommand {
+        let mut args = vec![req.task_prompt.clone()];
+
+        if req.output_json_stream {
+            args.push("--json".to_string());
+        }
+
+        AgentCommand {
+            program: "cursor-agent".to_string(),
+            args,
+            env: vec![],
+            cwd: req.worktree_path.clone(),
+        }
+    }
+
+    fn parse_line(&self, line: &str) -> Option<AgentEvent> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Best-effort: attempt JSON parse, fall back to plain text message.
+        match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(value) => {
+                let event_type = match value.get("type").and_then(|t| t.as_str()) {
+                    Some("message") => AgentEventType::Message,
+                    Some("tool_call") => AgentEventType::ToolCall,
+                    Some("tool_result") => AgentEventType::ToolResult,
+                    Some("completed") | Some("done") => AgentEventType::Completed,
+                    Some("error") => AgentEventType::Failed,
+                    _ => AgentEventType::Unknown,
+                };
+                Some(AgentEvent {
+                    event_type,
+                    data: value,
+                    raw_line: Some(line.to_string()),
+                })
+            }
+            Err(_) => Some(AgentEvent {
+                event_type: AgentEventType::Message,
+                data: serde_json::json!({"text": trimmed}),
+                raw_line: Some(line.to_string()),
+            }),
+        }
+    }
+
+    fn parse_raw(&self, chunk: &[u8]) -> Vec<AgentEvent> {
+        String::from_utf8_lossy(chunk)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|line| self.parse_line(line))
+            .collect()
+    }
+}
 
 /// Binary names to try when searching for cursor, in priority order.
 const CURSOR_CANDIDATES: &[&str] = &["cursor-agent", "cursor"];

@@ -4,6 +4,69 @@ use super::probe::{
     missing_result, which_binary, AdapterProbe, AdapterTier, CapabilitySet, CommandRunner,
     Confidence, ProbeResult, ProbeStatus,
 };
+use super::runtime::{AdapterRuntime, AgentEvent, AgentEventType, SpawnRequest};
+use crate::supervisor::AgentCommand;
+
+/// Codex CLI adapter (Tier 1).
+///
+/// Handles both probing (via [`CodexProbe`]) and runtime execution.
+pub struct CodexAdapter;
+
+impl AdapterRuntime for CodexAdapter {
+    fn build_command(&self, req: &SpawnRequest) -> AgentCommand {
+        let args = vec![
+            "exec".to_string(),
+            req.task_prompt.clone(),
+            "--json".to_string(),
+            "--full-auto".to_string(),
+        ];
+
+        AgentCommand {
+            program: "codex".to_string(),
+            args,
+            env: vec![],
+            cwd: req.worktree_path.clone(),
+        }
+    }
+
+    fn parse_line(&self, line: &str) -> Option<AgentEvent> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+
+        let event_type = match value.get("type").and_then(|t| t.as_str()) {
+            Some("message") => AgentEventType::Message,
+            Some("function_call") | Some("tool_call") => AgentEventType::ToolCall,
+            Some("function_call_output") | Some("tool_result") => AgentEventType::ToolResult,
+            Some("completed") | Some("done") => AgentEventType::Completed,
+            Some("error") => AgentEventType::Failed,
+            _ => {
+                if value.get("usage").is_some() {
+                    AgentEventType::Usage
+                } else {
+                    AgentEventType::Unknown
+                }
+            }
+        };
+
+        Some(AgentEvent {
+            event_type,
+            data: value,
+            raw_line: Some(line.to_string()),
+        })
+    }
+
+    fn parse_raw(&self, chunk: &[u8]) -> Vec<AgentEvent> {
+        String::from_utf8_lossy(chunk)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|line| self.parse_line(line))
+            .collect()
+    }
+}
 
 /// Probe for the Codex CLI adapter (Tier 1).
 pub struct CodexProbe<'a> {

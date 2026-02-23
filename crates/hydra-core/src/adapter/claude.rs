@@ -4,6 +4,78 @@ use super::probe::{
     missing_result, which_binary, AdapterProbe, AdapterTier, CapabilitySet, CommandRunner,
     Confidence, ProbeResult, ProbeStatus,
 };
+use super::runtime::{AdapterRuntime, AgentEvent, AgentEventType, SpawnRequest};
+use crate::supervisor::AgentCommand;
+
+/// Claude CLI adapter (Tier 1).
+///
+/// Handles both probing (via [`ClaudeProbe`]) and runtime execution.
+pub struct ClaudeAdapter;
+
+impl AdapterRuntime for ClaudeAdapter {
+    fn build_command(&self, req: &SpawnRequest) -> AgentCommand {
+        let args = vec![
+            "-p".to_string(),
+            req.task_prompt.clone(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--permission-mode".to_string(),
+            "bypassPermissions".to_string(),
+        ];
+
+        AgentCommand {
+            program: "claude".to_string(),
+            args,
+            env: vec![],
+            cwd: req.worktree_path.clone(),
+        }
+    }
+
+    fn parse_line(&self, line: &str) -> Option<AgentEvent> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+
+        let event_type = match value.get("type").and_then(|t| t.as_str()) {
+            Some("assistant") | Some("message") => AgentEventType::Message,
+            Some("tool_use") => AgentEventType::ToolCall,
+            Some("tool_result") => AgentEventType::ToolResult,
+            Some("result") | Some("content_block_stop") => AgentEventType::Completed,
+            Some("error") => AgentEventType::Failed,
+            Some("usage") | Some("message_delta") => {
+                if value.get("usage").is_some() {
+                    AgentEventType::Usage
+                } else {
+                    AgentEventType::Progress
+                }
+            }
+            _ => AgentEventType::Unknown,
+        };
+
+        Some(AgentEvent {
+            event_type,
+            data: value,
+            raw_line: Some(line.to_string()),
+        })
+    }
+
+    fn parse_raw(&self, chunk: &[u8]) -> Vec<AgentEvent> {
+        String::from_utf8_lossy(chunk)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|line| {
+                self.parse_line(line).unwrap_or(AgentEvent {
+                    event_type: AgentEventType::Message,
+                    data: serde_json::json!({"text": line}),
+                    raw_line: Some(line.to_string()),
+                })
+            })
+            .collect()
+    }
+}
 
 /// Probe for the Claude CLI adapter (Tier 1).
 pub struct ClaudeProbe<'a> {
