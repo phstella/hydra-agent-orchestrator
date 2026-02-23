@@ -19,6 +19,7 @@ pub struct ScoringConfig {
     pub weights: WeightsConfig,
     pub gates: GatesConfig,
     pub diff_scope: DiffScopeConfig,
+    pub commands: CommandsConfig,
 }
 
 impl Default for ScoringConfig {
@@ -29,6 +30,7 @@ impl Default for ScoringConfig {
             weights: WeightsConfig::default(),
             gates: GatesConfig::default(),
             diff_scope: DiffScopeConfig::default(),
+            commands: CommandsConfig::default(),
         }
     }
 }
@@ -99,6 +101,16 @@ impl Default for DiffScopeConfig {
             protected_paths: Vec::new(),
         }
     }
+}
+
+/// Explicit build/test/lint command overrides.
+/// When set, these take precedence over the scoring profile defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CommandsConfig {
+    pub build: Option<String>,
+    pub test: Option<String>,
+    pub lint: Option<String>,
 }
 
 /// Adapter binary path overrides.

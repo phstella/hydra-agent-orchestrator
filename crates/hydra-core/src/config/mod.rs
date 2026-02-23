@@ -5,8 +5,8 @@ use thiserror::Error;
 mod schema;
 
 pub use schema::{
-    AdaptersConfig, DiffScopeConfig, GatesConfig, HydraConfig, RetentionPolicy, ScoringConfig,
-    ScoringProfile, SupervisorConfig, WeightsConfig, WorktreeConfig,
+    AdaptersConfig, CommandsConfig, DiffScopeConfig, GatesConfig, HydraConfig, RetentionPolicy,
+    ScoringConfig, ScoringProfile, SupervisorConfig, WeightsConfig, WorktreeConfig,
 };
 
 #[derive(Debug, Error)]

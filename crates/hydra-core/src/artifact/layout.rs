@@ -64,6 +64,26 @@ impl RunLayout {
         self.agent_dir(agent_key).join("score.json")
     }
 
+    pub fn baseline_dir(&self) -> PathBuf {
+        self.base_dir.join("baseline")
+    }
+
+    pub fn baseline_build_log(&self) -> PathBuf {
+        self.baseline_dir().join("build.log")
+    }
+
+    pub fn baseline_test_log(&self) -> PathBuf {
+        self.baseline_dir().join("test.log")
+    }
+
+    pub fn baseline_lint_log(&self) -> PathBuf {
+        self.baseline_dir().join("lint.log")
+    }
+
+    pub fn baseline_result(&self) -> PathBuf {
+        self.baseline_dir().join("baseline.json")
+    }
+
     /// Create the full directory tree for this run.
     pub fn create_dirs(&self, agent_keys: &[&str]) -> Result<(), ArtifactError> {
         if self.base_dir.exists() {
