@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import type {
   AgentResult,
@@ -78,7 +78,20 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
     try {
       const result = await previewMerge(runId, activeCandidate, forceOverride);
       setMergePreview(result);
-      setMergeStatus(result.hasConflicts ? 'preview_conflict' : 'preview_clean');
+      if (result.hasConflicts) {
+        setMergeStatus('preview_conflict');
+        return;
+      }
+      if (!result.success) {
+        setMergeStatus('failed');
+        setMergeError(
+          result.stderr.trim() ||
+          result.stdout.trim() ||
+          'Preview failed. Check repository state and retry.',
+        );
+        return;
+      }
+      setMergeStatus('preview_clean');
     } catch (err) {
       setMergeError(err instanceof Error ? err.message : String(err));
       setMergeStatus('failed');
@@ -86,8 +99,9 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
   }, [runId, activeCandidate, forceOverride]);
 
   const handleAccept = useCallback(() => {
+    if (mergeStatus !== 'preview_clean') return;
     setConfirmOpen(true);
-  }, []);
+  }, [mergeStatus]);
 
   const handleConfirmMerge = useCallback(async () => {
     setConfirmOpen(false);
@@ -208,7 +222,7 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
               onForceToggle={setForceOverride}
               onPreview={handlePreview}
               onAccept={handleAccept}
-              onReject={() => { setMergeStatus('idle'); setMergePreview(null); setMergeResult(null); }}
+              onReject={() => { setMergeStatus('idle'); setMergePreview(null); setMergeResult(null); setMergeError(null); }}
             />
           </div>
         </div>
@@ -310,72 +324,168 @@ function CandidateTabBar({
   );
 }
 
+type DiffRowType = 'meta' | 'context' | 'add' | 'remove';
+
+interface DiffRow {
+  left: string;
+  right: string;
+  kind: DiffRowType;
+}
+
+const MAX_DIFF_LINES = 5000;
+
 function DiffViewerPane({ diffText }: { diffText: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  const TAIL_LINES = 5000;
-  const lines = useMemo(() => {
-    const all = diffText.split('\n');
-    if (all.length > TAIL_LINES) {
-      return all.slice(0, TAIL_LINES);
-    }
-    return all;
-  }, [diffText]);
-
-  const truncated = diffText.split('\n').length > TAIL_LINES;
+  const allLines = useMemo(() => diffText.split('\n'), [diffText]);
+  const lines = useMemo(
+    () => (allLines.length > MAX_DIFF_LINES ? allLines.slice(0, MAX_DIFF_LINES) : allLines),
+    [allLines],
+  );
+  const rows = useMemo(() => buildDiffRows(lines), [lines]);
+  const truncated = allLines.length > MAX_DIFF_LINES;
 
   return (
-    <Panel title="Diff" headerRight={<Badge variant="neutral">{diffText.split('\n').length} lines</Badge>}>
+    <Panel title="Diff" headerRight={<Badge variant="neutral">{allLines.length} lines</Badge>}>
       <div
-        ref={containerRef}
         data-testid="diff-viewer"
         style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 'var(--text-xs)',
-          lineHeight: 'var(--leading-relaxed)',
           overflowX: 'auto',
           overflowY: 'auto',
           maxHeight: 500,
-          whiteSpace: 'pre',
-          tabSize: 4,
+          border: '1px solid var(--color-border-700)',
+          borderRadius: 'var(--radius-md)',
         }}
       >
         {truncated && (
-          <div style={{ color: 'var(--color-warning-400)', padding: 'var(--space-2)', borderBottom: '1px solid var(--color-border-700)' }}>
-            Showing first {TAIL_LINES} of {diffText.split('\n').length} lines
+          <div
+            style={{
+              color: 'var(--color-warning-400)',
+              padding: 'var(--space-2)',
+              borderBottom: '1px solid var(--color-border-700)',
+            }}
+          >
+            Showing first {MAX_DIFF_LINES} of {allLines.length} lines
           </div>
         )}
-        {lines.map((line, i) => (
-          <DiffLine key={i} line={line} />
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            borderBottom: '1px solid var(--color-border-700)',
+            backgroundColor: 'var(--color-surface-800)',
+            position: 'sticky',
+            top: 0,
+            zIndex: 1,
+          }}
+        >
+          <div
+            style={{
+              padding: 'var(--space-2)',
+              borderRight: '1px solid var(--color-border-700)',
+              fontSize: 'var(--text-xs)',
+              color: 'var(--color-text-muted)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+            }}
+          >
+            Original
+          </div>
+          <div
+            style={{
+              padding: 'var(--space-2)',
+              fontSize: 'var(--text-xs)',
+              color: 'var(--color-text-muted)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+            }}
+          >
+            Candidate
+          </div>
+        </div>
+        {rows.map((row, i) => (
+          <SideBySideRow key={i} row={row} />
         ))}
       </div>
     </Panel>
   );
 }
 
-function DiffLine({ line }: { line: string }) {
-  let color = 'var(--color-text-secondary)';
-  let bg = 'transparent';
+function buildDiffRows(lines: string[]): DiffRow[] {
+  return lines.map((line) => {
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      return { left: '', right: line.slice(1), kind: 'add' };
+    }
+    if (line.startsWith('-') && !line.startsWith('---')) {
+      return { left: line.slice(1), right: '', kind: 'remove' };
+    }
+    if (line.startsWith(' ')) {
+      const text = line.slice(1);
+      return { left: text, right: text, kind: 'context' };
+    }
+    return { left: line, right: line, kind: 'meta' };
+  });
+}
 
-  if (line.startsWith('+') && !line.startsWith('+++')) {
-    color = 'var(--color-green-400)';
-    bg = 'color-mix(in srgb, var(--color-green-500) 6%, transparent)';
-  } else if (line.startsWith('-') && !line.startsWith('---')) {
-    color = 'var(--color-danger-400)';
-    bg = 'color-mix(in srgb, var(--color-danger-500) 6%, transparent)';
-  } else if (line.startsWith('@@')) {
-    color = 'var(--color-marine-400)';
-    bg = 'color-mix(in srgb, var(--color-marine-500) 8%, transparent)';
-  } else if (line.startsWith('diff --git')) {
-    color = 'var(--color-text-primary)';
-    bg = 'color-mix(in srgb, var(--color-text-muted) 8%, transparent)';
-  }
+function SideBySideRow({ row }: { row: DiffRow }) {
+  const leftStyle = sideCellStyle('left', row.kind);
+  const rightStyle = sideCellStyle('right', row.kind);
 
   return (
-    <div style={{ color, backgroundColor: bg, paddingLeft: 'var(--space-2)', paddingRight: 'var(--space-2)', minHeight: '1.5em' }}>
-      {line || ' '}
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        minWidth: 900,
+      }}
+    >
+      <div style={leftStyle}>{row.left || ' '}</div>
+      <div style={rightStyle}>{row.right || ' '}</div>
     </div>
   );
+}
+
+function sideCellStyle(side: 'left' | 'right', kind: DiffRowType): CSSProperties {
+  const base: CSSProperties = {
+    fontFamily: 'var(--font-mono)',
+    fontSize: 'var(--text-xs)',
+    lineHeight: 'var(--leading-relaxed)',
+    whiteSpace: 'pre',
+    tabSize: 4,
+    padding: '0 var(--space-2)',
+    minHeight: '1.5em',
+    borderRight: side === 'left' ? '1px solid var(--color-border-700)' : 'none',
+    color: 'var(--color-text-secondary)',
+    backgroundColor: 'transparent',
+  };
+
+  if (kind === 'meta') {
+    return {
+      ...base,
+      color: 'var(--color-marine-400)',
+      backgroundColor: 'color-mix(in srgb, var(--color-marine-500) 8%, transparent)',
+    };
+  }
+
+  if (kind === 'remove') {
+    return side === 'left'
+      ? {
+          ...base,
+          color: 'var(--color-danger-400)',
+          backgroundColor: 'color-mix(in srgb, var(--color-danger-500) 8%, transparent)',
+        }
+      : base;
+  }
+
+  if (kind === 'add') {
+    return side === 'right'
+      ? {
+          ...base,
+          color: 'var(--color-green-400)',
+          backgroundColor: 'color-mix(in srgb, var(--color-green-500) 8%, transparent)',
+        }
+      : base;
+  }
+
+  return base;
 }
 
 function ModifiedFilesList({ files }: { files: DiffFile[] }) {
@@ -470,7 +580,7 @@ function MergeActionRail({
           </div>
         )}
 
-        {!canMerge && diffPayload.mergeable === false && (
+        {!canMerge && (diffPayload.mergeable === false || diffPayload.gateFailures.length > 0) && (
           <label
             style={{
               display: 'flex',
@@ -507,7 +617,15 @@ function MergeActionRail({
           <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
             {mergePreview.hasConflicts
               ? <span style={{ color: 'var(--color-danger-400)' }}>Conflicts detected. Merge cannot proceed.</span>
-              : <span style={{ color: 'var(--color-green-400)' }}>Clean merge. No conflicts.</span>}
+              : mergePreview.success
+                ? <span style={{ color: 'var(--color-green-400)' }}>Clean merge. No conflicts.</span>
+                : <span style={{ color: 'var(--color-danger-400)' }}>Preview failed. Resolve errors before merge.</span>}
+          </div>
+        )}
+
+        {mergeStatus !== 'preview_clean' && (
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+            Run <strong>Preview Merge</strong> and wait for a clean result before accepting.
           </div>
         )}
 
@@ -516,7 +634,7 @@ function MergeActionRail({
           size="sm"
           style={{ width: '100%' }}
           onClick={onAccept}
-          disabled={!canMerge || mergeStatus === 'merging' || mergeStatus === 'merged' || mergeStatus === 'preview_conflict'}
+          disabled={!canMerge || mergeStatus !== 'preview_clean'}
           loading={mergeStatus === 'merging'}
           data-testid="accept-merge-btn"
         >

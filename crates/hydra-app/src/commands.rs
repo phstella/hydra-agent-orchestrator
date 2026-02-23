@@ -773,36 +773,7 @@ pub async fn preview_merge(
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    let (success, has_conflicts, branch, report_path) = if output.status.success() {
-        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
-        let branch_val = parsed
-            .get("branch")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let conflicts = parsed
-            .get("has_conflicts")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let rp = parsed
-            .get("report_path")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        (true, conflicts, branch_val, rp)
-    } else {
-        let has_conflicts = stderr.contains("CONFLICT") || stdout.contains("has_conflicts");
-        (false, has_conflicts, String::new(), None)
-    };
-
-    Ok(MergePreviewPayload {
-        agent_key,
-        branch,
-        success,
-        has_conflicts,
-        stdout,
-        stderr,
-        report_path,
-    })
+    parse_merge_preview_payload(output.status.success(), &agent_key, &stdout, &stderr)
 }
 
 #[tauri::command]
@@ -904,6 +875,94 @@ fn resolve_cli_and_repo() -> Result<(Vec<String>, PathBuf), String> {
             repo_root,
         ))
     }
+}
+
+fn parse_merge_preview_payload(
+    status_success: bool,
+    agent_key: &str,
+    stdout: &str,
+    stderr: &str,
+) -> Result<MergePreviewPayload, String> {
+    if let Some(payload) = try_parse_merge_preview_payload(agent_key, stdout, stderr) {
+        if status_success || payload.has_conflicts {
+            return Ok(payload);
+        }
+
+        return Err(format!(
+            "[validation_error] {}",
+            best_merge_error_message(stderr, stdout)
+        ));
+    }
+
+    if status_success {
+        return Err(
+            "[internal_error] merge preview did not return expected JSON payload".to_string()
+        );
+    }
+
+    Err(format!(
+        "[validation_error] {}",
+        best_merge_error_message(stderr, stdout)
+    ))
+}
+
+fn try_parse_merge_preview_payload(
+    agent_key: &str,
+    stdout: &str,
+    stderr: &str,
+) -> Option<MergePreviewPayload> {
+    let parsed: serde_json::Value = serde_json::from_str(stdout).ok()?;
+    let has_conflicts = parsed
+        .get("has_conflicts")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let success = parsed
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(!has_conflicts);
+
+    Some(MergePreviewPayload {
+        agent_key: parsed
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or(agent_key)
+            .to_string(),
+        branch: parsed
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        success,
+        has_conflicts,
+        stdout: parsed
+            .get("stdout")
+            .and_then(|v| v.as_str())
+            .unwrap_or(stdout)
+            .to_string(),
+        stderr: parsed
+            .get("stderr")
+            .and_then(|v| v.as_str())
+            .unwrap_or(stderr)
+            .to_string(),
+        report_path: parsed
+            .get("report_path")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    })
+}
+
+fn best_merge_error_message(stderr: &str, stdout: &str) -> String {
+    let stderr = stderr.trim();
+    if !stderr.is_empty() {
+        return stderr.to_string();
+    }
+
+    let stdout = stdout.trim();
+    if !stdout.is_empty() {
+        return stdout.to_string();
+    }
+
+    "merge preview command failed".to_string()
 }
 
 fn load_agent_mergeability(
@@ -1167,5 +1226,66 @@ mod tests {
         assert_eq!(normalize_status("TimedOut"), "timed_out");
         assert_eq!(normalize_status("timed-out"), "timed_out");
         assert_eq!(normalize_status("Already Fine"), "already_fine");
+    }
+
+    #[test]
+    fn parse_diff_numstat_from_patch_counts_added_removed_per_file() {
+        let patch = r#"diff --git a/src/a.rs b/src/a.rs
+index 1111111..2222222 100644
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,2 +1,3 @@
+ fn a() {
+-  old
++  new
++  more
+ }
+diff --git a/src/b.rs b/src/b.rs
+index 3333333..4444444 100644
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -1,3 +1,2 @@
+-removed
+ stay
+"#;
+        let files = parse_diff_numstat_from_patch(patch);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "src/a.rs");
+        assert_eq!(files[0].added, 2);
+        assert_eq!(files[0].removed, 1);
+        assert_eq!(files[1].path, "src/b.rs");
+        assert_eq!(files[1].added, 0);
+        assert_eq!(files[1].removed, 1);
+    }
+
+    #[test]
+    fn parse_merge_preview_payload_conflict_json_is_not_clean() {
+        let payload_json = serde_json::json!({
+            "agent": "claude",
+            "branch": "hydra/test/agent/claude",
+            "success": false,
+            "has_conflicts": true,
+            "stdout": "",
+            "stderr": "CONFLICT in src/main.rs",
+            "report_path": ".hydra/runs/test/merge_report.json"
+        })
+        .to_string();
+
+        let payload = parse_merge_preview_payload(true, "claude", &payload_json, "").unwrap();
+        assert!(!payload.success);
+        assert!(payload.has_conflicts);
+    }
+
+    #[test]
+    fn parse_merge_preview_payload_non_conflict_failure_returns_error() {
+        let err = parse_merge_preview_payload(
+            false,
+            "claude",
+            "",
+            "working tree has uncommitted changes",
+        )
+        .unwrap_err();
+        assert!(err.contains("validation_error"));
+        assert!(err.contains("working tree has uncommitted changes"));
     }
 }

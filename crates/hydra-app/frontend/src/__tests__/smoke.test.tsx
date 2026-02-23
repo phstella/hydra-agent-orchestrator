@@ -4,7 +4,7 @@
  * Covers: startup, preflight refresh, experimental modal gating, race flow,
  * winner selection, diff candidate switching, and merge dry-run gating.
  */
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../App';
 import * as ipc from '../ipc';
@@ -251,9 +251,7 @@ describe('Smoke Test 2: Preflight refresh triggers IPC and updates state', () =>
     });
 
     const rerunBtn = await screen.findByText(/re-run diagnostics/i);
-    await act(async () => {
-      fireEvent.click(rerunBtn);
-    });
+    fireEvent.click(rerunBtn);
 
     await waitFor(() => {
       expect(ipc.runPreflight).toHaveBeenCalledTimes(2);
@@ -270,20 +268,24 @@ describe('Smoke Test 3: Experimental adapter modal blocks confirm until acknowle
       expect(screen.getByText('cursor-agent')).toBeInTheDocument();
     });
 
-    await act(async () => {
-      await user.click(screen.getByRole('tab', { name: /race/i }));
-    });
+    await user.click(screen.getByRole('tab', { name: /race/i }));
 
     const cursorBtn = screen.getByText('cursor-agent').closest('button');
     expect(cursorBtn).toBeTruthy();
 
-    await act(async () => {
-      if (cursorBtn) await user.click(cursorBtn);
-    });
+    if (cursorBtn) {
+      await user.click(cursorBtn);
+    }
 
     await waitFor(() => {
       expect(screen.getByText(/experimental adapter warning/i)).toBeInTheDocument();
     });
+
+    const confirmBtn = screen.getByRole('button', { name: /confirm selection/i });
+    expect(confirmBtn).toBeDisabled();
+
+    await user.click(screen.getByRole('checkbox'));
+    expect(confirmBtn).toBeEnabled();
   });
 });
 
@@ -293,23 +295,17 @@ describe('Smoke Test 4: Race flow transitions', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await act(async () => {
-      await user.click(screen.getByRole('tab', { name: /race/i }));
-    });
+    await user.click(screen.getByRole('tab', { name: /race/i }));
 
     await waitFor(() => {
       expect(screen.getByText('claude')).toBeInTheDocument();
     });
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
-    await act(async () => {
-      await user.type(textarea, 'Fix the bug in main.rs');
-    });
+    await user.type(textarea, 'Fix the bug in main.rs');
 
     const startBtn = screen.getByRole('button', { name: /start race/i });
-    await act(async () => {
-      await user.click(startBtn);
-    });
+    await user.click(startBtn);
 
     await waitFor(() => {
       expect(ipc.startRace).toHaveBeenCalled();
@@ -331,20 +327,16 @@ describe('Smoke Test 5: Winner selection is explicit and does not auto-merge', (
     const user = userEvent.setup();
     render(<App />);
 
-    await act(async () => { await user.click(screen.getByRole('tab', { name: /race/i })); });
+    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
-    await act(async () => {
-      await user.type(textarea, 'Fix bug');
-      await user.click(screen.getByRole('button', { name: /start race/i }));
-    });
+    await user.type(textarea, 'Fix bug');
+    await user.click(screen.getByRole('button', { name: /start race/i }));
 
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
-    await act(async () => {
-      await user.click(screen.getByText('View Scoreboard'));
-    });
+    await user.click(screen.getByText('View Scoreboard'));
 
     await waitFor(() => {
       const winnerBtns = screen.getAllByText('Select as Winner');
@@ -352,9 +344,7 @@ describe('Smoke Test 5: Winner selection is explicit and does not auto-merge', (
     });
 
     const selectBtns = screen.getAllByText('Select as Winner');
-    await act(async () => {
-      await user.click(selectBtns[0]);
-    });
+    await user.click(selectBtns[0]);
 
     expect(ipc.executeMerge).not.toHaveBeenCalled();
   });
@@ -366,18 +356,16 @@ describe('Smoke Test 6: Diff candidate switching updates diff and file list', ()
     const user = userEvent.setup();
     render(<App />);
 
-    await act(async () => { await user.click(screen.getByRole('tab', { name: /race/i })); });
+    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
-    await act(async () => {
-      await user.type(textarea, 'Fix bug');
-      await user.click(screen.getByRole('button', { name: /start race/i }));
-    });
+    await user.type(textarea, 'Fix bug');
+    await user.click(screen.getByRole('button', { name: /start race/i }));
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
     await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
-    await act(async () => { await user.click(screen.getByText('View Scoreboard')); });
+    await user.click(screen.getByText('View Scoreboard'));
 
     await waitFor(() => {
       const selectBtns = screen.getAllByText('Select as Winner');
@@ -385,12 +373,15 @@ describe('Smoke Test 6: Diff candidate switching updates diff and file list', ()
     });
 
     const selectBtns = screen.getAllByText('Select as Winner');
-    await act(async () => {
-      await user.click(selectBtns[0]);
-    });
+    await user.click(selectBtns[0]);
 
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: /review/i })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Original')).toBeInTheDocument();
+      expect(screen.getByText('Candidate')).toBeInTheDocument();
     });
 
     await waitFor(() => {
@@ -398,9 +389,7 @@ describe('Smoke Test 6: Diff candidate switching updates diff and file list', ()
     });
 
     const codexTab = screen.getByTestId('candidate-tab-codex');
-    await act(async () => {
-      await user.click(codexTab);
-    });
+    await user.click(codexTab);
 
     await waitFor(() => {
       expect(ipc.getCandidateDiff).toHaveBeenCalledWith('test-run-id', 'codex');
@@ -414,33 +403,29 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await act(async () => { await user.click(screen.getByRole('tab', { name: /race/i })); });
+    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
-    await act(async () => {
-      await user.type(textarea, 'Fix bug');
-      await user.click(screen.getByRole('button', { name: /start race/i }));
-    });
+    await user.type(textarea, 'Fix bug');
+    await user.click(screen.getByRole('button', { name: /start race/i }));
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
     await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
-    await act(async () => { await user.click(screen.getByText('View Scoreboard')); });
+    await user.click(screen.getByText('View Scoreboard'));
 
     await waitFor(() => {
       expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
     });
 
     const selectBtns = screen.getAllByText('Select as Winner');
-    await act(async () => { await user.click(selectBtns[0]); });
+    await user.click(selectBtns[0]);
 
     await waitFor(() => {
       expect(screen.getByTestId('preview-merge-btn')).toBeInTheDocument();
     });
 
-    await act(async () => {
-      await user.click(screen.getByTestId('preview-merge-btn'));
-    });
+    await user.click(screen.getByTestId('preview-merge-btn'));
 
     await waitFor(() => {
       expect(ipc.previewMerge).toHaveBeenCalledWith('test-run-id', 'claude', false);
@@ -462,34 +447,74 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await act(async () => { await user.click(screen.getByRole('tab', { name: /race/i })); });
+    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
-    await act(async () => {
-      await user.type(textarea, 'Fix bug');
-      await user.click(screen.getByRole('button', { name: /start race/i }));
-    });
+    await user.type(textarea, 'Fix bug');
+    await user.click(screen.getByRole('button', { name: /start race/i }));
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
     await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
-    await act(async () => { await user.click(screen.getByText('View Scoreboard')); });
+    await user.click(screen.getByText('View Scoreboard'));
 
     await waitFor(() => {
       expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
     });
 
     const selectBtns = screen.getAllByText('Select as Winner');
-    await act(async () => { await user.click(selectBtns[0]); });
+    await user.click(selectBtns[0]);
 
     await waitFor(() => expect(screen.getByTestId('preview-merge-btn')).toBeInTheDocument());
 
-    await act(async () => {
-      await user.click(screen.getByTestId('preview-merge-btn'));
-    });
+    await user.click(screen.getByTestId('preview-merge-btn'));
 
     await waitFor(() => {
       expect(screen.getByText(/conflicts detected/i)).toBeInTheDocument();
+    });
+
+    const acceptBtn = screen.getByTestId('accept-merge-btn');
+    expect(acceptBtn).toBeDisabled();
+  });
+
+  it('blocks accept and shows error when preview fails without conflicts', async () => {
+    vi.mocked(ipc.previewMerge).mockResolvedValue({
+      agentKey: 'claude',
+      branch: 'hydra/test-run-id/agent/claude',
+      success: false,
+      hasConflicts: false,
+      stdout: '',
+      stderr: 'working tree has uncommitted changes',
+      reportPath: null,
+    });
+
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: /race/i }));
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'Fix bug');
+    await user.click(screen.getByRole('button', { name: /start race/i }));
+    await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
+
+    await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
+    await user.click(screen.getByText('View Scoreboard'));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
+    });
+
+    const selectBtns = screen.getAllByText('Select as Winner');
+    await user.click(selectBtns[0]);
+
+    await waitFor(() => expect(screen.getByTestId('preview-merge-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('preview-merge-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/preview failed/i)).toBeInTheDocument();
     });
 
     const acceptBtn = screen.getByTestId('accept-merge-btn');
