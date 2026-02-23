@@ -7,6 +7,7 @@ use hydra_core::adapter::cursor::CursorAdapter;
 use hydra_core::adapter::{AgentAdapter, ProbeRunner};
 
 mod doctor;
+mod merge;
 mod race;
 
 #[derive(Parser)]
@@ -24,13 +25,13 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Run an agent on a task in an isolated worktree
+    /// Run agents on a task in isolated worktrees
     Race {
-        /// Agent to run (claude, codex)
-        #[arg(long)]
-        agents: String,
+        /// Agents to run (comma-separated, e.g. "claude,codex")
+        #[arg(long, value_delimiter = ',')]
+        agents: Vec<String>,
 
-        /// Task prompt for the agent
+        /// Task prompt for the agents
         #[arg(long, short = 'p')]
         prompt: String,
 
@@ -45,6 +46,36 @@ enum Commands {
         /// Allow agent execution outside strict worktree sandbox controls
         #[arg(long = "unsafe")]
         unsafe_mode: bool,
+
+        /// Allow experimental (non-Tier-1) adapters to participate in the race
+        #[arg(long)]
+        allow_experimental_adapters: bool,
+    },
+    /// Merge an agent's branch from a completed race run
+    Merge {
+        /// Run ID to merge from
+        #[arg(long)]
+        run_id: uuid::Uuid,
+
+        /// Specific agent to merge (defaults to highest-scoring mergeable)
+        #[arg(long)]
+        agent: Option<String>,
+
+        /// Preview merge without modifying working tree
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Confirm and execute the merge
+        #[arg(long)]
+        confirm: bool,
+
+        /// Force merge even if agent is not marked mergeable
+        #[arg(long)]
+        force: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -85,15 +116,34 @@ fn main() -> anyhow::Result<()> {
             base_ref,
             json,
             unsafe_mode,
+            allow_experimental_adapters,
         } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(race::run_race(race::RaceOpts {
-                agent: agents,
+                agents,
                 prompt,
                 base_ref,
                 json,
                 unsafe_mode,
+                allow_experimental_adapters,
             }))?;
+        }
+        Commands::Merge {
+            run_id,
+            agent,
+            dry_run,
+            confirm,
+            force,
+            json,
+        } => {
+            merge::run_merge(merge::MergeOpts {
+                run_id,
+                agent,
+                dry_run,
+                confirm,
+                force,
+                json,
+            })?;
         }
     }
 

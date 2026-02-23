@@ -3,10 +3,12 @@ pub mod codex;
 pub mod cursor;
 mod error;
 mod probe;
+pub mod registry;
 mod types;
 
 pub use error::AdapterError;
 pub use probe::{ProbeReport, ProbeRunner};
+pub use registry::AdapterRegistry;
 pub use types::{
     AdapterTier, AgentEvent, BuiltCommand, CapabilityConfidence, CapabilitySet, DetectResult,
     DetectStatus, ProbeResult, SpawnRequest,
