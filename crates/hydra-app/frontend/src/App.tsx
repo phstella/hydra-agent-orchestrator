@@ -1,11 +1,13 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { PreflightDashboard } from './components/PreflightDashboard';
 import { ExperimentalAdapterModal } from './components/ExperimentalAdapterModal';
+import { AgentRail } from './components/AgentRail';
+import { LiveOutputPanel } from './components/LiveOutputPanel';
 import { Tabs, Badge, Button, Card } from './components/design-system';
 import { getRaceResult, listAdapters, pollRaceEvents, startRace } from './ipc';
 import type { AdapterInfo, RaceResult } from './types';
 import { isExperimental, isTier1 } from './types';
-import { useEventBuffer } from './hooks';
+import { useEventBuffer, useAgentStatuses } from './hooks';
 
 const NAV_TABS = [
   { id: 'preflight', label: 'Preflight' },
@@ -30,7 +32,12 @@ export default function App() {
   const [raceError, setRaceError] = useState<string | null>(null);
   const [raceResult, setRaceResult] = useState<RaceResult | null>(null);
 
-  const { events, push, clear } = useEventBuffer();
+  const { events, push, clear, eventsByAgent } = useEventBuffer();
+
+  const [raceAgents, setRaceAgents] = useState<string[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+
+  const agentStatuses = useAgentStatuses(events, raceAgents);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,6 +123,8 @@ export default function App() {
     setRaceResult(null);
     setRunStatus('starting');
     setActiveRunId(null);
+    setRaceAgents([]);
+    setSelectedAgent(null);
     clear();
 
     try {
@@ -125,6 +134,8 @@ export default function App() {
         allowExperimental: selectedExperimentalCount > 0,
       });
       setActiveRunId(started.runId);
+      setRaceAgents(started.agents);
+      setSelectedAgent(started.agents[0] ?? null);
       setRunStatus('running');
       setActiveTab('race');
     } catch (err) {
@@ -321,69 +332,51 @@ export default function App() {
                 )}
               </Card>
 
-              <Card padding="lg">
-                <h3
+              {(runStatus !== 'idle' && runStatus !== 'starting') && (
+                <div
                   style={{
-                    fontSize: 'var(--text-lg)',
-                    fontWeight: 'var(--weight-semibold)' as unknown as number,
-                    marginBottom: 'var(--space-3)',
+                    display: 'flex',
+                    border: '1px solid var(--color-border-700)',
+                    borderRadius: 'var(--radius-lg)',
+                    backgroundColor: 'var(--color-surface-800)',
+                    overflow: 'hidden',
+                    height: 420,
                   }}
                 >
-                  Live Events
-                </h3>
-
-                {events.length === 0 ? (
-                  <div style={{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
-                    No events yet.
-                  </div>
-                ) : (
                   <div
                     style={{
-                      maxHeight: 280,
-                      overflowY: 'auto',
-                      border: '1px solid var(--color-border-700)',
-                      borderRadius: 'var(--radius-md)',
+                      borderRight: '1px solid var(--color-border-700)',
                       padding: 'var(--space-3)',
-                      backgroundColor: 'var(--color-bg-900)',
+                      overflowY: 'auto',
+                      flexShrink: 0,
                     }}
                   >
-                    {events.slice(-80).map((event, idx) => {
-                      const maybeEpochSeconds = Number(event.timestamp);
-                      const parsedTime = Number.isFinite(maybeEpochSeconds)
-                        ? new Date(maybeEpochSeconds * 1000)
-                        : new Date(event.timestamp);
-
-                      return (
-                        <div key={`${event.timestamp}-${idx}`} style={{ marginBottom: 'var(--space-2)' }}>
-                        <span style={{ color: 'var(--color-marine-400)', marginRight: 'var(--space-2)' }}>
-                          {event.eventType}
-                        </span>
-                        <span style={{ color: 'var(--color-text-secondary)', marginRight: 'var(--space-2)' }}>
-                          {event.agentKey}
-                        </span>
-                        <span style={{ color: 'var(--color-text-muted)' }}>
-                          {Number.isNaN(parsedTime.getTime())
-                            ? event.timestamp
-                            : parsedTime.toLocaleTimeString()}
-                        </span>
-                      </div>
-                      );
-                    })}
+                    <AgentRail
+                      agents={agentStatuses}
+                      selectedAgent={selectedAgent}
+                      onSelectAgent={setSelectedAgent}
+                    />
                   </div>
-                )}
+                  <LiveOutputPanel
+                    agentKey={selectedAgent}
+                    lifecycle={agentStatuses.find((a) => a.agentKey === selectedAgent)?.lifecycle ?? null}
+                    events={events}
+                    eventsByAgent={eventsByAgent}
+                  />
+                </div>
+              )}
 
-                {raceResult && (
-                  <div style={{ marginTop: 'var(--space-4)' }}>
-                    <h4 style={{ marginBottom: 'var(--space-2)' }}>Latest Result</h4>
-                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-                      Status: {raceResult.status}
-                    </div>
-                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-                      Agents: {raceResult.agents.length}
-                    </div>
+              {raceResult && (
+                <Card padding="lg" style={{ marginTop: 'var(--space-6)' }}>
+                  <h4 style={{ marginBottom: 'var(--space-2)' }}>Race Result</h4>
+                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+                    Status: {raceResult.status}
                   </div>
-                )}
-              </Card>
+                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+                    Agents: {raceResult.agents.length}
+                  </div>
+                </Card>
+              )}
             </div>
           )}
 

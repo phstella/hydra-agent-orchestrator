@@ -8,6 +8,7 @@
 import type {
   PreflightResult,
   AdapterInfo,
+  AgentStreamEvent,
   RaceRequest,
   RaceStarted,
   RaceResult,
@@ -143,11 +144,35 @@ const MOCK_PREFLIGHT: PreflightResult = {
 };
 
 let mockCursor = 0;
-const MOCK_EVENT_STREAM = [
-  { runId: 'mock-run', agentKey: 'system', eventType: 'race_process_started', data: {}, timestamp: new Date().toISOString() },
-  { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_started', data: {}, timestamp: new Date().toISOString() },
-  { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_stdout', data: { line: 'Analyzing repository...' }, timestamp: new Date().toISOString() },
-];
+let mockStartTime = Date.now();
+
+function mockTs(offsetMs: number): string {
+  return new Date(mockStartTime + offsetMs).toISOString();
+}
+
+function buildMockEventStream(): AgentStreamEvent[] {
+  return [
+    { runId: 'mock-run', agentKey: 'system', eventType: 'race_process_started', data: {}, timestamp: mockTs(0) },
+    { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_started', data: {}, timestamp: mockTs(100) },
+    { runId: 'mock-run', agentKey: 'codex', eventType: 'agent_started', data: {}, timestamp: mockTs(150) },
+    { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_stdout', data: { line: 'Analyzing repository structure...' }, timestamp: mockTs(800) },
+    { runId: 'mock-run', agentKey: 'codex', eventType: 'agent_stdout', data: { line: 'Reading project configuration...' }, timestamp: mockTs(900) },
+    { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_stdout', data: { line: 'Scanning source files for context...' }, timestamp: mockTs(1500) },
+    { runId: 'mock-run', agentKey: 'codex', eventType: 'agent_stdout', data: { line: 'Building dependency graph...' }, timestamp: mockTs(1700) },
+    { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_stdout', data: { line: 'Generating implementation plan...' }, timestamp: mockTs(2200) },
+    { runId: 'mock-run', agentKey: 'codex', eventType: 'agent_stdout', data: { line: 'Applying changes to src/main.rs...' }, timestamp: mockTs(2500) },
+    { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_stdout', data: { line: 'Writing changes to 3 files...' }, timestamp: mockTs(3000) },
+    { runId: 'mock-run', agentKey: 'codex', eventType: 'agent_stdout', data: { line: 'Running tests...' }, timestamp: mockTs(3200) },
+    { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_stdout', data: { line: 'Running cargo test...' }, timestamp: mockTs(3500) },
+    { runId: 'mock-run', agentKey: 'codex', eventType: 'agent_stdout', data: { line: 'All tests passed (12/12)' }, timestamp: mockTs(4000) },
+    { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_stdout', data: { line: '14 tests passed, 0 failed' }, timestamp: mockTs(4200) },
+    { runId: 'mock-run', agentKey: 'codex', eventType: 'agent_completed', data: { durationMs: 4100 }, timestamp: mockTs(4300) },
+    { runId: 'mock-run', agentKey: 'claude', eventType: 'agent_completed', data: { durationMs: 4500 }, timestamp: mockTs(4600) },
+    { runId: 'mock-run', agentKey: 'system', eventType: 'race_completed', data: {}, timestamp: mockTs(4700) },
+  ];
+}
+
+let mockEventStream = buildMockEventStream();
 
 async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Promise<T> {
   await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
@@ -161,6 +186,8 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
       return MOCK_ADAPTERS as T;
     case 'start_race':
       mockCursor = 0;
+      mockStartTime = Date.now();
+      mockEventStream = buildMockEventStream();
       return { runId: 'mock-run', agents: ['claude', 'codex'] } as T;
     case 'get_race_result':
       return {
@@ -172,14 +199,21 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
         ],
       } as T;
     case 'poll_race_events': {
-      const batch = MOCK_EVENT_STREAM.slice(mockCursor, mockCursor + 2);
+      const elapsed = Date.now() - mockStartTime;
+      const available = mockEventStream.filter((e) => {
+        const offset = new Date(e.timestamp).getTime() - mockStartTime;
+        return offset <= elapsed;
+      });
+      const batch = available.slice(mockCursor, mockCursor + 3);
       mockCursor += batch.length;
+      const done = mockCursor >= mockEventStream.length && batch.length > 0
+        && batch.some((e) => e.eventType === 'race_completed');
       return {
         runId: 'mock-run',
         events: batch,
         nextCursor: mockCursor,
-        done: mockCursor >= MOCK_EVENT_STREAM.length,
-        status: mockCursor >= MOCK_EVENT_STREAM.length ? 'completed' : 'running',
+        done,
+        status: done ? 'completed' : 'running',
         error: null,
       } as T;
     }
