@@ -1,0 +1,21 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p hydra-cli
+      - run: cargo test --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hydra-${{ matrix.os }}
+          path: target/release/hydra*
