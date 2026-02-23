@@ -229,8 +229,9 @@ impl AgentAdapter for ClaudeAdapter {
 
         let has_print = flags.iter().any(|f| f == "--print");
         let has_output_format = flags.iter().any(|f| f == "--output-format");
+        let has_permission_mode = flags.iter().any(|f| f == "--permission-mode");
 
-        let status = if has_print && has_output_format {
+        let status = if has_print && has_output_format && has_permission_mode {
             DetectStatus::Ready
         } else {
             DetectStatus::Blocked
@@ -243,6 +244,9 @@ impl AgentAdapter for ClaudeAdapter {
             }
             if !has_output_format {
                 missing.push("--output-format");
+            }
+            if !has_permission_mode {
+                missing.push("--permission-mode");
             }
             Some(format!("missing required flags: {}", missing.join(", ")))
         } else {

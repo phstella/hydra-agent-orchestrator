@@ -290,8 +290,12 @@ impl AgentAdapter for CodexAdapter {
 
         let has_exec = flags.iter().any(|f| f == "exec");
         let has_json = flags.iter().any(|f| f == "--json");
+        let has_runtime_controls = flags.is_empty()
+            || flags.iter().any(|f| f == "--full-auto")
+            || (flags.iter().any(|f| f == "--ask-for-approval")
+                && flags.iter().any(|f| f == "--sandbox"));
 
-        let status = if has_exec && has_json {
+        let status = if has_exec && has_json && has_runtime_controls {
             DetectStatus::Ready
         } else {
             DetectStatus::Blocked
@@ -304,6 +308,9 @@ impl AgentAdapter for CodexAdapter {
             }
             if !has_json {
                 missing.push("--json flag");
+            }
+            if !has_runtime_controls {
+                missing.push("runtime control flags (--full-auto or --sandbox/--ask-for-approval)");
             }
             Some(format!("missing required: {}", missing.join(", ")))
         } else {

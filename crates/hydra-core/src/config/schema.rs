@@ -20,6 +20,7 @@ pub struct ScoringConfig {
     pub gates: GatesConfig,
     pub diff_scope: DiffScopeConfig,
     pub commands: CommandsConfig,
+    pub budget: BudgetConfig,
 }
 
 impl Default for ScoringConfig {
@@ -31,6 +32,7 @@ impl Default for ScoringConfig {
             gates: GatesConfig::default(),
             diff_scope: DiffScopeConfig::default(),
             commands: CommandsConfig::default(),
+            budget: BudgetConfig::default(),
         }
     }
 }
@@ -111,6 +113,14 @@ pub struct CommandsConfig {
     pub build: Option<String>,
     pub test: Option<String>,
     pub lint: Option<String>,
+}
+
+/// Optional run budget controls for token and cost limits.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct BudgetConfig {
+    pub max_tokens_total: Option<u64>,
+    pub max_cost_usd: Option<f64>,
 }
 
 /// Adapter binary path overrides.

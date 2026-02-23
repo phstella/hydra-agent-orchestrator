@@ -72,7 +72,14 @@ pub fn run_merge(opts: MergeOpts) -> Result<()> {
         bail!("merge requires --confirm flag (or use --dry-run to preview)");
     }
 
-    run_real_merge(&repo_root, branch, opts.run_id, &agent_key, opts.json)
+    run_real_merge(
+        &repo_root,
+        branch,
+        &layout,
+        opts.run_id,
+        &agent_key,
+        opts.json,
+    )
 }
 
 fn run_dry_merge(
@@ -107,11 +114,7 @@ fn run_dry_merge(
         stdout: merge_stdout.clone(),
         stderr: merge_stderr.clone(),
     };
-
-    let report_path = layout.base_dir().join("merge_report.json");
-    let report_json =
-        serde_json::to_string_pretty(&report).context("failed to serialize merge report")?;
-    std::fs::write(&report_path, &report_json).context("failed to write merge report")?;
+    let (report_path, report_json) = write_merge_report(layout, &report)?;
 
     if json {
         println!("{report_json}");
@@ -134,6 +137,7 @@ fn run_dry_merge(
 fn run_real_merge(
     repo_root: &Path,
     branch: &str,
+    layout: &RunLayout,
     run_id: Uuid,
     agent_key: &str,
     json: bool,
@@ -155,14 +159,19 @@ fn run_real_merge(
             .current_dir(repo_root)
             .output();
 
+        let report = MergeReport {
+            agent: agent_key.to_string(),
+            branch: branch.to_string(),
+            dry_run: false,
+            success: false,
+            has_conflicts: true,
+            stdout: stdout.clone(),
+            stderr: stderr.clone(),
+        };
+        let (_report_path, report_json) = write_merge_report(layout, &report)?;
+
         if json {
-            let report = serde_json::json!({
-                "agent": agent_key,
-                "branch": branch,
-                "success": false,
-                "error": stderr.trim(),
-            });
-            println!("{}", serde_json::to_string_pretty(&report)?);
+            println!("{report_json}");
         } else {
             eprintln!("Merge failed: {}", stderr.trim());
         }
@@ -185,6 +194,14 @@ fn run_real_merge(
     }
 
     Ok(())
+}
+
+fn write_merge_report(layout: &RunLayout, report: &MergeReport) -> Result<(PathBuf, String)> {
+    let report_path = layout.base_dir().join("merge_report.json");
+    let report_json =
+        serde_json::to_string_pretty(report).context("failed to serialize merge report")?;
+    std::fs::write(&report_path, &report_json).context("failed to write merge report")?;
+    Ok((report_path, report_json))
 }
 
 fn pick_winner(layout: &RunLayout, manifest: &RunManifest) -> Result<String> {

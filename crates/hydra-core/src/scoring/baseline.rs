@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::io::AsyncReadExt;
 
 use crate::config::{ScoringConfig, ScoringProfile};
 
@@ -113,32 +114,65 @@ pub async fn run_command(
 ) -> Result<CommandResult, BaselineError> {
     let start = Instant::now();
 
-    let child = tokio::process::Command::new("sh")
+    let mut child = tokio::process::Command::new("sh")
         .args(["-c", command])
         .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
 
+    let mut stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("stdout pipe missing"))?;
+    let mut stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| std::io::Error::other("stderr pipe missing"))?;
+
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        stdout_pipe.read_to_end(&mut buf).await?;
+        Ok::<Vec<u8>, std::io::Error>(buf)
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        stderr_pipe.read_to_end(&mut buf).await?;
+        Ok::<Vec<u8>, std::io::Error>(buf)
+    });
+
     let timeout = Duration::from_secs(timeout_seconds);
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => {
+    match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => {
+            let stdout = stdout_task
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))??;
+            let stderr = stderr_task
+                .await
+                .map_err(|e| std::io::Error::other(e.to_string()))??;
             let duration = start.elapsed();
-            let exit_code = output.status.code().unwrap_or(-1);
+            let exit_code = status.code().unwrap_or(-1);
             Ok(CommandResult {
                 command: command.to_string(),
-                success: output.status.success(),
+                success: status.success(),
                 exit_code,
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                stdout: String::from_utf8_lossy(&stdout).to_string(),
+                stderr: String::from_utf8_lossy(&stderr).to_string(),
                 duration_ms: duration.as_millis() as u64,
             })
         }
         Ok(Err(e)) => Err(BaselineError::Io(e)),
-        Err(_) => Err(BaselineError::TimedOut {
-            command: command.to_string(),
-            seconds: timeout_seconds,
-        }),
+        Err(_) => {
+            // Ensure timed-out commands are terminated to avoid orphaned children.
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            Err(BaselineError::TimedOut {
+                command: command.to_string(),
+                seconds: timeout_seconds,
+            })
+        }
     }
 }
 

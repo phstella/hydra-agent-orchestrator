@@ -5,8 +5,9 @@ use thiserror::Error;
 mod schema;
 
 pub use schema::{
-    AdaptersConfig, CommandsConfig, DiffScopeConfig, GatesConfig, HydraConfig, RetentionPolicy,
-    ScoringConfig, ScoringProfile, SupervisorConfig, WeightsConfig, WorktreeConfig,
+    AdaptersConfig, BudgetConfig, CommandsConfig, DiffScopeConfig, GatesConfig, HydraConfig,
+    RetentionPolicy, ScoringConfig, ScoringProfile, SupervisorConfig, WeightsConfig,
+    WorktreeConfig,
 };
 
 #[derive(Debug, Error)]
@@ -76,6 +77,22 @@ fn validate(config: &HydraConfig) -> Result<(), ConfigError> {
         return Err(ConfigError::Validation {
             message: "supervisor.idle_timeout_seconds must be > 0".to_string(),
         });
+    }
+
+    if let Some(max_tokens_total) = config.scoring.budget.max_tokens_total {
+        if max_tokens_total == 0 {
+            return Err(ConfigError::Validation {
+                message: "scoring.budget.max_tokens_total must be > 0".to_string(),
+            });
+        }
+    }
+
+    if let Some(max_cost_usd) = config.scoring.budget.max_cost_usd {
+        if !max_cost_usd.is_finite() || max_cost_usd < 0.0 {
+            return Err(ConfigError::Validation {
+                message: "scoring.budget.max_cost_usd must be a finite number >= 0".to_string(),
+            });
+        }
     }
 
     Ok(())
@@ -244,5 +261,37 @@ hard_timeout_seconds = 0
             let config = parse_config(&data).unwrap();
             assert_eq!(config.scoring.profile, Some(expected));
         }
+    }
+
+    #[test]
+    fn budget_fields_parse() {
+        let data = r#"
+[scoring.budget]
+max_tokens_total = 12345
+max_cost_usd = 4.5
+"#;
+        let config = parse_config(data).unwrap();
+        assert_eq!(config.scoring.budget.max_tokens_total, Some(12_345));
+        assert_eq!(config.scoring.budget.max_cost_usd, Some(4.5));
+    }
+
+    #[test]
+    fn zero_max_tokens_budget_rejected() {
+        let data = r#"
+[scoring.budget]
+max_tokens_total = 0
+"#;
+        let err = parse_config(data).unwrap_err();
+        assert!(err.to_string().contains("max_tokens_total"));
+    }
+
+    #[test]
+    fn negative_max_cost_budget_rejected() {
+        let data = r#"
+[scoring.budget]
+max_cost_usd = -0.1
+"#;
+        let err = parse_config(data).unwrap_err();
+        assert!(err.to_string().contains("max_cost_usd"));
     }
 }
