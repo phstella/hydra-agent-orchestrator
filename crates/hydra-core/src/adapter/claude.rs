@@ -398,6 +398,8 @@ mod tests {
             allow_network: false,
             force_edit: true,
             output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec![],
         };
         let cmd = adapter.build_command(&req).unwrap();
         assert_eq!(cmd.program, "/usr/bin/echo");
@@ -420,6 +422,8 @@ mod tests {
             allow_network: false,
             force_edit: false,
             output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec![],
         };
         let cmd = adapter.build_command(&req).unwrap();
         assert!(!cmd.args.contains(&"--permission-mode".to_string()));
@@ -435,6 +439,8 @@ mod tests {
             allow_network: false,
             force_edit: true,
             output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec![],
         };
         let err = adapter.build_command(&req).unwrap_err();
         assert!(matches!(err, AdapterError::BinaryMissing { .. }));

@@ -41,6 +41,10 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+
+        /// Allow agent execution outside strict worktree sandbox controls
+        #[arg(long = "unsafe")]
+        unsafe_mode: bool,
     },
 }
 
@@ -80,6 +84,7 @@ fn main() -> anyhow::Result<()> {
             prompt,
             base_ref,
             json,
+            unsafe_mode,
         } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(race::run_race(race::RaceOpts {
@@ -87,6 +92,7 @@ fn main() -> anyhow::Result<()> {
                 prompt,
                 base_ref,
                 json,
+                unsafe_mode,
             }))?;
         }
     }

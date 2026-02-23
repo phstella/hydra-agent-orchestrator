@@ -185,6 +185,53 @@ impl CodexAdapter {
             _ => None,
         }
     }
+
+    fn has_flag(flags: &[String], name: &str) -> bool {
+        flags.iter().any(|f| f == name)
+    }
+
+    fn runtime_control_args(req: &SpawnRequest) -> Result<Vec<String>, AdapterError> {
+        if !req.force_edit {
+            return Ok(Vec::new());
+        }
+
+        if req.unsafe_mode {
+            if Self::has_flag(
+                &req.supported_flags,
+                "--dangerously-bypass-approvals-and-sandbox",
+            ) {
+                return Ok(vec![
+                    "--dangerously-bypass-approvals-and-sandbox".to_string()
+                ]);
+            }
+            return Err(AdapterError::UnsupportedFlag {
+                adapter: "codex".to_string(),
+                flag: "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            });
+        }
+
+        if req.supported_flags.is_empty() || Self::has_flag(&req.supported_flags, "--full-auto") {
+            return Ok(vec!["--full-auto".to_string()]);
+        }
+
+        let mut args = Vec::new();
+        if Self::has_flag(&req.supported_flags, "--ask-for-approval") {
+            args.push("--ask-for-approval".to_string());
+            args.push("never".to_string());
+        }
+        if Self::has_flag(&req.supported_flags, "--sandbox") {
+            args.push("--sandbox".to_string());
+            args.push("workspace-write".to_string());
+        }
+
+        if args.is_empty() {
+            return Err(AdapterError::UnsupportedFlag {
+                adapter: "codex".to_string(),
+                flag: "--full-auto or --sandbox/--ask-for-approval".to_string(),
+            });
+        }
+        Ok(args)
+    }
 }
 
 impl AgentAdapter for CodexAdapter {
@@ -298,9 +345,7 @@ impl AgentAdapter for CodexAdapter {
             "--json".to_string(),
         ];
 
-        if req.force_edit {
-            args.push("--full-auto".to_string());
-        }
+        args.extend(Self::runtime_control_args(req)?);
 
         Ok(BuiltCommand {
             program: binary.display().to_string(),
@@ -399,6 +444,12 @@ mod tests {
             allow_network: false,
             force_edit: true,
             output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "--full-auto".to_string(),
+            ],
         };
         let cmd = adapter.build_command(&req).unwrap();
         assert_eq!(cmd.program, "/usr/bin/echo");
@@ -419,6 +470,8 @@ mod tests {
             allow_network: false,
             force_edit: false,
             output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec!["exec".to_string(), "--json".to_string()],
         };
         let cmd = adapter.build_command(&req).unwrap();
         assert!(!cmd.args.contains(&"--full-auto".to_string()));
@@ -434,9 +487,81 @@ mod tests {
             allow_network: false,
             force_edit: true,
             output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "--full-auto".to_string(),
+            ],
         };
         let err = adapter.build_command(&req).unwrap_err();
         assert!(matches!(err, AdapterError::BinaryMissing { .. }));
+    }
+
+    #[test]
+    fn build_command_falls_back_when_full_auto_missing() {
+        let adapter = CodexAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "fix".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: false,
+            force_edit: true,
+            output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "--ask-for-approval".to_string(),
+                "--sandbox".to_string(),
+            ],
+        };
+        let cmd = adapter.build_command(&req).unwrap();
+        assert!(!cmd.args.contains(&"--full-auto".to_string()));
+        assert!(cmd.args.contains(&"--ask-for-approval".to_string()));
+        assert!(cmd.args.contains(&"never".to_string()));
+        assert!(cmd.args.contains(&"--sandbox".to_string()));
+        assert!(cmd.args.contains(&"workspace-write".to_string()));
+    }
+
+    #[test]
+    fn build_command_unsafe_mode_requires_dangerous_flag() {
+        let adapter = CodexAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "fix".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: true,
+            force_edit: true,
+            output_json_stream: true,
+            unsafe_mode: true,
+            supported_flags: vec!["exec".to_string(), "--json".to_string()],
+        };
+        let err = adapter.build_command(&req).unwrap_err();
+        assert!(matches!(err, AdapterError::UnsupportedFlag { .. }));
+    }
+
+    #[test]
+    fn build_command_unsafe_mode_uses_dangerous_flag_when_supported() {
+        let adapter = CodexAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "fix".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: true,
+            force_edit: true,
+            output_json_stream: true,
+            unsafe_mode: true,
+            supported_flags: vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            ],
+        };
+        let cmd = adapter.build_command(&req).unwrap();
+        assert!(cmd
+            .args
+            .contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
     }
 
     // --- M1.6: parse_line / parse_raw tests ---

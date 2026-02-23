@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hydra_core::adapter::BuiltCommand;
@@ -43,6 +43,74 @@ fn test_cwd() -> std::path::PathBuf {
     std::env::temp_dir()
 }
 
+fn long_running_command(cwd: PathBuf) -> BuiltCommand {
+    #[cfg(unix)]
+    let (program, args) = ("sleep".to_string(), vec!["60".to_string()]);
+    #[cfg(windows)]
+    let (program, args) = (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Start-Sleep -Seconds 60".to_string(),
+        ],
+    );
+
+    BuiltCommand {
+        program,
+        args,
+        env: vec![],
+        cwd,
+    }
+}
+
+fn crash_command(cwd: PathBuf) -> BuiltCommand {
+    #[cfg(unix)]
+    let (program, args) = (
+        "sh".to_string(),
+        vec!["-c".to_string(), "echo 'starting'; exit 137".to_string()],
+    );
+    #[cfg(windows)]
+    let (program, args) = (
+        "cmd".to_string(),
+        vec!["/C".to_string(), "echo starting && exit 137".to_string()],
+    );
+
+    BuiltCommand {
+        program,
+        args,
+        env: vec![],
+        cwd,
+    }
+}
+
+fn partial_output_then_sleep_command(cwd: PathBuf) -> BuiltCommand {
+    #[cfg(unix)]
+    let (program, args) = (
+        "sh".to_string(),
+        vec![
+            "-c".to_string(),
+            "echo line1; echo line2; sleep 60".to_string(),
+        ],
+    );
+    #[cfg(windows)]
+    let (program, args) = (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Write-Output line1; Write-Output line2; Start-Sleep -Seconds 60".to_string(),
+        ],
+    );
+
+    BuiltCommand {
+        program,
+        args,
+        env: vec![],
+        cwd,
+    }
+}
+
 /// Verify that force_cleanup after a cancelled supervised process
 /// leaves no orphan worktrees or branches.
 #[tokio::test]
@@ -59,12 +127,7 @@ async fn cancel_during_execution_cleans_up_worktree() {
     let wt_info = svc.create(run_id, "claude", "HEAD").await.unwrap();
     assert!(wt_info.path.exists());
 
-    let cmd = BuiltCommand {
-        program: "sleep".to_string(),
-        args: vec!["60".to_string()],
-        env: vec![],
-        cwd: wt_info.path.clone(),
-    };
+    let cmd = long_running_command(wt_info.path.clone());
 
     let (tx, mut rx) = mpsc::channel(64);
     let policy = SupervisorPolicy {
@@ -123,12 +186,7 @@ async fn agent_crash_cleanup_no_orphan_worktrees() {
     let wt_info = svc.create(run_id, "codex", "HEAD").await.unwrap();
     assert!(wt_info.path.exists());
 
-    let cmd = BuiltCommand {
-        program: "sh".to_string(),
-        args: vec!["-c".to_string(), "echo 'starting'; exit 137".to_string()],
-        env: vec![],
-        cwd: wt_info.path.clone(),
-    };
+    let cmd = crash_command(wt_info.path.clone());
 
     let (tx, mut rx) = mpsc::channel(64);
     let policy = SupervisorPolicy::default();
@@ -176,15 +234,7 @@ async fn timeout_produces_partial_artifacts() {
         ))
         .unwrap();
 
-    let cmd = BuiltCommand {
-        program: "sh".to_string(),
-        args: vec![
-            "-c".to_string(),
-            "echo line1; echo line2; sleep 60".to_string(),
-        ],
-        env: vec![],
-        cwd: test_cwd(),
-    };
+    let cmd = partial_output_then_sleep_command(test_cwd());
 
     let (tx, mut rx) = mpsc::channel(64);
     let policy = SupervisorPolicy {

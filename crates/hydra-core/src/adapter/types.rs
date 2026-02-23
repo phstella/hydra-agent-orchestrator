@@ -162,6 +162,8 @@ pub struct SpawnRequest {
     pub allow_network: bool,
     pub force_edit: bool,
     pub output_json_stream: bool,
+    pub unsafe_mode: bool,
+    pub supported_flags: Vec<String>,
 }
 
 /// Command built by an adapter for the process supervisor.
