@@ -51,6 +51,7 @@ Out-of-scope for initial product:
 - `research/implementation-checklist.md`: issue-ready execution checklist by milestone
 - `research/github-issues.md`: copy-paste-ready GitHub issue bodies (`M0.1` to `M5.5`)
 - `research/sprint-1-cut.md`: dependency-safe first sprint ticket cut
+- `research/issues/README.md`: per-phase issue packs index
 - `research/audit.md`: quality audit summary and unresolved gaps
 
 ## Quality Bar For This Research Package
