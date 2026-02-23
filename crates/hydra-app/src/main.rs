@@ -13,6 +13,7 @@ fn main() {
             hydra_app::run_preflight,
             hydra_app::list_adapters,
             hydra_app::start_race,
+            hydra_app::poll_race_events,
             hydra_app::get_race_result,
         ])
         .run(tauri::generate_context!())

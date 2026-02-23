@@ -39,12 +39,13 @@ pub struct RaceOpts {
     pub json: bool,
     pub unsafe_mode: bool,
     pub allow_experimental_adapters: bool,
+    pub run_id: Option<Uuid>,
 }
 
 pub async fn run_race(opts: RaceOpts) -> Result<()> {
     let config = load_race_config()?;
     let repo_root = discover_repo_root()?;
-    let run_id = Uuid::new_v4();
+    let run_id = opts.run_id.unwrap_or_else(Uuid::new_v4);
 
     let registry = AdapterRegistry::from_config(&config.adapters);
     let requested_agents = normalize_requested_agents(&opts.agents);

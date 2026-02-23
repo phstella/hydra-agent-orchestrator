@@ -103,6 +103,17 @@ pub struct RaceResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RaceEventBatch {
+    pub run_id: String,
+    pub events: Vec<AgentStreamEvent>,
+    pub next_cursor: u64,
+    pub done: bool,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentResult {
     pub agent_key: String,
     pub status: String,

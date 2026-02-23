@@ -88,8 +88,8 @@ impl RunHealthMetrics {
                         .get("error")
                         .and_then(|v| v.as_str())
                         .is_some_and(|s| {
-                        !s.contains(CANCELLED_INDICATOR) && !s.contains(TIMED_OUT_INDICATOR)
-                    })
+                            !s.contains(CANCELLED_INDICATOR) && !s.contains(TIMED_OUT_INDICATOR)
+                        })
             })
             .count() as u32;
 

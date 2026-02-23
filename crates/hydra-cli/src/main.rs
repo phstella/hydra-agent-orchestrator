@@ -50,6 +50,10 @@ enum Commands {
         /// Allow experimental (non-Tier-1) adapters to participate in the race
         #[arg(long)]
         allow_experimental_adapters: bool,
+
+        /// Internal override for run ID (used by GUI orchestration).
+        #[arg(long, hide = true)]
+        run_id: Option<uuid::Uuid>,
     },
     /// Merge an agent's branch from a completed race run
     Merge {
@@ -117,6 +121,7 @@ fn main() -> anyhow::Result<()> {
             json,
             unsafe_mode,
             allow_experimental_adapters,
+            run_id,
         } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(race::run_race(race::RaceOpts {
@@ -126,6 +131,7 @@ fn main() -> anyhow::Result<()> {
                 json,
                 unsafe_mode,
                 allow_experimental_adapters,
+                run_id,
             }))?;
         }
         Commands::Merge {
