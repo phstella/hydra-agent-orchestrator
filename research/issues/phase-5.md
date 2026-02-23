@@ -2,7 +2,7 @@
 
 Last updated: 2026-02-22
 
-Generated from `research/github-issues.md`.
+Generated from `research/implementation-checklist.md`.
 
 Global label prefix: `hydra`
 
@@ -207,5 +207,5 @@ Automatic background migration; multi-version concurrent support.
 
 ## Coverage Check
 
-- Total issues generated: 43
-- Expected range: `M0.1` through `M5.6`
+- Total issues generated: 6
+- Expected range: `M5.1` through `M5.6`

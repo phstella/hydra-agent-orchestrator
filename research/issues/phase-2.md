@@ -2,7 +2,7 @@
 
 Last updated: 2026-02-22
 
-Generated from `research/github-issues.md`.
+Generated from `research/implementation-checklist.md`.
 
 Global label prefix: `hydra`
 
