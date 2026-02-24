@@ -18,7 +18,43 @@ const NAV_TABS = [
   { id: 'results', label: 'Results' },
   { id: 'review', label: 'Review' },
   { id: 'interactive', label: 'Interactive' },
+  { id: 'settings', label: 'Settings' },
 ];
+
+const WORKSPACE_STORAGE_KEY = 'hydra.workspace.path';
+
+type StorageLike = {
+  getItem?: (key: string) => string | null;
+  setItem?: (key: string, value: string) => void;
+  removeItem?: (key: string) => void;
+};
+
+function getStorage(): StorageLike | null {
+  if (typeof window === 'undefined') return null;
+  return (window as unknown as { localStorage?: StorageLike }).localStorage ?? null;
+}
+
+function readWorkspaceFromStorage(): string {
+  const storage = getStorage();
+  if (!storage || typeof storage.getItem !== 'function') return '';
+  return storage.getItem(WORKSPACE_STORAGE_KEY) ?? '';
+}
+
+function writeWorkspaceToStorage(path: string): void {
+  const storage = getStorage();
+  if (!storage) return;
+
+  if (path.length > 0) {
+    if (typeof storage.setItem === 'function') {
+      storage.setItem(WORKSPACE_STORAGE_KEY, path);
+    }
+    return;
+  }
+
+  if (typeof storage.removeItem === 'function') {
+    storage.removeItem(WORKSPACE_STORAGE_KEY);
+  }
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('preflight');
@@ -37,6 +73,8 @@ export default function App() {
   const [raceError, setRaceError] = useState<string | null>(null);
   const [raceResult, setRaceResult] = useState<RaceResult | null>(null);
   const [selectedWinner, setSelectedWinner] = useState<string | null>(null);
+  const [workspacePath, setWorkspacePath] = useState('');
+  const [workspaceDraft, setWorkspaceDraft] = useState('');
 
   const { events, push, clear, eventsByAgent } = useEventBuffer();
 
@@ -72,12 +110,30 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const stored = readWorkspaceFromStorage();
+    setWorkspacePath(stored);
+    setWorkspaceDraft(stored);
+  }, []);
+
   const selectedExperimentalCount = useMemo(() => {
     return selectedAdapters.filter((key) => {
       const adapter = adapters.find((a) => a.key === key);
       return !!adapter && isExperimental(adapter);
     }).length;
   }, [adapters, selectedAdapters]);
+
+  const workspaceCwd = useMemo(() => {
+    const trimmed = workspacePath.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }, [workspacePath]);
+
+  const workspaceDraftCwd = useMemo(() => {
+    const trimmed = workspaceDraft.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }, [workspaceDraft]);
+
+  const workspaceDirty = workspaceDraft.trim() !== workspacePath.trim();
 
   const openExperimentalModal = useCallback((adapter: AdapterInfo) => {
     setExperimentalModal({ open: true, adapter });
@@ -139,6 +195,7 @@ export default function App() {
         taskPrompt,
         agents: selectedAdapters,
         allowExperimental: selectedExperimentalCount > 0,
+        cwd: workspaceCwd,
       });
       setActiveRunId(started.runId);
       setRaceAgents(started.agents);
@@ -149,11 +206,23 @@ export default function App() {
       setRunStatus('failed');
       setRaceError(err instanceof Error ? err.message : String(err));
     }
-  }, [clear, selectedAdapters, selectedExperimentalCount, taskPrompt]);
+  }, [clear, selectedAdapters, selectedExperimentalCount, taskPrompt, workspaceCwd]);
 
   const handleWinnerSelect = useCallback((agentKey: string) => {
     setSelectedWinner(agentKey);
     setActiveTab('review');
+  }, []);
+
+  const handleSaveWorkspaceSettings = useCallback(() => {
+    const normalized = workspaceDraft.trim();
+    setWorkspacePath(normalized);
+    writeWorkspaceToStorage(normalized);
+  }, [workspaceDraft]);
+
+  const handleResetWorkspaceSettings = useCallback(() => {
+    setWorkspacePath('');
+    setWorkspaceDraft('');
+    writeWorkspaceToStorage('');
   }, []);
 
   useEffect(() => {
@@ -259,6 +328,32 @@ export default function App() {
                     Adapter load failed: {adapterLoadError}
                   </div>
                 )}
+
+                <div
+                  style={{
+                    marginBottom: 'var(--space-4)',
+                    padding: 'var(--space-3)',
+                    border: '1px solid var(--color-border-700)',
+                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: 'var(--color-surface-800)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 'var(--space-3)',
+                  }}
+                >
+                  <div>
+                    <div style={{ marginBottom: 'var(--space-1)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+                      Workspace Folder
+                    </div>
+                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }} data-testid="workspace-current-value">
+                      {workspaceCwd ?? '(current repository)'}
+                    </div>
+                  </div>
+                  <Button variant="secondary" size="sm" onClick={() => setActiveTab('settings')}>
+                    Configure
+                  </Button>
+                </div>
 
                 <div style={{ marginBottom: 'var(--space-4)' }}>
                   <div style={{ marginBottom: 'var(--space-2)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
@@ -427,6 +522,7 @@ export default function App() {
                 runId={activeRunId}
                 agents={raceResult.agents}
                 selectedWinner={selectedWinner}
+                workspaceCwd={workspaceCwd}
               />
             ) : (
               <div
@@ -441,7 +537,68 @@ export default function App() {
             )
           )}
 
-          {activeTab === 'interactive' && <InteractiveWorkspace />}
+          {activeTab === 'interactive' && <InteractiveWorkspace workspaceCwd={workspaceCwd} />}
+
+          {activeTab === 'settings' && (
+            <div style={{ maxWidth: 920, margin: '0 auto', padding: 'var(--space-8) var(--space-6)' }}>
+              <Card padding="lg">
+                <h2
+                  style={{
+                    fontSize: 'var(--text-xl)',
+                    fontWeight: 'var(--weight-bold)' as unknown as number,
+                    marginBottom: 'var(--space-2)',
+                  }}
+                >
+                  Settings
+                </h2>
+                <p style={{ marginBottom: 'var(--space-5)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
+                  Configure default workspace and runtime behavior used by race, review/merge, and interactive sessions.
+                </p>
+
+                <div style={{ marginBottom: 'var(--space-4)' }}>
+                  <div style={{ marginBottom: 'var(--space-2)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+                    Default Workspace Folder
+                  </div>
+                  <input
+                    value={workspaceDraft}
+                    onChange={(e) => setWorkspaceDraft(e.target.value)}
+                    placeholder="Leave empty to use current repository (or enter /absolute/path)"
+                    data-testid="settings-workspace-input"
+                    style={{
+                      width: '100%',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--color-border-700)',
+                      backgroundColor: 'var(--color-bg-900)',
+                      color: 'var(--color-text-primary)',
+                      padding: 'var(--space-3)',
+                      fontFamily: 'var(--font-family)',
+                      fontSize: 'var(--text-sm)',
+                    }}
+                  />
+                  <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                    Current effective workspace: {workspaceCwd ?? '(current repository)'}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                  <Button
+                    variant="primary"
+                    onClick={handleSaveWorkspaceSettings}
+                    disabled={!workspaceDirty}
+                    data-testid="settings-save-workspace"
+                  >
+                    Save Workspace
+                  </Button>
+                  <Button variant="ghost" onClick={handleResetWorkspaceSettings} data-testid="settings-reset-workspace">
+                    Reset to Current Repository
+                  </Button>
+                  <Badge variant={workspaceDraftCwd ? 'info' : 'neutral'}>
+                    {workspaceDraftCwd ?? '(current repository)'}
+                  </Badge>
+                </div>
+              </Card>
+            </div>
+          )}
         </main>
       </Tabs>
 

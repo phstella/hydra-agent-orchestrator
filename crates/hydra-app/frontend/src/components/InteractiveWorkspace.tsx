@@ -41,7 +41,11 @@ function parseGatingErrorCode(errorStr: string): string | null {
   return match ? match[1] : null;
 }
 
-export function InteractiveWorkspace() {
+interface InteractiveWorkspaceProps {
+  workspaceCwd: string | null;
+}
+
+export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps) {
   const [sessions, setSessions] = useState<InteractiveSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [sessionEvents, setSessionEvents] = useState<Map<string, InteractiveStreamEvent[]>>(new Map());
@@ -240,7 +244,7 @@ export function InteractiveWorkspace() {
         taskPrompt: taskPrompt.trim(),
         allowExperimental: allowExperimental && experimentalAcknowledged,
         unsafeMode,
-        cwd: null,
+        cwd: workspaceCwd,
         cols: 120,
         rows: 30,
       });
@@ -268,7 +272,7 @@ export function InteractiveWorkspace() {
     } finally {
       setCreating(false);
     }
-  }, [agentKey, taskPrompt, startPolling, allowExperimental, experimentalAcknowledged, unsafeMode, needsExperimentalConfirmation]);
+  }, [agentKey, taskPrompt, startPolling, allowExperimental, experimentalAcknowledged, unsafeMode, needsExperimentalConfirmation, workspaceCwd]);
 
   const handleStopSession = useCallback(async (sessionId: string) => {
     try {
@@ -454,6 +458,16 @@ export function InteractiveWorkspace() {
               }}
             >
               Task Prompt
+            </div>
+            <div
+              style={{
+                marginBottom: 'var(--space-2)',
+                fontSize: 'var(--text-xs)',
+                color: 'var(--color-text-muted)',
+              }}
+              data-testid="interactive-workspace-path"
+            >
+              Workspace: {workspaceCwd ?? '(current repository)'}
             </div>
             <textarea
               value={taskPrompt}

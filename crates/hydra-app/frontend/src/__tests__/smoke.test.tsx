@@ -254,6 +254,15 @@ function mockRaceFlow() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  const storage = window.localStorage as unknown as {
+    clear?: () => void;
+    removeItem?: (key: string) => void;
+  };
+  if (typeof storage.clear === 'function') {
+    storage.clear();
+  } else if (typeof storage.removeItem === 'function') {
+    storage.removeItem('hydra.workspace.path');
+  }
   setupDefaultMocks();
 });
 
@@ -266,6 +275,7 @@ describe('Smoke Test 1: App startup renders tabs and preflight screen', () => {
       expect(screen.getByRole('tab', { name: /race/i })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: /results/i })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: /review/i })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /settings/i })).toBeInTheDocument();
     });
   });
 
@@ -974,6 +984,53 @@ describe('Smoke Test 17: Unsupported adapter blocked with actionable reason', ()
       const errorEl = screen.getByTestId('create-session-error');
       expect(errorEl).toBeInTheDocument();
       expect(errorEl).toHaveTextContent(/not available/i);
+    });
+  });
+});
+
+describe('Smoke Test 18: Workspace path is propagated to backend IPC', () => {
+  it('uses selected workspace for race and diff IPC calls', async () => {
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: /settings/i }));
+    await waitFor(() => expect(screen.getByTestId('settings-workspace-input')).toBeInTheDocument());
+
+    const settingsInput = screen.getByTestId('settings-workspace-input');
+    await user.type(settingsInput, '/tmp/custom-hydra-workspace');
+    await user.click(screen.getByTestId('settings-save-workspace'));
+
+    await user.click(screen.getByRole('tab', { name: /race/i }));
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'Run race with custom workspace');
+    await user.click(screen.getByRole('button', { name: /start race/i }));
+
+    await waitFor(() => {
+      expect(ipc.startRace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: '/tmp/custom-hydra-workspace',
+        }),
+      );
+    });
+
+    await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
+    await user.click(screen.getByText('View Scoreboard'));
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
+    });
+    await user.click(screen.getAllByText('Select as Winner')[0]);
+
+    await waitFor(() => {
+      expect(ipc.getCandidateDiff).toHaveBeenCalledWith(
+        'test-run-id',
+        'claude',
+        '/tmp/custom-hydra-workspace',
+      );
     });
   });
 });

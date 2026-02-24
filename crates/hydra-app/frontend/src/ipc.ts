@@ -82,24 +82,38 @@ export async function pollRaceEvents(runId: string, cursor: number): Promise<Rac
   return invoke('poll_race_events', { runId, cursor });
 }
 
-export async function getCandidateDiff(runId: string, agentKey: string): Promise<CandidateDiffPayload> {
+export async function getCandidateDiff(
+  runId: string,
+  agentKey: string,
+  cwd?: string | null,
+): Promise<CandidateDiffPayload> {
   const invoke = await getInvoke();
-  return invoke('get_candidate_diff', { runId, agentKey });
+  return invoke('get_candidate_diff', { runId, agentKey, cwd: cwd ?? null });
 }
 
-export async function getWorkingTreeStatus(): Promise<WorkingTreeStatus> {
+export async function getWorkingTreeStatus(cwd?: string | null): Promise<WorkingTreeStatus> {
   const invoke = await getInvoke();
-  return invoke('get_working_tree_status');
+  return invoke('get_working_tree_status', { cwd: cwd ?? null });
 }
 
-export async function previewMerge(runId: string, agentKey: string, force: boolean): Promise<MergePreviewPayload> {
+export async function previewMerge(
+  runId: string,
+  agentKey: string,
+  force: boolean,
+  cwd?: string | null,
+): Promise<MergePreviewPayload> {
   const invoke = await getInvoke();
-  return invoke('preview_merge', { runId, agentKey, force });
+  return invoke('preview_merge', { runId, agentKey, force, cwd: cwd ?? null });
 }
 
-export async function executeMerge(runId: string, agentKey: string, force: boolean): Promise<MergeExecutionPayload> {
+export async function executeMerge(
+  runId: string,
+  agentKey: string,
+  force: boolean,
+  cwd?: string | null,
+): Promise<MergeExecutionPayload> {
   const invoke = await getInvoke();
-  return invoke('execute_merge', { runId, agentKey, force });
+  return invoke('execute_merge', { runId, agentKey, force, cwd: cwd ?? null });
 }
 
 // ---------------------------------------------------------------------------

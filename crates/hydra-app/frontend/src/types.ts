@@ -71,6 +71,7 @@ export interface RaceRequest {
   taskPrompt: string;
   agents: string[];
   allowExperimental: boolean;
+  cwd: string | null;
 }
 
 export interface RaceStarted {

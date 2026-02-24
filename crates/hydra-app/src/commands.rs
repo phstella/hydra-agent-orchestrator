@@ -182,8 +182,12 @@ pub async fn list_adapters(state: State<'_, AppState>) -> Result<Vec<AdapterInfo
 }
 
 #[tauri::command]
-pub async fn get_working_tree_status() -> Result<WorkingTreeStatus, String> {
-    let repo_root = discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
+pub async fn get_working_tree_status(cwd: Option<String>) -> Result<WorkingTreeStatus, String> {
+    let repo_root = resolve_repo_root(
+        cwd.as_deref(),
+        "Not inside a git repository; cannot inspect working tree",
+    )
+    .map_err(|e| e.to_string())?;
     Ok(read_working_tree_status(&repo_root))
 }
 
@@ -253,7 +257,10 @@ pub async fn get_race_result(
 }
 
 async fn execute_race(state: AppStateHandle, request: RaceRequest, run_id: String) {
-    let repo_root = match discover_repo_root() {
+    let repo_root = match resolve_repo_root(
+        request.cwd.as_deref(),
+        "Not inside a git repository; cannot start race",
+    ) {
         Ok(path) => path,
         Err(err) => {
             state.mark_failed(&run_id, err.message).await;
@@ -528,16 +535,31 @@ fn binary_available(program: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn discover_repo_root() -> Result<PathBuf, IpcError> {
-    let output = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
+fn resolve_repo_root(cwd: Option<&str>, not_repo_message: &str) -> Result<PathBuf, IpcError> {
+    let selected_cwd = cwd.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["rev-parse", "--show-toplevel"]);
+    if let Some(path) = selected_cwd {
+        cmd.current_dir(path);
+    }
+
+    let output = cmd
         .output()
         .map_err(|e| IpcError::internal(format!("failed to execute git: {e}")))?;
 
     if !output.status.success() {
-        return Err(IpcError::validation(
-            "Not inside a git repository; cannot start race",
-        ));
+        let detail = selected_cwd
+            .map(|path| format!(" (path: {path})"))
+            .unwrap_or_default();
+        return Err(IpcError::validation(format!("{not_repo_message}{detail}")));
     }
 
     let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -752,11 +774,11 @@ pub async fn start_interactive_session(
     }
 
     // M4.5: Working tree cleanliness check
-    let cwd = if let Some(ref cwd_str) = request.cwd {
-        std::path::PathBuf::from(cwd_str)
-    } else {
-        discover_repo_root().map_err(|e| e.to_string())?
-    };
+    let cwd = resolve_repo_root(
+        request.cwd.as_deref(),
+        "Not inside a git repository; cannot start interactive session",
+    )
+    .map_err(|e| e.to_string())?;
 
     let wt_status = read_working_tree_status(&cwd);
     if !wt_status.clean {
@@ -957,8 +979,13 @@ pub async fn list_interactive_sessions(
 pub async fn get_candidate_diff(
     run_id: String,
     agent_key: String,
+    cwd: Option<String>,
 ) -> Result<CandidateDiffPayload, String> {
-    let repo_root = discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
+    let repo_root = resolve_repo_root(
+        cwd.as_deref(),
+        "Not inside a git repository; cannot load candidate diff",
+    )
+    .map_err(|e| e.to_string())?;
     let hydra_root = repo_root.join(".hydra");
     let run_uuid = uuid::Uuid::parse_str(&run_id)
         .map_err(|e| format!("[validation_error] invalid run_id: {e}"))?;
@@ -1085,8 +1112,9 @@ pub async fn preview_merge(
     run_id: String,
     agent_key: String,
     force: bool,
+    cwd: Option<String>,
 ) -> Result<MergePreviewPayload, String> {
-    let (cli_parts, repo_root) = resolve_cli_and_repo()?;
+    let (cli_parts, repo_root) = resolve_cli_and_repo(cwd.as_deref())?;
 
     let mut args: Vec<String> = cli_parts[1..].to_vec();
     args.extend([
@@ -1119,8 +1147,9 @@ pub async fn execute_merge(
     run_id: String,
     agent_key: String,
     force: bool,
+    cwd: Option<String>,
 ) -> Result<MergeExecutionPayload, String> {
-    let (cli_parts, repo_root) = resolve_cli_and_repo()?;
+    let (cli_parts, repo_root) = resolve_cli_and_repo(cwd.as_deref())?;
 
     let mut args: Vec<String> = cli_parts[1..].to_vec();
     args.extend([
@@ -1193,8 +1222,9 @@ pub async fn execute_merge(
     }
 }
 
-fn resolve_cli_and_repo() -> Result<(Vec<String>, PathBuf), String> {
-    let repo_root = discover_repo_root().map_err(|e| format!("[internal_error] {}", e.message))?;
+fn resolve_cli_and_repo(cwd: Option<&str>) -> Result<(Vec<String>, PathBuf), String> {
+    let repo_root = resolve_repo_root(cwd, "Not inside a git repository; cannot run merge")
+        .map_err(|e| e.to_string())?;
 
     if let Ok(bin) = std::env::var("HYDRA_CLI_BIN") {
         Ok((vec![bin], repo_root))
@@ -1701,6 +1731,7 @@ mod tests {
         assert_eq!(req.task_prompt, "fix bug");
         assert_eq!(req.agents, vec!["claude"]);
         assert!(!req.allow_experimental);
+        assert!(req.cwd.is_none());
     }
 
     #[test]

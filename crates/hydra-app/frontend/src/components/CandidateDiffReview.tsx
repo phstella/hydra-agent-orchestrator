@@ -15,11 +15,12 @@ interface CandidateDiffReviewProps {
   runId: string;
   agents: AgentResult[];
   selectedWinner: string | null;
+  workspaceCwd: string | null;
 }
 
 type MergeStatus = 'idle' | 'previewing' | 'preview_clean' | 'preview_conflict' | 'merging' | 'merged' | 'failed';
 
-export function CandidateDiffReview({ runId, agents, selectedWinner }: CandidateDiffReviewProps) {
+export function CandidateDiffReview({ runId, agents, selectedWinner, workspaceCwd }: CandidateDiffReviewProps) {
   const [activeCandidate, setActiveCandidate] = useState<string>(selectedWinner ?? agents[0]?.agentKey ?? '');
   const [diffPayload, setDiffPayload] = useState<CandidateDiffPayload | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -48,7 +49,9 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
       setMergeResult(null);
       setMergeError(null);
       try {
-        const payload = await getCandidateDiff(runId, agentKey);
+        const payload = workspaceCwd
+          ? await getCandidateDiff(runId, agentKey, workspaceCwd)
+          : await getCandidateDiff(runId, agentKey);
         setDiffPayload(payload);
       } catch (err) {
         setDiffError(err instanceof Error ? err.message : String(err));
@@ -57,7 +60,7 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
         setDiffLoading(false);
       }
     },
-    [runId],
+    [runId, workspaceCwd],
   );
 
   useEffect(() => {
@@ -76,7 +79,9 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
 
   const refreshWorkingTreeStatus = useCallback(async (): Promise<WorkingTreeStatus> => {
     try {
-      const status = await getWorkingTreeStatus();
+      const status = workspaceCwd
+        ? await getWorkingTreeStatus(workspaceCwd)
+        : await getWorkingTreeStatus();
       setWorkingTreeStatus(status);
       return status;
     } catch (err) {
@@ -88,7 +93,7 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
       setWorkingTreeStatus(fallback);
       return fallback;
     }
-  }, []);
+  }, [workspaceCwd]);
 
   useEffect(() => {
     void refreshWorkingTreeStatus();
@@ -108,7 +113,9 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
         return;
       }
 
-      const result = await previewMerge(runId, activeCandidate, forceOverride);
+      const result = workspaceCwd
+        ? await previewMerge(runId, activeCandidate, forceOverride, workspaceCwd)
+        : await previewMerge(runId, activeCandidate, forceOverride);
       setMergePreview(result);
       if (result.hasConflicts) {
         setMergeStatus('preview_conflict');
@@ -128,7 +135,7 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
       setMergeError(err instanceof Error ? err.message : String(err));
       setMergeStatus('failed');
     }
-  }, [runId, activeCandidate, forceOverride, refreshWorkingTreeStatus]);
+  }, [runId, activeCandidate, forceOverride, refreshWorkingTreeStatus, workspaceCwd]);
 
   const handleAccept = useCallback(() => {
     if (mergeStatus !== 'preview_clean') return;
@@ -140,7 +147,9 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
     setMergeStatus('merging');
     setMergeError(null);
     try {
-      const result = await executeMerge(runId, activeCandidate, forceOverride);
+      const result = workspaceCwd
+        ? await executeMerge(runId, activeCandidate, forceOverride, workspaceCwd)
+        : await executeMerge(runId, activeCandidate, forceOverride);
       setMergeResult(result);
       setMergeStatus(result.success ? 'merged' : 'failed');
       if (!result.success) {
@@ -150,7 +159,7 @@ export function CandidateDiffReview({ runId, agents, selectedWinner }: Candidate
       setMergeError(err instanceof Error ? err.message : String(err));
       setMergeStatus('failed');
     }
-  }, [runId, activeCandidate, forceOverride]);
+  }, [runId, activeCandidate, forceOverride, workspaceCwd]);
 
   const containerStyle: CSSProperties = {
     maxWidth: 1200,

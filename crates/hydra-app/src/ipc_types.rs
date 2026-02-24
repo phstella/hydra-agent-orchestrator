@@ -74,6 +74,7 @@ pub struct RaceRequest {
     pub task_prompt: String,
     pub agents: Vec<String>,
     pub allow_experimental: bool,
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
