@@ -799,9 +799,28 @@ pub async fn start_interactive_session(
     let pty_session = hydra_core::supervisor::pty::PtySession::spawn(pty_config, event_tx)
         .map_err(|e| IpcError::internal(format!("PTY spawn failed: {e}")).to_string())?;
 
+    // M4.6: Initialize session artifact writer
+    let hydra_root = cwd.join(".hydra");
+    let is_experimental = adapter.tier() == hydra_core::adapter::AdapterTier::Experimental;
+    let artifact_writer = match hydra_core::artifact::SessionArtifactWriter::init(
+        &hydra_root,
+        &session_id,
+        &request.agent_key,
+        &started_at,
+        &cwd.to_string_lossy(),
+        request.unsafe_mode,
+        is_experimental,
+    ) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to initialize session artifact writer — session will proceed without artifact persistence");
+            None
+        }
+    };
+
     let interactive = state.interactive.clone();
     interactive
-        .register_session(&session_id, &request.agent_key, &started_at, pty_session)
+        .register_session(&session_id, &request.agent_key, &started_at, pty_session, artifact_writer)
         .await;
 
     crate::state::spawn_pty_event_bridge(
