@@ -5,6 +5,7 @@ import { AgentRail } from './components/AgentRail';
 import { LiveOutputPanel } from './components/LiveOutputPanel';
 import { ResultsScoreboard } from './components/ResultsScoreboard';
 import { CandidateDiffReview } from './components/CandidateDiffReview';
+import { InteractiveWorkspace } from './components/InteractiveWorkspace';
 import { Tabs, Badge, Button, Card } from './components/design-system';
 import { getRaceResult, listAdapters, pollRaceEvents, startRace } from './ipc';
 import type { AdapterInfo, RaceResult } from './types';
@@ -16,6 +17,7 @@ const NAV_TABS = [
   { id: 'race', label: 'Race' },
   { id: 'results', label: 'Results' },
   { id: 'review', label: 'Review' },
+  { id: 'interactive', label: 'Interactive' },
 ];
 
 export default function App() {
@@ -438,6 +440,8 @@ export default function App() {
               </div>
             )
           )}
+
+          {activeTab === 'interactive' && <InteractiveWorkspace />}
         </main>
       </Tabs>
 

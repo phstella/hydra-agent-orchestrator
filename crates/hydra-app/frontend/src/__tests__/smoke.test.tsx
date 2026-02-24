@@ -1,8 +1,9 @@
 /**
- * P3-QA-01: GUI Smoke Test Pack
+ * P3-QA-01 + M4.3/M4.4: GUI Smoke Test Pack
  *
  * Covers: startup, preflight refresh, experimental modal gating, race flow,
- * winner selection, diff candidate switching, and merge dry-run gating.
+ * winner selection, diff candidate switching, merge dry-run gating,
+ * interactive tab, session creation, output polling, send input, stop session.
  */
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -17,6 +18,10 @@ import type {
   CandidateDiffPayload,
   MergePreviewPayload,
   MergeExecutionPayload,
+  InteractiveSessionStarted,
+  InteractiveEventBatch,
+  InteractiveWriteAck,
+  InteractiveStopResult,
 } from '../types';
 
 vi.mock('../ipc');
@@ -176,6 +181,39 @@ function setupDefaultMocks() {
     stdout: null,
     stderr: null,
   } as MergeExecutionPayload);
+  vi.mocked(ipc.listInteractiveSessions).mockResolvedValue([]);
+  vi.mocked(ipc.startInteractiveSession).mockResolvedValue({
+    sessionId: 'test-session-1',
+    agentKey: 'claude',
+    status: 'running',
+    startedAt: new Date().toISOString(),
+  } as InteractiveSessionStarted);
+  vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
+    sessionId: 'test-session-1',
+    events: [
+      {
+        sessionId: 'test-session-1',
+        agentKey: 'claude',
+        eventType: 'pty_output',
+        data: { text: 'Hello from agent\n' },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+    nextCursor: 1,
+    done: false,
+    status: 'running',
+    error: null,
+  } as InteractiveEventBatch);
+  vi.mocked(ipc.writeInteractiveInput).mockResolvedValue({
+    sessionId: 'test-session-1',
+    success: true,
+    error: null,
+  } as InteractiveWriteAck);
+  vi.mocked(ipc.stopInteractiveSession).mockResolvedValue({
+    sessionId: 'test-session-1',
+    status: 'stopped',
+    wasRunning: true,
+  } as InteractiveStopResult);
 }
 
 function mockRaceFlow() {
@@ -564,3 +602,195 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     expect(ipc.previewMerge).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Interactive Session Smoke Tests (M4.3 + M4.4)
+// ---------------------------------------------------------------------------
+
+describe('Smoke Test 8: Interactive tab renders and shows empty state', () => {
+  it('renders the Interactive tab in navigation', async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /interactive/i })).toBeInTheDocument();
+    });
+  });
+
+  it('shows empty session state when no sessions exist', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId('empty-session-state')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('terminal-empty-state')).toBeInTheDocument();
+  });
+});
+
+describe('Smoke Test 9: Create and select interactive session', () => {
+  it('opens new session form and creates session with IPC', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('create-session-btn')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('create-session-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument();
+    });
+
+    await user.type(screen.getByTestId('session-task-prompt'), 'Fix the bug');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(ipc.startInteractiveSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentKey: 'claude',
+          taskPrompt: 'Fix the bug',
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-panel')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 10: Output polling renders in terminal panel', () => {
+  it('polls events and displays output text', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'Test task');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(ipc.pollInteractiveEvents).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Hello from agent/)).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 11: Send input success and failure paths', () => {
+  it('sends input successfully when session is running', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'Test input');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('interactive-input')).toBeInTheDocument();
+    });
+
+    const inputField = screen.getByTestId('interactive-input');
+    await user.type(inputField, 'do something');
+
+    const sendBtn = screen.getByTestId('send-input-btn');
+    await user.click(sendBtn);
+
+    await waitFor(() => {
+      expect(ipc.writeInteractiveInput).toHaveBeenCalledWith('test-session-1', 'do something');
+    });
+  });
+
+  it('shows error feedback when write fails', async () => {
+    vi.mocked(ipc.writeInteractiveInput).mockResolvedValue({
+      sessionId: 'test-session-1',
+      success: false,
+      error: 'Session is not running',
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'Test input err');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => expect(screen.getByTestId('interactive-input')).toBeInTheDocument());
+
+    const inputField = screen.getByTestId('interactive-input');
+    await user.type(inputField, 'bad input');
+    await user.click(screen.getByTestId('send-input-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('input-error')).toBeInTheDocument();
+      expect(screen.getByText(/Session is not running/)).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 12: Stop session and lifecycle transition', () => {
+  it('stops a running session and updates status', async () => {
+    let pollCount = 0;
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async () => {
+      pollCount++;
+      if (pollCount <= 3) {
+        return {
+          sessionId: 'test-session-1',
+          events: [
+            {
+              sessionId: 'test-session-1',
+              agentKey: 'claude',
+              eventType: 'pty_output',
+              data: { text: 'Working...\n' },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          nextCursor: pollCount,
+          done: false,
+          status: 'running',
+          error: null,
+        } as InteractiveEventBatch;
+      }
+      return {
+        sessionId: 'test-session-1',
+        events: [],
+        nextCursor: pollCount,
+        done: true,
+        status: 'stopped',
+        error: null,
+      } as InteractiveEventBatch;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'Stop test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('stop-session-btn'));
+
+    await waitFor(() => {
+      expect(ipc.stopInteractiveSession).toHaveBeenCalledWith('test-session-1');
+    });
+  });
+});
+

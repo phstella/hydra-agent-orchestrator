@@ -17,6 +17,13 @@ import type {
   CandidateDiffPayload,
   MergePreviewPayload,
   MergeExecutionPayload,
+  InteractiveSessionRequest,
+  InteractiveSessionStarted,
+  InteractiveEventBatch,
+  InteractiveWriteAck,
+  InteractiveResizeAck,
+  InteractiveStopResult,
+  InteractiveSessionSummary,
 } from './types';
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -93,6 +100,54 @@ export async function previewMerge(runId: string, agentKey: string, force: boole
 export async function executeMerge(runId: string, agentKey: string, force: boolean): Promise<MergeExecutionPayload> {
   const invoke = await getInvoke();
   return invoke('execute_merge', { runId, agentKey, force });
+}
+
+// ---------------------------------------------------------------------------
+// Interactive Session API (M4.3 / M4.4)
+// ---------------------------------------------------------------------------
+
+export async function startInteractiveSession(
+  request: InteractiveSessionRequest,
+): Promise<InteractiveSessionStarted> {
+  const invoke = await getInvoke();
+  return invoke('start_interactive_session', { request });
+}
+
+export async function pollInteractiveEvents(
+  sessionId: string,
+  cursor: number,
+): Promise<InteractiveEventBatch> {
+  const invoke = await getInvoke();
+  return invoke('poll_interactive_events', { sessionId, cursor });
+}
+
+export async function writeInteractiveInput(
+  sessionId: string,
+  input: string,
+): Promise<InteractiveWriteAck> {
+  const invoke = await getInvoke();
+  return invoke('write_interactive_input', { sessionId, input });
+}
+
+export async function resizeInteractiveTerminal(
+  sessionId: string,
+  cols: number,
+  rows: number,
+): Promise<InteractiveResizeAck> {
+  const invoke = await getInvoke();
+  return invoke('resize_interactive_terminal', { sessionId, cols, rows });
+}
+
+export async function stopInteractiveSession(
+  sessionId: string,
+): Promise<InteractiveStopResult> {
+  const invoke = await getInvoke();
+  return invoke('stop_interactive_session', { sessionId });
+}
+
+export async function listInteractiveSessions(): Promise<InteractiveSessionSummary[]> {
+  const invoke = await getInvoke();
+  return invoke('list_interactive_sessions');
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +340,35 @@ index 1111111..2222222 100644
 +}
 `;
 
+interface MockInteractiveSession {
+  sessionId: string;
+  agentKey: string;
+  status: string;
+  startedAt: string;
+  eventCursor: number;
+  events: Array<{
+    sessionId: string;
+    agentKey: string;
+    eventType: string;
+    data: unknown;
+    timestamp: string;
+  }>;
+}
+
+const mockInteractiveSessions = new Map<string, MockInteractiveSession>();
+
+function buildMockInteractiveEvents(
+  sessionId: string,
+  agentKey: string,
+): MockInteractiveSession['events'] {
+  const now = Date.now();
+  return [
+    { sessionId, agentKey, eventType: 'session_started', data: {}, timestamp: new Date(now).toISOString() },
+    { sessionId, agentKey, eventType: 'pty_output', data: { text: `[${agentKey}] Initializing interactive session...\n` }, timestamp: new Date(now + 200).toISOString() },
+    { sessionId, agentKey, eventType: 'pty_output', data: { text: `[${agentKey}] Ready for input.\n` }, timestamp: new Date(now + 500).toISOString() },
+  ];
+}
+
 async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Promise<T> {
   await new Promise((r) => setTimeout(r, 200 + Math.random() * 300));
 
@@ -416,6 +500,119 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
         stdout: 'Merge made by the \'ort\' strategy.',
         stderr: null,
       } as T;
+    }
+    case 'start_interactive_session': {
+      const args = _args as Record<string, unknown> | undefined;
+      const request = (args?.request ?? {}) as Record<string, unknown>;
+      const agentKey = (request.agentKey as string) ?? 'claude';
+      const sessionId = `mock-session-${Date.now()}`;
+      mockInteractiveSessions.set(sessionId, {
+        sessionId,
+        agentKey,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        eventCursor: 0,
+        events: buildMockInteractiveEvents(sessionId, agentKey),
+      });
+      return {
+        sessionId,
+        agentKey,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+      } as T;
+    }
+    case 'poll_interactive_events': {
+      const args = _args as Record<string, unknown> | undefined;
+      const sessionId = args?.sessionId as string;
+      const cursor = (args?.cursor as number) ?? 0;
+      const session = mockInteractiveSessions.get(sessionId);
+      if (!session) {
+        return {
+          sessionId,
+          events: [],
+          nextCursor: cursor,
+          done: true,
+          status: 'unknown',
+          error: 'Session not found',
+        } as T;
+      }
+      const batch = session.events.slice(cursor, cursor + 3);
+      const nextCursor = cursor + batch.length;
+      const done = session.status !== 'running' && nextCursor >= session.events.length;
+      return {
+        sessionId,
+        events: batch,
+        nextCursor,
+        done,
+        status: session.status,
+        error: null,
+      } as T;
+    }
+    case 'write_interactive_input': {
+      const args = _args as Record<string, unknown> | undefined;
+      const sessionId = args?.sessionId as string;
+      const input = args?.input as string;
+      const session = mockInteractiveSessions.get(sessionId);
+      if (!session || session.status !== 'running') {
+        return {
+          sessionId,
+          success: false,
+          error: session ? 'Session is not running' : 'Session not found',
+        } as T;
+      }
+      session.events.push({
+        sessionId,
+        agentKey: session.agentKey,
+        eventType: 'user_input',
+        data: { input },
+        timestamp: new Date().toISOString(),
+      });
+      session.events.push({
+        sessionId,
+        agentKey: session.agentKey,
+        eventType: 'pty_output',
+        data: { text: `Received: ${input}\n` },
+        timestamp: new Date().toISOString(),
+      });
+      return { sessionId, success: true, error: null } as T;
+    }
+    case 'resize_interactive_terminal': {
+      const args = _args as Record<string, unknown> | undefined;
+      const sessionId = args?.sessionId as string;
+      const cols = (args?.cols as number) ?? 80;
+      const rows = (args?.rows as number) ?? 24;
+      const session = mockInteractiveSessions.get(sessionId);
+      if (!session || session.status !== 'running') {
+        return {
+          sessionId,
+          success: false,
+          cols,
+          rows,
+          error: session ? 'Session is not running' : 'Session not found',
+        } as T;
+      }
+      return { sessionId, success: true, cols, rows, error: null } as T;
+    }
+    case 'stop_interactive_session': {
+      const args = _args as Record<string, unknown> | undefined;
+      const sessionId = args?.sessionId as string;
+      const session = mockInteractiveSessions.get(sessionId);
+      if (!session) {
+        return { sessionId, status: 'unknown', wasRunning: false } as T;
+      }
+      const wasRunning = session.status === 'running';
+      session.status = 'stopped';
+      return { sessionId, status: 'stopped', wasRunning } as T;
+    }
+    case 'list_interactive_sessions': {
+      const summaries = Array.from(mockInteractiveSessions.values()).map((s) => ({
+        sessionId: s.sessionId,
+        agentKey: s.agentKey,
+        status: s.status,
+        startedAt: s.startedAt,
+        eventCount: s.events.length,
+      }));
+      return summaries as T;
     }
     default:
       throw new Error(`Unknown command: ${cmd}`);

@@ -5,9 +5,9 @@ Last updated: 2026-02-24
 ## Current State
 
 - **Phase**: 4 **in progress** (Interactive Session Mode)
-- **Milestone**: M4.1 + M4.2 complete (PTY supervisor + interactive session runtime/IPC). Phase 3 functionally complete (M3.1 partial — Linux packaging smoke pending).
-- **Sprint**: Phase 4 interactive mode — core PTY and session backend
-- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1 and M4.2 are now implemented: PTY-backed supervisor path in hydra-core preserving existing non-PTY race path, interactive session registry with lifecycle state in hydra-app, six IPC commands (start, poll, write, resize, stop, list), typed request/response models in Rust and TypeScript, cursor-based event polling, event bridge from PTY to session store, cleanup on stop/failure/shutdown, idempotent stop behavior. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean with 239 tests (227 unit + 12 integration). `hydra-app` passes with 34 tests (17 existing + 17 new interactive session tests). All clippy clean with `-D warnings`.
+- **Milestone**: M4.1 + M4.2 + M4.3 + M4.4 complete (PTY supervisor, interactive session runtime/IPC, interactive UI shell + terminal panel, mid-flight intervention controls). Phase 3 functionally complete (M3.1 partial — Linux packaging smoke pending).
+- **Sprint**: Phase 4 interactive mode — UI shell and intervention controls
+- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1–M4.4 are now implemented. M4.3 adds Interactive tab with session rail, terminal output panel, and session management UI. M4.4 adds input composer for sending mid-flight instructions, stop/interrupt controls with lifecycle feedback, and error handling for rejected writes. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean with 239 tests (227 unit + 12 integration). `hydra-app` passes with 34 Rust tests. Frontend: 19 Vitest smoke tests (11 existing + 8 new interactive session tests). All lint and type checks pass.
 
 ## Completed Milestones
 
@@ -52,10 +52,11 @@ Last updated: 2026-02-24
 | P3-QA-01 | GUI Smoke Test Pack | 2026-02-23 | Vitest + Testing Library (jsdom) smoke framework. 11 tests covering startup/tab rendering, preflight refresh IPC, experimental modal gating, race flow transitions, explicit winner selection (no auto-merge), diff candidate switching, merge dry-run gating with conflict blocking, and non-conflict preview failure blocking. CI workflow includes Linux + Windows smoke jobs. |
 | M4.1 | PTY Supervisor Path for Interactive Sessions | 2026-02-24 | `portable-pty`-backed PTY supervisor in `hydra-core::supervisor::pty`. Supports spawn, write, resize, cancel. Output streamed via `mpsc` channel as `PtyEvent` variants. Process-group kill on stop. Preserves existing non-PTY supervisor path for race mode. 8 unit tests (spawn/echo, write/cat, resize, stop, write-after-stop, resize-after-stop, spawn-fail, idempotent-stop). |
 | M4.2 | Interactive Session Runtime and IPC Surface | 2026-02-24 | `InteractiveStateHandle` session registry in `hydra-app::state` with per-session lifecycle (running/completed/failed/stopped). Six Tauri IPC commands: `start_interactive_session`, `poll_interactive_events`, `write_interactive_input`, `resize_interactive_terminal`, `stop_interactive_session`, `list_interactive_sessions`. Typed IPC models in Rust (`ipc_types.rs`) and TypeScript (`types.ts`). Cursor-based event polling with bounded buffer. PTY event bridge forwards output/lifecycle events to session store. Cleanup on stop, failure, and app shutdown via `shutdown_all()`. Idempotent stop. 17 new tests covering start→stream→input→resize→stop, invalid session_id, write/resize after stop, idempotent stop, multiple isolated sessions, shutdown_all, event bridge, serde roundtrips. |
+| M4.3 | Interactive UI Shell and Terminal Panel | 2026-02-24 | Interactive tab added to main app navigation (`App.tsx`). `InteractiveWorkspace` container orchestrates session management, event polling, and IPC. `InteractiveSessionRail` with session list, create/stop actions, lifecycle badges (running/completed/failed/stopped), pulsing dot for active sessions. `InteractiveTerminalPanel` renders streamed PTY output with auto-scroll, tail-window (500 events), and empty-state fallback. Session creation form with agent selection and task prompt. IPC functions wired in `ipc.ts` for all 6 interactive commands with full mock fallback. Design system token compliance enforced (no hardcoded colors). 5 new smoke tests: interactive tab render, empty state, session creation via IPC, output polling/render. |
+| M4.4 | Mid-Flight Intervention Controls | 2026-02-24 | `InputComposer` component: textarea for sending mid-flight input (Enter to send, Shift+Enter for newline), send button with loading state, stop/interrupt button (danger variant), disabled state when session not running, error feedback for rejected writes via `data-testid="input-error"`. Stop action updates session lifecycle via `stopInteractiveSession` IPC and reflects in rail badge and input composer state. Session-ended indicator for terminal states. 3 new smoke tests: send input success path, send input failure with error feedback, stop session lifecycle transition. |
 
 ## In-Progress Work
-
-- **Phase 4 Interactive Session Mode**: M4.1 and M4.2 complete. Next: M4.3 (Interactive UI Shell and Terminal Panel), M4.4 (Mid-Flight Intervention Controls), M4.5 (Interactive Safety and Capability Gating), M4.6 (Transcript Artifacts and E2E Tests).
+- **Phase 4 Interactive Session Mode**: M4.1–M4.4 complete. Next: M4.5 (Interactive Safety and Capability Gating), M4.6 (Transcript Artifacts and E2E Tests).
 - Phase 3 closure: M3.1 acceptance criterion #3 (Linux packaging smoke evidence in published CI) still pending.
 
 ## Phase 3 Reconciliation (M3.x -> P3)
@@ -129,6 +130,11 @@ Last updated: 2026-02-24
 | 2026-02-24 | Interactive sessions stored separately from race runs | Session registry (`InteractiveStateHandle`) is independent of race state; no cross-contamination of lifecycle or events |
 | 2026-02-24 | Interactive session cleanup uses `shutdown_all()` on window destroy | Prevents orphan PTY processes when the GUI is closed |
 | 2026-02-24 | Idempotent stop: second stop returns `was_running=false` | Simplifies frontend logic; no error on redundant stop calls |
+| 2026-02-24 | Interactive tab uses `InteractiveWorkspace` container component | Encapsulates session state, polling timers, and IPC wiring; keeps App.tsx lean |
+| 2026-02-24 | Terminal panel uses tail-window of 500 events (vs 200 for race output) | Interactive sessions tend to produce more output; higher threshold before truncation |
+| 2026-02-24 | InputComposer Enter-to-send, Shift+Enter for newline | Familiar terminal-like UX; prevents accidental multi-line input |
+| 2026-02-24 | Mock IPC for interactive sessions maintains stateful session map | Enables realistic standalone dev/test of session lifecycle without Tauri backend |
+| 2026-02-24 | Stop button shown only in InputComposer (not duplicated in rail) | Reduces confusion about which stop to use; rail shows inline ■ stop only on selected+running |
 
 ## Open Issues
 
@@ -144,7 +150,7 @@ Last updated: 2026-02-24
 |-------|--------|----------|-------|
 | hydra-core | Yes | Yes | 227 unit + 12 integration = 239 passing |
 | hydra-cli | Yes | Yes | 7 passing |
-| hydra-app | Yes | Requires system libs | 34 unit tests + 11 smoke tests (Vitest) |
+| hydra-app | Yes | Requires system libs | 34 unit tests + 19 smoke tests (Vitest) |
 
 ## Phase Progress
 
@@ -154,7 +160,7 @@ Last updated: 2026-02-24
 | 1 | Core Orchestrator + Single Agent | **Complete** | 8/8 |
 | 2 | Multi-Agent Race + Scoring | **Complete** | 12/12 |
 | 3 | GUI Alpha | **In Progress** | Original M3: 6/7 complete (M3.1 partial); Supplemental P3: 8/8 complete |
-| 4 | Interactive Session Mode (PTY) | **In Progress** | 2/6 (M4.1, M4.2 complete) |
+| 4 | Interactive Session Mode (PTY) | **In Progress** | 4/6 (M4.1, M4.2, M4.3, M4.4 complete) |
 | 5 | Collaboration Workflows | Not started | 0/6 |
 | 6 | Windows Parity + Hardening | Not started | 0/6 |
 
@@ -162,24 +168,20 @@ Last updated: 2026-02-24
 
 1. Read `CLAUDE.md` for project overview and conventions.
 2. Phase 0–2 are **complete**. Phase 3 supplemental tickets are **complete** (M3.1 partial — Linux packaging smoke pending).
-3. Phase 4 M4.1 and M4.2 are **complete** — PTY supervisor and interactive session runtime/IPC implemented.
-4. Current baseline: `hydra-core` 239 passing (227 unit + 12 integration), `hydra-cli` 7 passing, `hydra-app` 34 Rust unit tests + 11 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean.
+3. Phase 4 M4.1–M4.4 are **complete** — PTY supervisor, interactive session runtime/IPC, interactive UI shell + terminal panel, and mid-flight intervention controls implemented.
+4. Current baseline: `hydra-core` 239 passing (227 unit + 12 integration), `hydra-cli` 7 passing (via workspace), `hydra-app` 34 Rust unit tests + 19 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean.
 5. **System package requirement**: `hydra-app` needs `webkit2gtk-4.1` (`pacman -S webkit2gtk-4.1` on Arch). Install before attempting `cargo check -p hydra-app`.
 6. **Next priorities** (Phase 4 remaining):
-   - M4.3: Interactive UI Shell and Terminal Panel (add Interactive tab, session rail, terminal panel with ANSI rendering)
-   - M4.4: Mid-Flight Intervention Controls (input composer, interrupt/stop controls)
-   - M4.5: Interactive Safety and Capability Gating (adapter capability checks, experimental warnings)
-   - M4.6: Interactive Transcript Artifacts and E2E Tests
-7. Key files added/modified for M4.1/M4.2:
-   - `crates/hydra-core/src/supervisor/pty.rs` — PTY supervisor module with spawn/write/resize/cancel/status + 8 tests
-   - `crates/hydra-core/src/supervisor/mod.rs` — Added `pub mod pty` re-export
-   - `crates/hydra-core/Cargo.toml` — Added `portable-pty = "0.9"` dependency
-   - `crates/hydra-app/Cargo.toml` — Added `chrono` dependency
-   - `crates/hydra-app/src/ipc_types.rs` — Added interactive session IPC types + `IpcError::not_found`
-   - `crates/hydra-app/src/state.rs` — Added `InteractiveSessionRuntime`, `InteractiveStateHandle`, `spawn_pty_event_bridge` + 12 tests
-   - `crates/hydra-app/src/commands.rs` — Added 6 Tauri commands for interactive sessions + 5 serialization tests
-   - `crates/hydra-app/src/main.rs` — Registered interactive session commands + window destroy cleanup
-   - `crates/hydra-app/frontend/src/types.ts` — Added TypeScript interactive session types
+   - M4.5: Interactive Safety and Capability Gating (adapter capability checks, experimental warnings, preflight guardrails)
+   - M4.6: Interactive Transcript Artifacts and E2E Tests (persist session transcripts, integration tests)
+7. Key files added/modified for M4.3/M4.4:
+   - `crates/hydra-app/frontend/src/App.tsx` — Added Interactive tab to NAV_TABS, imported InteractiveWorkspace
+   - `crates/hydra-app/frontend/src/ipc.ts` — Added 6 interactive IPC functions + mock handlers with session state
+   - `crates/hydra-app/frontend/src/components/InteractiveWorkspace.tsx` — Container: session state, event polling, create/stop/select handlers
+   - `crates/hydra-app/frontend/src/components/InteractiveSessionRail.tsx` — Session list with lifecycle badges, create/stop actions
+   - `crates/hydra-app/frontend/src/components/InteractiveTerminalPanel.tsx` — PTY output rendering with auto-scroll and tail-window
+   - `crates/hydra-app/frontend/src/components/InputComposer.tsx` — Mid-flight input textarea, send/stop buttons, error feedback
+   - `crates/hydra-app/frontend/src/__tests__/smoke.test.tsx` — 8 new smoke tests for interactive tab + intervention controls
 8. IPC contract for interactive sessions: `start_interactive_session`, `poll_interactive_events`, `write_interactive_input`, `resize_interactive_terminal`, `stop_interactive_session`, `list_interactive_sessions`.
 9. Race-mode behavior is unchanged; all existing race/scoring/merge tests pass.
 10. Design system tokens are CSS custom properties in `tokens.css`. Feature components must NOT use hardcoded hex colors.
