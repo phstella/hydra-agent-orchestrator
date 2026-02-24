@@ -684,6 +684,200 @@ async fn emit_orchestrator_event(
 }
 
 // ---------------------------------------------------------------------------
+// Interactive session commands (M4.2)
+// ---------------------------------------------------------------------------
+
+const MAX_INTERACTIVE_EVENTS_PER_POLL: usize = 512;
+
+#[tauri::command]
+pub async fn start_interactive_session(
+    state: State<'_, AppState>,
+    request: InteractiveSessionRequest,
+) -> Result<InteractiveSessionStarted, String> {
+    if request.agent_key.trim().is_empty() {
+        return Err(IpcError::validation("agent_key cannot be empty").to_string());
+    }
+    if request.task_prompt.trim().is_empty() {
+        return Err(IpcError::validation("task_prompt cannot be empty").to_string());
+    }
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let cols = request.cols.unwrap_or(120);
+    let rows = request.rows.unwrap_or(40);
+
+    let config = state.config.lock().await;
+    let registry = hydra_core::adapter::AdapterRegistry::from_config(&config.adapters);
+    let adapter = registry
+        .resolve(&request.agent_key, request.allow_experimental)
+        .map_err(|e| IpcError::adapter_error(e.to_string()).to_string())?;
+
+    let cwd = if let Some(ref cwd_str) = request.cwd {
+        std::path::PathBuf::from(cwd_str)
+    } else {
+        discover_repo_root().map_err(|e| e.to_string())?
+    };
+
+    let spawn_req = hydra_core::adapter::SpawnRequest {
+        task_prompt: request.task_prompt.clone(),
+        worktree_path: cwd.clone(),
+        timeout_seconds: 0,
+        allow_network: true,
+        force_edit: false,
+        output_json_stream: false,
+        unsafe_mode: request.unsafe_mode,
+        supported_flags: adapter.detect().supported_flags.clone(),
+    };
+
+    let built_cmd = adapter
+        .build_command(&spawn_req)
+        .map_err(|e| IpcError::adapter_error(e.to_string()).to_string())?;
+    drop(config);
+
+    let pty_config = hydra_core::supervisor::pty::PtySessionConfig {
+        program: built_cmd.program,
+        args: built_cmd.args,
+        env: built_cmd.env,
+        cwd: built_cmd.cwd,
+        initial_cols: cols,
+        initial_rows: rows,
+    };
+
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(1024);
+    let pty_session = hydra_core::supervisor::pty::PtySession::spawn(pty_config, event_tx)
+        .map_err(|e| IpcError::internal(format!("PTY spawn failed: {e}")).to_string())?;
+
+    let interactive = state.interactive.clone();
+    interactive
+        .register_session(&session_id, &request.agent_key, &started_at, pty_session)
+        .await;
+
+    crate::state::spawn_pty_event_bridge(
+        session_id.clone(),
+        request.agent_key.clone(),
+        event_rx,
+        interactive,
+    );
+
+    Ok(InteractiveSessionStarted {
+        session_id,
+        agent_key: request.agent_key,
+        status: "running".to_string(),
+        started_at,
+    })
+}
+
+#[tauri::command]
+pub async fn poll_interactive_events(
+    state: State<'_, AppState>,
+    session_id: String,
+    cursor: u64,
+) -> Result<InteractiveEventBatch, String> {
+    let cursor = usize::try_from(cursor)
+        .map_err(|_| IpcError::validation("invalid cursor value").to_string())?;
+
+    let interactive = state.interactive.clone();
+    let Some((events, next_cursor, done, status, error)) = interactive
+        .poll_events(&session_id, cursor, MAX_INTERACTIVE_EVENTS_PER_POLL)
+        .await
+    else {
+        return Err(IpcError::not_found(format!("session '{session_id}' not found")).to_string());
+    };
+
+    Ok(InteractiveEventBatch {
+        session_id,
+        events,
+        next_cursor: next_cursor as u64,
+        done,
+        status,
+        error,
+    })
+}
+
+#[tauri::command]
+pub async fn write_interactive_input(
+    state: State<'_, AppState>,
+    session_id: String,
+    input: String,
+) -> Result<InteractiveWriteAck, String> {
+    let interactive = state.interactive.clone();
+    match interactive.write_input(&session_id, input.as_bytes()).await {
+        Ok(()) => Ok(InteractiveWriteAck {
+            session_id,
+            success: true,
+            error: None,
+        }),
+        Err(e) => Ok(InteractiveWriteAck {
+            session_id,
+            success: false,
+            error: Some(e),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn resize_interactive_terminal(
+    state: State<'_, AppState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<InteractiveResizeAck, String> {
+    let interactive = state.interactive.clone();
+    match interactive.resize(&session_id, cols, rows).await {
+        Ok(()) => Ok(InteractiveResizeAck {
+            session_id,
+            success: true,
+            cols,
+            rows,
+            error: None,
+        }),
+        Err(e) => Ok(InteractiveResizeAck {
+            session_id,
+            success: false,
+            cols,
+            rows,
+            error: Some(e),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn stop_interactive_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<InteractiveStopResult, String> {
+    let interactive = state.interactive.clone();
+    match interactive.stop_session(&session_id).await {
+        Ok((was_running, status)) => Ok(InteractiveStopResult {
+            session_id,
+            status,
+            was_running,
+        }),
+        Err(e) => Err(IpcError::not_found(e).to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn list_interactive_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<InteractiveSessionSummary>, String> {
+    let interactive = state.interactive.clone();
+    let entries = interactive.list_sessions().await;
+    Ok(entries
+        .into_iter()
+        .map(
+            |(sid, agent_key, status, started_at, event_count)| InteractiveSessionSummary {
+                session_id: sid,
+                agent_key,
+                status,
+                started_at,
+                event_count: event_count as u64,
+            },
+        )
+        .collect())
+}
+
+// ---------------------------------------------------------------------------
 // Diff review commands (P3-UI-05)
 // ---------------------------------------------------------------------------
 
@@ -1611,5 +1805,78 @@ HEAD 1111111
 branch refs/heads/main
 "#;
         assert!(parse_worktree_path_for_branch(porcelain, "hydra/run/agent/codex").is_none());
+    }
+
+    #[test]
+    fn interactive_session_started_serializes_camel_case() {
+        let started = InteractiveSessionStarted {
+            session_id: "s1".to_string(),
+            agent_key: "claude".to_string(),
+            status: "running".to_string(),
+            started_at: "2026-02-24T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&started).unwrap();
+        assert!(json.contains("sessionId"));
+        assert!(json.contains("agentKey"));
+        assert!(json.contains("startedAt"));
+    }
+
+    #[test]
+    fn interactive_write_ack_serializes() {
+        let ack = InteractiveWriteAck {
+            session_id: "s1".to_string(),
+            success: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&ack).unwrap();
+        assert!(json.contains("sessionId"));
+        assert!(json.contains("\"success\":true"));
+    }
+
+    #[test]
+    fn interactive_resize_ack_serializes() {
+        let ack = InteractiveResizeAck {
+            session_id: "s1".to_string(),
+            success: true,
+            cols: 132,
+            rows: 50,
+            error: None,
+        };
+        let json = serde_json::to_string(&ack).unwrap();
+        assert!(json.contains("\"cols\":132"));
+        assert!(json.contains("\"rows\":50"));
+    }
+
+    #[test]
+    fn interactive_stop_result_serializes() {
+        let result = InteractiveStopResult {
+            session_id: "s1".to_string(),
+            status: "stopped".to_string(),
+            was_running: true,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("wasRunning"));
+        assert!(json.contains("\"status\":\"stopped\""));
+    }
+
+    #[test]
+    fn interactive_session_summary_serializes() {
+        let summary = InteractiveSessionSummary {
+            session_id: "s1".to_string(),
+            agent_key: "claude".to_string(),
+            status: "running".to_string(),
+            started_at: "2026-02-24T00:00:00Z".to_string(),
+            event_count: 42,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("eventCount"));
+        assert!(json.contains("\"eventCount\":42"));
+    }
+
+    #[test]
+    fn ipc_error_not_found_variant() {
+        let err = IpcError::not_found("session not found");
+        assert_eq!(err.code, "not_found");
+        assert_eq!(err.to_string(), "[not_found] session not found");
     }
 }

@@ -1,13 +1,13 @@
 # Hydra Progress Tracker
 
-Last updated: 2026-02-23
+Last updated: 2026-02-24
 
 ## Current State
 
-- **Phase**: 3 **in progress** (GUI Alpha)
-- **Milestone**: P3-DS-01, P3-IPC-01, P3-UI-01, P3-UI-02, P3-UI-03, P3-UI-04, P3-UI-05, P3-QA-01 complete; original M3.2-M3.7 reconciled as complete; M3.1 remains partial (Linux packaging smoke evidence pending)
-- **Sprint**: Phase 3 GUI implementation
-- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete on the supplemental ticket track: Tauri v2 app crate, React+TS frontend with design system tokens, IPC layer with backpressure, Preflight Dashboard, Experimental Adapter Modal, Running Agents Rail with Live Output Panel, Results Scoreboard + explicit winner selection, Candidate Diff Review + Merge Action Rail, and GUI Smoke Test Pack (11 tests). Diff patch artifacts are now persisted during the race flow before worktree cleanup. Three Tauri IPC commands (get_candidate_diff, preview_merge, execute_merge) map to CLI merge semantics. Candidate diff review uses side-by-side rendering with large-diff line capping and unavailable-diff fallback. Vitest + Testing Library smoke test framework added with CI jobs for Linux + Windows. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean. Frontend builds via `npm run build`, `tsc --noEmit`, and `npm run test:smoke` clean. `hydra-app` crate requires system packages (`webkit2gtk-4.1`, `javascriptcoregtk-4.1`) to compile — excluded from default-members.
+- **Phase**: 4 **in progress** (Interactive Session Mode)
+- **Milestone**: M4.1 + M4.2 complete (PTY supervisor + interactive session runtime/IPC). Phase 3 functionally complete (M3.1 partial — Linux packaging smoke pending).
+- **Sprint**: Phase 4 interactive mode — core PTY and session backend
+- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1 and M4.2 are now implemented: PTY-backed supervisor path in hydra-core preserving existing non-PTY race path, interactive session registry with lifecycle state in hydra-app, six IPC commands (start, poll, write, resize, stop, list), typed request/response models in Rust and TypeScript, cursor-based event polling, event bridge from PTY to session store, cleanup on stop/failure/shutdown, idempotent stop behavior. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean with 239 tests (227 unit + 12 integration). `hydra-app` passes with 34 tests (17 existing + 17 new interactive session tests). All clippy clean with `-D warnings`.
 
 ## Completed Milestones
 
@@ -50,11 +50,13 @@ Last updated: 2026-02-23
 | P3-UI-04 | Results Scoreboard + Winner Selection | 2026-02-23 | Ranked candidate cards with mergeability gating, explicit winner selection, per-dimension score table, and run metadata badges (duration/cost where available). Winner state is app-owned and consistent across tabs. |
 | P3-UI-05 | Candidate Diff Review + Merge Action Rail | 2026-02-23 | Diff patch persisted in race flow before cleanup. Three Tauri IPC commands (get_candidate_diff, preview_merge, execute_merge) with CLI merge mapping. CandidateDiffReview with candidate tabs, side-by-side diff viewer, modified-files list, and merge action rail (preview/accept/reject). Accept is blocked until a clean preview result. Fallback state when diff unavailable. Force override for non-mergeable/gated candidates. Winner selection feeds default candidate in review view. |
 | P3-QA-01 | GUI Smoke Test Pack | 2026-02-23 | Vitest + Testing Library (jsdom) smoke framework. 11 tests covering startup/tab rendering, preflight refresh IPC, experimental modal gating, race flow transitions, explicit winner selection (no auto-merge), diff candidate switching, merge dry-run gating with conflict blocking, and non-conflict preview failure blocking. CI workflow includes Linux + Windows smoke jobs. |
+| M4.1 | PTY Supervisor Path for Interactive Sessions | 2026-02-24 | `portable-pty`-backed PTY supervisor in `hydra-core::supervisor::pty`. Supports spawn, write, resize, cancel. Output streamed via `mpsc` channel as `PtyEvent` variants. Process-group kill on stop. Preserves existing non-PTY supervisor path for race mode. 8 unit tests (spawn/echo, write/cat, resize, stop, write-after-stop, resize-after-stop, spawn-fail, idempotent-stop). |
+| M4.2 | Interactive Session Runtime and IPC Surface | 2026-02-24 | `InteractiveStateHandle` session registry in `hydra-app::state` with per-session lifecycle (running/completed/failed/stopped). Six Tauri IPC commands: `start_interactive_session`, `poll_interactive_events`, `write_interactive_input`, `resize_interactive_terminal`, `stop_interactive_session`, `list_interactive_sessions`. Typed IPC models in Rust (`ipc_types.rs`) and TypeScript (`types.ts`). Cursor-based event polling with bounded buffer. PTY event bridge forwards output/lifecycle events to session store. Cleanup on stop, failure, and app shutdown via `shutdown_all()`. Idempotent stop. 17 new tests covering start→stream→input→resize→stop, invalid session_id, write/resize after stop, idempotent stop, multiple isolated sessions, shutdown_all, event bridge, serde roundtrips. |
 
 ## In-Progress Work
 
-- **Phase 3 GUI Alpha**: Supplemental tickets are complete (P3-DS-01 through P3-QA-01), and original M3.2-M3.7 are reconciled as satisfied by those tickets.
-- Remaining closure item for original checklist: M3.1 acceptance criterion #3 (Linux packaging smoke evidence in published CI).
+- **Phase 4 Interactive Session Mode**: M4.1 and M4.2 complete. Next: M4.3 (Interactive UI Shell and Terminal Panel), M4.4 (Mid-Flight Intervention Controls), M4.5 (Interactive Safety and Capability Gating), M4.6 (Transcript Artifacts and E2E Tests).
+- Phase 3 closure: M3.1 acceptance criterion #3 (Linux packaging smoke evidence in published CI) still pending.
 
 ## Phase 3 Reconciliation (M3.x -> P3)
 
@@ -121,6 +123,12 @@ Last updated: 2026-02-23
 | 2026-02-23 | Diff source resolution: artifact -> live git -> unavailable fallback | Three-tier fallback ensures diff is available in most scenarios; GUI shows explicit unavailable state |
 | 2026-02-23 | Vitest + Testing Library (jsdom) for GUI smoke tests | Deterministic, fast, no browser dependency; mocked IPC for isolated UI flow validation |
 | 2026-02-23 | Winner selection navigates to Review tab | Explicit flow from scoreboard -> diff review aligns with CLI workflow (score -> inspect -> merge) |
+| 2026-02-24 | `portable-pty` crate for cross-platform PTY management | Well-maintained (wezterm project), supports Linux/Windows/macOS. Avoids raw libc PTY setup |
+| 2026-02-24 | PTY supervisor is a separate module from race supervisor | Preserves deterministic non-PTY path for race mode; interactive path has different lifecycle (write, resize, no timeout enforcement) |
+| 2026-02-24 | PTY output read on dedicated `std::thread`, forwarded via `mpsc` | portable-pty reader is blocking I/O; cannot use tokio async directly. Channel bridge enables async event loop |
+| 2026-02-24 | Interactive sessions stored separately from race runs | Session registry (`InteractiveStateHandle`) is independent of race state; no cross-contamination of lifecycle or events |
+| 2026-02-24 | Interactive session cleanup uses `shutdown_all()` on window destroy | Prevents orphan PTY processes when the GUI is closed |
+| 2026-02-24 | Idempotent stop: second stop returns `was_running=false` | Simplifies frontend logic; no error on redundant stop calls |
 
 ## Open Issues
 
@@ -134,9 +142,9 @@ Last updated: 2026-02-23
 
 | Crate | Exists | Compiles | Tests |
 |-------|--------|----------|-------|
-| hydra-core | Yes | Yes | 218 unit + 12 integration = 230 passing |
+| hydra-core | Yes | Yes | 227 unit + 12 integration = 239 passing |
 | hydra-cli | Yes | Yes | 7 passing |
-| hydra-app | Yes | Requires system libs | 5 unit tests + 11 smoke tests (Vitest) |
+| hydra-app | Yes | Requires system libs | 34 unit tests + 11 smoke tests (Vitest) |
 
 ## Phase Progress
 
@@ -146,31 +154,32 @@ Last updated: 2026-02-23
 | 1 | Core Orchestrator + Single Agent | **Complete** | 8/8 |
 | 2 | Multi-Agent Race + Scoring | **Complete** | 12/12 |
 | 3 | GUI Alpha | **In Progress** | Original M3: 6/7 complete (M3.1 partial); Supplemental P3: 8/8 complete |
-| 4 | Interactive Session Mode (PTY) | Not started | 0/6 |
+| 4 | Interactive Session Mode (PTY) | **In Progress** | 2/6 (M4.1, M4.2 complete) |
 | 5 | Collaboration Workflows | Not started | 0/6 |
 | 6 | Windows Parity + Hardening | Not started | 0/6 |
 
 ## Instructions for Next Agent
 
 1. Read `CLAUDE.md` for project overview and conventions.
-2. Phase 2 is **complete** — all 12 milestones done (M2.1 through M2.12).
-3. Phase 3 supplemental tickets are **complete** — P3-DS-01, P3-IPC-01, P3-UI-01 through P3-UI-05, P3-QA-01 implemented.
-4. Current baseline: `hydra-core` 230 passing, `hydra-cli` 7 passing, `hydra-app` 5 Rust unit tests + 11 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. Frontend `tsc --noEmit`, `vite build`, and `npm run test:smoke` clean.
+2. Phase 0–2 are **complete**. Phase 3 supplemental tickets are **complete** (M3.1 partial — Linux packaging smoke pending).
+3. Phase 4 M4.1 and M4.2 are **complete** — PTY supervisor and interactive session runtime/IPC implemented.
+4. Current baseline: `hydra-core` 239 passing (227 unit + 12 integration), `hydra-cli` 7 passing, `hydra-app` 34 Rust unit tests + 11 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean.
 5. **System package requirement**: `hydra-app` needs `webkit2gtk-4.1` (`pacman -S webkit2gtk-4.1` on Arch). Install before attempting `cargo check -p hydra-app`.
-6. **Next priorities**:
-   - Close original M3.1 acceptance criterion #3 with Linux packaging smoke evidence in published CI results
-   - Phase 4: Interactive Session Mode (PTY)
-   - Phase 5: Collaboration Workflows
-7. Key files added for P3-UI-05 and P3-QA-01:
-   - `crates/hydra-cli/src/race.rs` — diff.patch persistence via `generate_diff_patch()` before worktree cleanup
-   - `crates/hydra-app/src/ipc_types.rs` — CandidateDiffPayload, MergePreviewPayload, MergeExecutionPayload, DiffFile
-   - `crates/hydra-app/src/commands.rs` — get_candidate_diff, preview_merge, execute_merge Tauri commands
-   - `crates/hydra-app/frontend/src/components/CandidateDiffReview.tsx` — P3-UI-05 diff review surface
-   - `crates/hydra-app/frontend/src/types.ts` — TypeScript diff/merge types
-   - `crates/hydra-app/frontend/src/ipc.ts` — getCandidateDiff, previewMerge, executeMerge IPC + mock fallback
-   - `crates/hydra-app/frontend/src/__tests__/smoke.test.tsx` — P3-QA-01 11-test smoke suite
-   - `crates/hydra-app/frontend/vitest.config.ts` — Vitest configuration
-   - `.github/workflows/ci.yml` — Added smoke test step on Linux + Windows GUI CI jobs
-8. Design system tokens are CSS custom properties in `tokens.css`. All primitives consume tokens only. Feature components must NOT use hardcoded hex colors (enforced by `enforce-design-tokens.mjs`).
-9. IPC flow: Frontend calls `invoke('command_name', args)` → Tauri dispatches to `#[tauri::command]` fn → returns JSON. Mock fallback for dev without Tauri runtime. Diff/merge commands shell out to `hydra` CLI binary.
-10. Adapter/status data is runtime-driven from `ProbeRunner`/`AdapterRegistry`. No hardcoded agent names in UI components.
+6. **Next priorities** (Phase 4 remaining):
+   - M4.3: Interactive UI Shell and Terminal Panel (add Interactive tab, session rail, terminal panel with ANSI rendering)
+   - M4.4: Mid-Flight Intervention Controls (input composer, interrupt/stop controls)
+   - M4.5: Interactive Safety and Capability Gating (adapter capability checks, experimental warnings)
+   - M4.6: Interactive Transcript Artifacts and E2E Tests
+7. Key files added/modified for M4.1/M4.2:
+   - `crates/hydra-core/src/supervisor/pty.rs` — PTY supervisor module with spawn/write/resize/cancel/status + 8 tests
+   - `crates/hydra-core/src/supervisor/mod.rs` — Added `pub mod pty` re-export
+   - `crates/hydra-core/Cargo.toml` — Added `portable-pty = "0.9"` dependency
+   - `crates/hydra-app/Cargo.toml` — Added `chrono` dependency
+   - `crates/hydra-app/src/ipc_types.rs` — Added interactive session IPC types + `IpcError::not_found`
+   - `crates/hydra-app/src/state.rs` — Added `InteractiveSessionRuntime`, `InteractiveStateHandle`, `spawn_pty_event_bridge` + 12 tests
+   - `crates/hydra-app/src/commands.rs` — Added 6 Tauri commands for interactive sessions + 5 serialization tests
+   - `crates/hydra-app/src/main.rs` — Registered interactive session commands + window destroy cleanup
+   - `crates/hydra-app/frontend/src/types.ts` — Added TypeScript interactive session types
+8. IPC contract for interactive sessions: `start_interactive_session`, `poll_interactive_events`, `write_interactive_input`, `resize_interactive_terminal`, `stop_interactive_session`, `list_interactive_sessions`.
+9. Race-mode behavior is unchanged; all existing race/scoring/merge tests pass.
+10. Design system tokens are CSS custom properties in `tokens.css`. Feature components must NOT use hardcoded hex colors.

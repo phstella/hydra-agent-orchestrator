@@ -10,6 +10,7 @@ serde_json = "1"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 hydra-core = { path = "../hydra-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

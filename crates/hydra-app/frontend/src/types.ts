@@ -178,6 +178,72 @@ export interface IpcError {
 }
 
 // ---------------------------------------------------------------------------
+// Interactive Session (M4.2)
+// ---------------------------------------------------------------------------
+
+export interface InteractiveSessionRequest {
+  agentKey: string;
+  taskPrompt: string;
+  allowExperimental: boolean;
+  unsafeMode: boolean;
+  cwd: string | null;
+  cols: number | null;
+  rows: number | null;
+}
+
+export interface InteractiveSessionStarted {
+  sessionId: string;
+  agentKey: string;
+  status: string;
+  startedAt: string;
+}
+
+export interface InteractiveStreamEvent {
+  sessionId: string;
+  agentKey: string;
+  eventType: string;
+  data: unknown;
+  timestamp: string;
+}
+
+export interface InteractiveEventBatch {
+  sessionId: string;
+  events: InteractiveStreamEvent[];
+  nextCursor: number;
+  done: boolean;
+  status: string;
+  error: string | null;
+}
+
+export interface InteractiveWriteAck {
+  sessionId: string;
+  success: boolean;
+  error: string | null;
+}
+
+export interface InteractiveResizeAck {
+  sessionId: string;
+  success: boolean;
+  cols: number;
+  rows: number;
+  error: string | null;
+}
+
+export interface InteractiveStopResult {
+  sessionId: string;
+  status: string;
+  wasRunning: boolean;
+}
+
+export interface InteractiveSessionSummary {
+  sessionId: string;
+  agentKey: string;
+  status: string;
+  startedAt: string;
+  eventCount: number;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

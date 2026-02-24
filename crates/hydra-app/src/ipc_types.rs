@@ -142,6 +142,88 @@ pub struct AgentResult {
 }
 
 // ---------------------------------------------------------------------------
+// Interactive session types (M4.2)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveSessionRequest {
+    pub agent_key: String,
+    pub task_prompt: String,
+    pub allow_experimental: bool,
+    pub unsafe_mode: bool,
+    pub cwd: Option<String>,
+    pub cols: Option<u16>,
+    pub rows: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveSessionStarted {
+    pub session_id: String,
+    pub agent_key: String,
+    pub status: String,
+    pub started_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveStreamEvent {
+    pub session_id: String,
+    pub agent_key: String,
+    pub event_type: String,
+    pub data: serde_json::Value,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveEventBatch {
+    pub session_id: String,
+    pub events: Vec<InteractiveStreamEvent>,
+    pub next_cursor: u64,
+    pub done: bool,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveWriteAck {
+    pub session_id: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveResizeAck {
+    pub session_id: String,
+    pub success: bool,
+    pub cols: u16,
+    pub rows: u16,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveStopResult {
+    pub session_id: String,
+    pub status: String,
+    pub was_running: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveSessionSummary {
+    pub session_id: String,
+    pub agent_key: String,
+    pub status: String,
+    pub started_at: String,
+    pub event_count: u64,
+}
+
+// ---------------------------------------------------------------------------
 // IPC Error wrapper
 // ---------------------------------------------------------------------------
 
@@ -165,6 +247,14 @@ impl IpcError {
     pub fn validation(msg: impl Into<String>) -> Self {
         Self {
             code: "validation_error".to_string(),
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Self {
+            code: "not_found".to_string(),
             message: msg.into(),
             details: None,
         }
