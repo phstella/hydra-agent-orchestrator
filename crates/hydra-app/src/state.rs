@@ -161,7 +161,20 @@ impl InteractiveStateHandle {
             .ok_or_else(|| "PTY not available".to_string())?;
         pty.write_input(data)
             .await
-            .map_err(|e| format!("write failed: {e}"))
+            .map_err(|e| format!("write failed: {e}"))?;
+
+        let input_text = String::from_utf8_lossy(data).to_string();
+        let event = InteractiveStreamEvent {
+            session_id: session.session_id.clone(),
+            agent_key: session.agent_key.clone(),
+            event_type: "user_input".to_string(),
+            data: serde_json::json!({ "input": input_text }),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+        drop(sessions);
+        self.append_event(session_id, event).await;
+
+        Ok(())
     }
 
     pub async fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -507,6 +520,10 @@ mod tests {
         // Poll events
         let (events, _next, _done, status, _err) = state.poll_events("s1", 0, 512).await.unwrap();
         assert!(!events.is_empty(), "should have events after input");
+        assert!(
+            events.iter().any(|e| e.event_type == "user_input"),
+            "should emit user_input event on intervention writes"
+        );
         assert_eq!(status, "running");
 
         // Stop

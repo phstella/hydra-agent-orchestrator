@@ -10,47 +10,121 @@ import {
   writeInteractiveInput,
   stopInteractiveSession,
   listInteractiveSessions,
+  listAdapters,
 } from '../ipc';
 import type {
   InteractiveSessionSummary,
   InteractiveStreamEvent,
+  AdapterInfo,
 } from '../types';
+
+const MAX_CLIENT_EVENTS_PER_SESSION = 5_000;
+const POLL_INTERVAL_MS = 250;
+const POLL_RETRY_MS = 1_000;
+
+function appendBoundedEvents(
+  existing: InteractiveStreamEvent[],
+  incoming: InteractiveStreamEvent[],
+): InteractiveStreamEvent[] {
+  const merged = [...existing, ...incoming];
+  if (merged.length <= MAX_CLIENT_EVENTS_PER_SESSION) return merged;
+  return merged.slice(merged.length - MAX_CLIENT_EVENTS_PER_SESSION);
+}
+
+function isAdapterAvailable(adapter: AdapterInfo): boolean {
+  return adapter.tier === 'tier1' && adapter.status === 'ready';
+}
 
 export function InteractiveWorkspace() {
   const [sessions, setSessions] = useState<InteractiveSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [sessionEvents, setSessionEvents] = useState<Map<string, InteractiveStreamEvent[]>>(new Map());
+  const [pollErrors, setPollErrors] = useState<Map<string, string>>(new Map());
   const [creating, setCreating] = useState(false);
   const [showNewForm, setShowNewForm] = useState(false);
-  const [agentKey, setAgentKey] = useState('claude');
+  const [agentKey, setAgentKey] = useState('');
+  const [availableAgents, setAvailableAgents] = useState<string[]>([]);
+  const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
   const [taskPrompt, setTaskPrompt] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
 
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pollCursors = useRef<Map<string, number>>(new Map());
+  const pollingSessions = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    listInteractiveSessions()
-      .then(setSessions)
-      .catch(() => {});
+    let cancelled = false;
+
+    async function loadInteractiveContext() {
+      const [sessionResult, adapterResult] = await Promise.allSettled([
+        listInteractiveSessions(),
+        listAdapters(),
+      ]);
+
+      if (cancelled) return;
+
+      if (sessionResult.status === 'fulfilled') {
+        setSessions(sessionResult.value);
+        if (sessionResult.value.length > 0) {
+          setSelectedSessionId((prev) => prev ?? sessionResult.value[0]?.sessionId ?? null);
+        }
+      }
+
+      if (adapterResult.status === 'fulfilled') {
+        const keys = adapterResult.value
+          .filter(isAdapterAvailable)
+          .map((adapter) => adapter.key);
+        setAvailableAgents(keys);
+        setAgentLoadError(null);
+        if (keys.length > 0) {
+          setAgentKey((prev) => (prev && keys.includes(prev) ? prev : keys[0]));
+        }
+      } else {
+        setAgentLoadError('Unable to load adapters. Using fallback defaults.');
+        setAvailableAgents(['claude', 'codex']);
+        setAgentKey((prev) => prev || 'claude');
+      }
+    }
+
+    loadInteractiveContext().catch(() => {
+      if (!cancelled) {
+        setAgentLoadError('Unable to load interactive context.');
+        setAvailableAgents(['claude', 'codex']);
+        setAgentKey((prev) => prev || 'claude');
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const startPolling = useCallback((sessionId: string) => {
-    if (pollTimers.current.has(sessionId)) return;
-    pollCursors.current.set(sessionId, 0);
+    if (pollingSessions.current.has(sessionId)) return;
+    pollingSessions.current.add(sessionId);
+    if (!pollCursors.current.has(sessionId)) {
+      pollCursors.current.set(sessionId, 0);
+    }
 
     function poll() {
       const cursor = pollCursors.current.get(sessionId) ?? 0;
 
       pollInteractiveEvents(sessionId, cursor)
         .then((batch) => {
+          setPollErrors((prev) => {
+            if (!prev.has(sessionId)) return prev;
+            const next = new Map(prev);
+            next.delete(sessionId);
+            return next;
+          });
+
           pollCursors.current.set(sessionId, batch.nextCursor);
 
           if (batch.events.length > 0) {
             setSessionEvents((prev) => {
               const next = new Map(prev);
               const existing = next.get(sessionId) ?? [];
-              next.set(sessionId, [...existing, ...batch.events]);
+              next.set(sessionId, appendBoundedEvents(existing, batch.events));
               return next;
             });
           }
@@ -65,19 +139,54 @@ export function InteractiveWorkspace() {
 
           if (batch.done) {
             pollTimers.current.delete(sessionId);
+            pollingSessions.current.delete(sessionId);
             return;
           }
 
-          const timer = setTimeout(poll, 250);
+          const timer = setTimeout(poll, POLL_INTERVAL_MS);
           pollTimers.current.set(sessionId, timer);
         })
-        .catch(() => {
-          pollTimers.current.delete(sessionId);
+        .catch((err) => {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          setPollErrors((prev) => {
+            const next = new Map(prev);
+            next.set(sessionId, errorMessage || 'Stream polling failed');
+            return next;
+          });
+
+          if (errorMessage.toLowerCase().includes('not found')) {
+            pollTimers.current.delete(sessionId);
+            pollingSessions.current.delete(sessionId);
+            setSessions((prev) =>
+              prev.map((s) =>
+                s.sessionId === sessionId ? { ...s, status: 'failed' } : s,
+              ),
+            );
+            return;
+          }
+
+          const timer = setTimeout(poll, POLL_RETRY_MS);
+          pollTimers.current.set(sessionId, timer);
         });
     }
 
     poll();
   }, []);
+
+  useEffect(() => {
+    sessions.forEach((session) => {
+      if (session.status === 'running') {
+        startPolling(session.sessionId);
+      } else {
+        const timer = pollTimers.current.get(session.sessionId);
+        if (timer) {
+          clearTimeout(timer);
+          pollTimers.current.delete(session.sessionId);
+          pollingSessions.current.delete(session.sessionId);
+        }
+      }
+    });
+  }, [sessions, startPolling]);
 
   const handleCreateSession = useCallback(() => {
     setShowNewForm(true);
@@ -85,6 +194,10 @@ export function InteractiveWorkspace() {
   }, []);
 
   const handleConfirmCreate = useCallback(async () => {
+    if (!agentKey) {
+      setCreateError('Select an available agent first.');
+      return;
+    }
     if (!taskPrompt.trim()) {
       setCreateError('Enter a task prompt.');
       return;
@@ -127,6 +240,18 @@ export function InteractiveWorkspace() {
   const handleStopSession = useCallback(async (sessionId: string) => {
     try {
       const result = await stopInteractiveSession(sessionId);
+      const timer = pollTimers.current.get(sessionId);
+      if (timer) {
+        clearTimeout(timer);
+        pollTimers.current.delete(sessionId);
+      }
+      pollingSessions.current.delete(sessionId);
+      setPollErrors((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
       setSessions((prev) =>
         prev.map((s) =>
           s.sessionId === sessionId ? { ...s, status: result.status } : s,
@@ -152,11 +277,16 @@ export function InteractiveWorkspace() {
   const selectedEvents = selectedSessionId
     ? (sessionEvents.get(selectedSessionId) ?? [])
     : [];
+  const selectedPollError = selectedSessionId
+    ? (pollErrors.get(selectedSessionId) ?? null)
+    : null;
 
   useEffect(() => {
     return () => {
       pollTimers.current.forEach((timer) => clearTimeout(timer));
       pollTimers.current.clear();
+      pollCursors.current.clear();
+      pollingSessions.current.clear();
     };
   }, []);
 
@@ -195,8 +325,8 @@ export function InteractiveWorkspace() {
             >
               Agent
             </div>
-            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-              {['claude', 'codex'].map((key) => (
+            <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+              {availableAgents.map((key) => (
                 <button
                   key={key}
                   type="button"
@@ -224,7 +354,17 @@ export function InteractiveWorkspace() {
                   <Badge variant="success">Tier-1</Badge>
                 </button>
               ))}
+              {availableAgents.length === 0 && (
+                <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>
+                  No adapters available
+                </span>
+              )}
             </div>
+            {agentLoadError && (
+              <div style={{ marginTop: 'var(--space-2)', color: 'var(--color-warning-400)', fontSize: 'var(--text-xs)' }}>
+                {agentLoadError}
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: 'var(--space-3)' }}>
@@ -262,6 +402,7 @@ export function InteractiveWorkspace() {
               variant="primary"
               onClick={handleConfirmCreate}
               loading={creating}
+              disabled={availableAgents.length === 0}
               data-testid="confirm-create-session"
             >
               Start Session
@@ -313,7 +454,10 @@ export function InteractiveWorkspace() {
             selectedSessionId={selectedSessionId}
             onSelectSession={(id) => {
               setSelectedSessionId(id);
-              startPolling(id);
+              const session = sessions.find((entry) => entry.sessionId === id);
+              if (!session || session.status === 'running') {
+                startPolling(id);
+              }
             }}
             onCreateSession={handleCreateSession}
             onStopSession={handleStopSession}
@@ -327,6 +471,7 @@ export function InteractiveWorkspace() {
             agentKey={selectedSession?.agentKey ?? null}
             status={selectedSession?.status ?? null}
             events={selectedEvents}
+            transportError={selectedPollError}
           />
 
           <InputComposer

@@ -8,6 +8,7 @@ interface InteractiveTerminalPanelProps {
   agentKey: string | null;
   status: string | null;
   events: InteractiveStreamEvent[];
+  transportError: string | null;
 }
 
 const VISIBLE_TAIL = 500;
@@ -17,6 +18,7 @@ export function InteractiveTerminalPanel({
   agentKey,
   status,
   events,
+  transportError,
 }: InteractiveTerminalPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const userScrolledUp = useRef(false);
@@ -74,7 +76,13 @@ export function InteractiveTerminalPanel({
   };
 
   const statusVariant = status
-    ? ({ running: 'info', completed: 'success', failed: 'danger', stopped: 'warning' } as Record<string, 'info' | 'success' | 'danger' | 'warning'>)[status] ?? 'neutral'
+    ? ({
+        running: 'info',
+        completed: 'success',
+        failed: 'danger',
+        stopped: 'warning',
+        paused: 'warning',
+      } as Record<string, 'info' | 'success' | 'danger' | 'warning'>)[status] ?? 'neutral'
     : undefined;
 
   if (!sessionId) {
@@ -130,6 +138,22 @@ export function InteractiveTerminalPanel({
         onScroll={handleScroll}
         data-testid="terminal-output"
       >
+        {transportError && (
+          <div
+            style={{
+              marginBottom: 'var(--space-2)',
+              padding: 'var(--space-2)',
+              borderRadius: 'var(--radius-sm)',
+              backgroundColor: 'color-mix(in srgb, var(--color-warning-500) 12%, transparent)',
+              border: '1px solid var(--color-warning-500)',
+              color: 'var(--color-warning-400)',
+              fontSize: 'var(--text-xs)',
+            }}
+            data-testid="terminal-transport-error"
+          >
+            Connection issue: {transportError}. Retrying...
+          </div>
+        )}
         {visibleEvents.length === 0 ? (
           <div style={{ color: 'var(--color-text-muted)', padding: 'var(--space-4)' }}>
             Waiting for output...
@@ -175,19 +199,36 @@ function TerminalLine({ event }: { event: InteractiveStreamEvent }) {
 
 function extractText(event: InteractiveStreamEvent): string {
   if (!event.data || typeof event.data !== 'object') {
-    if (typeof event.data === 'string') return event.data;
+    if (typeof event.data === 'string') return normalizeTerminalText(event.data);
     return '';
   }
   const data = event.data as Record<string, unknown>;
-  if (typeof data.text === 'string') return data.text;
-  if (typeof data.line === 'string') return data.line;
-  if (typeof data.input === 'string') return data.input;
-  if (typeof data.message === 'string') return data.message;
+  if (typeof data.text === 'string') return normalizeTerminalText(data.text);
+  if (typeof data.line === 'string') return normalizeTerminalText(data.line);
+  if (typeof data.input === 'string') return normalizeTerminalText(data.input);
+  if (typeof data.message === 'string') return normalizeTerminalText(data.message);
   if (event.eventType === 'session_started') return '--- Session started ---';
   if (event.eventType === 'session_completed') return '--- Session completed ---';
   if (event.eventType === 'session_failed') return '--- Session failed ---';
   if (event.eventType === 'session_stopped') return '--- Session stopped ---';
   const keys = Object.keys(data);
   if (keys.length === 0) return '';
-  return JSON.stringify(data);
+  return normalizeTerminalText(JSON.stringify(data));
+}
+
+function normalizeTerminalText(raw: string): string {
+  if (!raw) return '';
+
+  const withoutOsc = raw.replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '');
+  const withoutCsi = withoutOsc.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
+  const normalizedCr = withoutCsi
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => {
+      const lastCr = line.lastIndexOf('\r');
+      return lastCr >= 0 ? line.slice(lastCr + 1) : line;
+    })
+    .join('\n');
+
+  return normalizedCr.replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
 }

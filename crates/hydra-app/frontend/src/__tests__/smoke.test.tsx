@@ -194,7 +194,7 @@ function setupDefaultMocks() {
       {
         sessionId: 'test-session-1',
         agentKey: 'claude',
-        eventType: 'pty_output',
+        eventType: 'output',
         data: { text: 'Hello from agent\n' },
         timestamp: new Date().toISOString(),
       },
@@ -753,7 +753,7 @@ describe('Smoke Test 12: Stop session and lifecycle transition', () => {
             {
               sessionId: 'test-session-1',
               agentKey: 'claude',
-              eventType: 'pty_output',
+              eventType: 'output',
               data: { text: 'Working...\n' },
               timestamp: new Date().toISOString(),
             },
@@ -791,6 +791,64 @@ describe('Smoke Test 12: Stop session and lifecycle transition', () => {
     await waitFor(() => {
       expect(ipc.stopInteractiveSession).toHaveBeenCalledWith('test-session-1');
     });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-ended-indicator')).toHaveTextContent('Session stopped');
+    });
+    expect(screen.queryByTestId('stop-session-btn')).not.toBeInTheDocument();
   });
 });
 
+describe('Smoke Test 13: Interactive terminal handles stream errors and ANSI output', () => {
+  it('shows a connection warning when polling fails', async () => {
+    vi.mocked(ipc.pollInteractiveEvents).mockRejectedValue(new Error('connection refused'));
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'Poll fail test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-transport-error')).toHaveTextContent('connection refused');
+    });
+  });
+
+  it('renders ANSI output as plain readable text', async () => {
+    vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
+      sessionId: 'test-session-1',
+      events: [
+        {
+          sessionId: 'test-session-1',
+          agentKey: 'claude',
+          eventType: 'output',
+          data: { text: '\u001b[32mGreen output\u001b[0m\r\n' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      nextCursor: 1,
+      done: false,
+      status: 'running',
+      error: null,
+    } as InteractiveEventBatch);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'ANSI test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Green output')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/\u001b\[32m/)).not.toBeInTheDocument();
+  });
+});

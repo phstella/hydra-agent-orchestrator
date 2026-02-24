@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { Badge, Button } from './design-system';
 import type { InteractiveSessionSummary } from '../types';
 
-type SessionLifecycle = 'running' | 'completed' | 'failed' | 'stopped';
+type SessionLifecycle = 'running' | 'completed' | 'failed' | 'stopped' | 'paused';
 
 interface InteractiveSessionRailProps {
   sessions: InteractiveSessionSummary[];
@@ -19,6 +19,7 @@ const lifecycleBadgeVariant: Record<SessionLifecycle, 'info' | 'success' | 'dang
   completed: 'success',
   failed: 'danger',
   stopped: 'warning',
+  paused: 'warning',
 };
 
 const lifecycleLabel: Record<SessionLifecycle, string> = {
@@ -26,10 +27,11 @@ const lifecycleLabel: Record<SessionLifecycle, string> = {
   completed: 'Completed',
   failed: 'Failed',
   stopped: 'Stopped',
+  paused: 'Paused',
 };
 
 function toLifecycle(status: string): SessionLifecycle {
-  if (status === 'running' || status === 'completed' || status === 'failed' || status === 'stopped') {
+  if (status === 'running' || status === 'completed' || status === 'failed' || status === 'stopped' || status === 'paused') {
     return status;
   }
   return 'stopped';
