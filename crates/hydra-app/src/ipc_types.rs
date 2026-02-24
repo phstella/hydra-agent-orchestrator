@@ -267,6 +267,38 @@ impl IpcError {
             details: None,
         }
     }
+
+    pub fn safety_gate(msg: impl Into<String>) -> Self {
+        Self {
+            code: "safety_gate".to_string(),
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    pub fn experimental_blocked(msg: impl Into<String>) -> Self {
+        Self {
+            code: "experimental_blocked".to_string(),
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    pub fn dirty_worktree(msg: impl Into<String>) -> Self {
+        Self {
+            code: "dirty_worktree".to_string(),
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    pub fn unsafe_blocked(msg: impl Into<String>) -> Self {
+        Self {
+            code: "unsafe_blocked".to_string(),
+            message: msg.into(),
+            details: None,
+        }
+    }
 }
 
 impl std::fmt::Display for IpcError {

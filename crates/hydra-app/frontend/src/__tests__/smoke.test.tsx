@@ -852,3 +852,128 @@ describe('Smoke Test 13: Interactive terminal handles stream errors and ANSI out
     expect(screen.queryByText(/\u001b\[32m/)).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// M4.5: Interactive Safety and Capability Gating Smoke Tests
+// ---------------------------------------------------------------------------
+
+describe('Smoke Test 14: Experimental adapter shows warning and requires acknowledgment', () => {
+  it('shows experimental warning when selecting cursor-agent', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('new-session-form')).toBeInTheDocument());
+
+    const cursorBtn = screen.getByTestId('agent-select-cursor-agent');
+    await user.click(cursorBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('experimental-warning')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('confirm-create-session')).toBeDisabled();
+  });
+
+  it('enables start after acknowledging experimental risk', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('new-session-form')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('agent-select-cursor-agent'));
+    await waitFor(() => expect(screen.getByTestId('experimental-warning')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('experimental-acknowledge-checkbox'));
+    expect(screen.getByTestId('confirm-create-session')).not.toBeDisabled();
+  });
+});
+
+describe('Smoke Test 15: Experimental adapter denied without confirmation shows error', () => {
+  it('shows error when backend rejects experimental adapter', async () => {
+    vi.mocked(ipc.startInteractiveSession).mockRejectedValue(
+      new Error('[experimental_blocked] Adapter \'cursor-agent\' is experimental.'),
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+    await waitFor(() => expect(screen.getByTestId('new-session-form')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('agent-select-cursor-agent'));
+    await waitFor(() => expect(screen.getByTestId('experimental-warning')).toBeInTheDocument());
+    await user.click(screen.getByTestId('experimental-acknowledge-checkbox'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('confirm-create-session')).not.toBeDisabled();
+    });
+
+    await user.type(screen.getByTestId('session-task-prompt'), 'test experimental');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('create-session-error')).toBeInTheDocument();
+      expect(screen.getByTestId('create-session-error')).toHaveTextContent(/experimental/i);
+    });
+  });
+});
+
+describe('Smoke Test 16: Dirty working tree policy block shows clear feedback', () => {
+  it('shows dirty worktree error from backend', async () => {
+    vi.mocked(ipc.startInteractiveSession).mockRejectedValue(
+      new Error('[dirty_worktree] Working tree has uncommitted changes. Commit or stash changes before starting.'),
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+
+    await user.type(screen.getByTestId('session-task-prompt'), 'test dirty tree');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      const errorEl = screen.getByTestId('create-session-error');
+      expect(errorEl).toBeInTheDocument();
+      expect(errorEl).toHaveTextContent(/uncommitted changes/i);
+    });
+  });
+});
+
+describe('Smoke Test 17: Unsupported adapter blocked with actionable reason', () => {
+  it('shows safety gate error when adapter is unavailable', async () => {
+    vi.mocked(ipc.startInteractiveSession).mockRejectedValue(
+      new Error('[safety_gate] Adapter \'claude\' is not available for interactive sessions. Run \'hydra doctor\' to diagnose.'),
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+
+    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('create-session-btn'));
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+
+    await user.type(screen.getByTestId('session-task-prompt'), 'test blocked adapter');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      const errorEl = screen.getByTestId('create-session-error');
+      expect(errorEl).toBeInTheDocument();
+      expect(errorEl).toHaveTextContent(/not available/i);
+    });
+  });
+});

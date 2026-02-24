@@ -31,8 +31,14 @@ function appendBoundedEvents(
   return merged.slice(merged.length - MAX_CLIENT_EVENTS_PER_SESSION);
 }
 
-function isAdapterAvailable(adapter: AdapterInfo): boolean {
-  return adapter.tier === 'tier1' && adapter.status === 'ready';
+function isAdapterSelectable(adapter: AdapterInfo): boolean {
+  return (adapter.tier === 'tier1' && adapter.status === 'ready')
+    || (adapter.tier === 'experimental' && (adapter.status === 'experimental_ready' || adapter.status === 'ready'));
+}
+
+function parseGatingErrorCode(errorStr: string): string | null {
+  const match = errorStr.match(/^\[([\w_]+)\]/);
+  return match ? match[1] : null;
 }
 
 export function InteractiveWorkspace() {
@@ -43,10 +49,15 @@ export function InteractiveWorkspace() {
   const [creating, setCreating] = useState(false);
   const [showNewForm, setShowNewForm] = useState(false);
   const [agentKey, setAgentKey] = useState('');
+  const [allAdapters, setAllAdapters] = useState<AdapterInfo[]>([]);
   const [availableAgents, setAvailableAgents] = useState<string[]>([]);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
   const [taskPrompt, setTaskPrompt] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
+  const [createErrorCode, setCreateErrorCode] = useState<string | null>(null);
+  const [allowExperimental, setAllowExperimental] = useState(false);
+  const [experimentalAcknowledged, setExperimentalAcknowledged] = useState(false);
+  const [unsafeMode, setUnsafeMode] = useState(false);
 
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pollCursors = useRef<Map<string, number>>(new Map());
@@ -71,8 +82,9 @@ export function InteractiveWorkspace() {
       }
 
       if (adapterResult.status === 'fulfilled') {
+        setAllAdapters(adapterResult.value);
         const keys = adapterResult.value
-          .filter(isAdapterAvailable)
+          .filter(isAdapterSelectable)
           .map((adapter) => adapter.key);
         setAvailableAgents(keys);
         setAgentLoadError(null);
@@ -81,6 +93,7 @@ export function InteractiveWorkspace() {
         }
       } else {
         setAgentLoadError('Unable to load adapters. Using fallback defaults.');
+        setAllAdapters([]);
         setAvailableAgents(['claude', 'codex']);
         setAgentKey((prev) => prev || 'claude');
       }
@@ -89,6 +102,7 @@ export function InteractiveWorkspace() {
     loadInteractiveContext().catch(() => {
       if (!cancelled) {
         setAgentLoadError('Unable to load interactive context.');
+        setAllAdapters([]);
         setAvailableAgents(['claude', 'codex']);
         setAgentKey((prev) => prev || 'claude');
       }
@@ -191,27 +205,41 @@ export function InteractiveWorkspace() {
   const handleCreateSession = useCallback(() => {
     setShowNewForm(true);
     setCreateError(null);
+    setCreateErrorCode(null);
+    setExperimentalAcknowledged(false);
   }, []);
+
+  const selectedAdapterInfo = allAdapters.find((a) => a.key === agentKey) ?? null;
+  const selectedIsExperimental = selectedAdapterInfo?.tier === 'experimental';
+  const needsExperimentalConfirmation = selectedIsExperimental && !experimentalAcknowledged;
 
   const handleConfirmCreate = useCallback(async () => {
     if (!agentKey) {
       setCreateError('Select an available agent first.');
+      setCreateErrorCode(null);
       return;
     }
     if (!taskPrompt.trim()) {
       setCreateError('Enter a task prompt.');
+      setCreateErrorCode(null);
+      return;
+    }
+    if (needsExperimentalConfirmation) {
+      setCreateError('You must acknowledge the experimental adapter risk before starting a session.');
+      setCreateErrorCode('experimental_blocked');
       return;
     }
 
     setCreating(true);
     setCreateError(null);
+    setCreateErrorCode(null);
 
     try {
       const result = await startInteractiveSession({
         agentKey,
         taskPrompt: taskPrompt.trim(),
-        allowExperimental: false,
-        unsafeMode: false,
+        allowExperimental: allowExperimental && experimentalAcknowledged,
+        unsafeMode,
         cwd: null,
         cols: 120,
         rows: 30,
@@ -229,13 +257,18 @@ export function InteractiveWorkspace() {
       setSelectedSessionId(result.sessionId);
       setShowNewForm(false);
       setTaskPrompt('');
+      setUnsafeMode(false);
+      setAllowExperimental(false);
+      setExperimentalAcknowledged(false);
       startPolling(result.sessionId);
     } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err));
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setCreateError(errorMessage);
+      setCreateErrorCode(parseGatingErrorCode(errorMessage));
     } finally {
       setCreating(false);
     }
-  }, [agentKey, taskPrompt, startPolling]);
+  }, [agentKey, taskPrompt, startPolling, allowExperimental, experimentalAcknowledged, unsafeMode, needsExperimentalConfirmation]);
 
   const handleStopSession = useCallback(async (sessionId: string) => {
     try {
@@ -326,34 +359,50 @@ export function InteractiveWorkspace() {
               Agent
             </div>
             <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-              {availableAgents.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setAgentKey(key)}
-                  data-testid={`agent-select-${key}`}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-2)',
-                    borderRadius: 'var(--radius-md)',
-                    border: agentKey === key
-                      ? '1px solid var(--color-marine-500)'
-                      : '1px solid var(--color-border-700)',
-                    backgroundColor: agentKey === key
-                      ? 'color-mix(in srgb, var(--color-marine-500) 12%, transparent)'
-                      : 'var(--color-surface-800)',
-                    color: 'var(--color-text-primary)',
-                    padding: 'var(--space-2) var(--space-3)',
-                    cursor: 'pointer',
-                    fontFamily: 'var(--font-family)',
-                    fontSize: 'var(--text-sm)',
-                  }}
-                >
-                  {key}
-                  <Badge variant="success">Tier-1</Badge>
-                </button>
-              ))}
+              {availableAgents.map((key) => {
+                const adapterInfo = allAdapters.find((a) => a.key === key);
+                const isExp = adapterInfo?.tier === 'experimental';
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => {
+                      setAgentKey(key);
+                      if (isExp) {
+                        setAllowExperimental(true);
+                      } else {
+                        setAllowExperimental(false);
+                        setExperimentalAcknowledged(false);
+                      }
+                      setCreateError(null);
+                      setCreateErrorCode(null);
+                    }}
+                    data-testid={`agent-select-${key}`}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 'var(--space-2)',
+                      borderRadius: 'var(--radius-md)',
+                      border: agentKey === key
+                        ? '1px solid var(--color-marine-500)'
+                        : '1px solid var(--color-border-700)',
+                      backgroundColor: agentKey === key
+                        ? 'color-mix(in srgb, var(--color-marine-500) 12%, transparent)'
+                        : 'var(--color-surface-800)',
+                      color: 'var(--color-text-primary)',
+                      padding: 'var(--space-2) var(--space-3)',
+                      cursor: 'pointer',
+                      fontFamily: 'var(--font-family)',
+                      fontSize: 'var(--text-sm)',
+                    }}
+                  >
+                    {key}
+                    <Badge variant={isExp ? 'warning' : 'success'}>
+                      {isExp ? 'Experimental' : 'Tier-1'}
+                    </Badge>
+                  </button>
+                );
+              })}
               {availableAgents.length === 0 && (
                 <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>
                   No adapters available
@@ -366,6 +415,35 @@ export function InteractiveWorkspace() {
               </div>
             )}
           </div>
+
+          {selectedIsExperimental && (
+            <div
+              style={{
+                marginBottom: 'var(--space-3)',
+                padding: 'var(--space-3)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-warning-400)',
+                backgroundColor: 'color-mix(in srgb, var(--color-warning-400) 8%, transparent)',
+              }}
+              data-testid="experimental-warning"
+            >
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-semibold)' as unknown as number, color: 'var(--color-warning-400)', marginBottom: 'var(--space-2)' }}>
+                Experimental Adapter Warning
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-2)' }}>
+                This adapter is experimental and may produce unstable results, consume resources unpredictably, or fail without clear error messages. Use at your own risk.
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={experimentalAcknowledged}
+                  onChange={(e) => setExperimentalAcknowledged(e.target.checked)}
+                  data-testid="experimental-acknowledge-checkbox"
+                />
+                <span style={{ color: 'var(--color-text-primary)' }}>I understand the risks and want to proceed</span>
+              </label>
+            </div>
+          )}
 
           <div style={{ marginBottom: 'var(--space-3)' }}>
             <div
@@ -397,12 +475,12 @@ export function InteractiveWorkspace() {
             />
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
             <Button
               variant="primary"
               onClick={handleConfirmCreate}
               loading={creating}
-              disabled={availableAgents.length === 0}
+              disabled={availableAgents.length === 0 || (selectedIsExperimental && !experimentalAcknowledged)}
               data-testid="confirm-create-session"
             >
               Start Session
@@ -419,8 +497,15 @@ export function InteractiveWorkspace() {
             <div
               style={{
                 marginTop: 'var(--space-2)',
-                color: 'var(--color-danger-400)',
+                color: createErrorCode === 'dirty_worktree'
+                  ? 'var(--color-warning-400)'
+                  : 'var(--color-danger-400)',
                 fontSize: 'var(--text-sm)',
+                padding: 'var(--space-2) var(--space-3)',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: createErrorCode
+                  ? 'color-mix(in srgb, var(--color-danger-400) 8%, transparent)'
+                  : 'transparent',
               }}
               data-testid="create-session-error"
             >

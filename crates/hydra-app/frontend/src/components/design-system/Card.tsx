@@ -5,6 +5,7 @@ interface CardProps {
   variant?: 'default' | 'elevated' | 'outlined' | 'hero';
   padding?: 'none' | 'sm' | 'md' | 'lg';
   style?: CSSProperties;
+  'data-testid'?: string;
 }
 
 const paddings: Record<string, string> = {
@@ -19,6 +20,7 @@ export function Card({
   variant = 'default',
   padding = 'md',
   style,
+  'data-testid': testId,
 }: CardProps) {
   const baseStyle: CSSProperties = {
     borderRadius: 'var(--radius-lg)',
@@ -48,7 +50,7 @@ export function Card({
   };
 
   return (
-    <div style={{ ...baseStyle, ...variants[variant], ...style }}>
+    <div style={{ ...baseStyle, ...variants[variant], ...style }} data-testid={testId}>
       {children}
     </div>
   );

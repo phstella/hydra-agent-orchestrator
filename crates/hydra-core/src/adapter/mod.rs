@@ -8,7 +8,7 @@ mod types;
 
 pub use error::AdapterError;
 pub use probe::{ProbeReport, ProbeRunner};
-pub use registry::AdapterRegistry;
+pub use registry::{AdapterRegistry, RegistryError};
 pub use types::{
     AdapterTier, AgentEvent, BuiltCommand, CapabilityConfidence, CapabilityEntry, CapabilitySet,
     DetectResult, DetectStatus, ProbeResult, SpawnRequest,

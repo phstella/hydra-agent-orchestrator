@@ -708,15 +708,67 @@ pub async fn start_interactive_session(
 
     let config = state.config.lock().await;
     let registry = hydra_core::adapter::AdapterRegistry::from_config(&config.adapters);
-    let adapter = registry
-        .resolve(&request.agent_key, request.allow_experimental)
-        .map_err(|e| IpcError::adapter_error(e.to_string()).to_string())?;
 
+    // M4.5: Adapter tier/capability gating
+    let adapter = match registry.resolve(&request.agent_key, request.allow_experimental) {
+        Ok(a) => a,
+        Err(hydra_core::adapter::RegistryError::ExperimentalBlocked { key }) => {
+            return Err(IpcError::experimental_blocked(format!(
+                "Adapter '{}' is experimental. Enable 'Allow Experimental' and confirm the risk acknowledgment to use it in interactive mode.",
+                key
+            ))
+            .to_string());
+        }
+        Err(e) => {
+            return Err(IpcError::adapter_error(e.to_string()).to_string());
+        }
+    };
+
+    // M4.5: Check adapter detect status — block if not available
+    let detect = adapter.detect();
+    if !detect.status.is_available() {
+        let reason = detect
+            .error
+            .unwrap_or_else(|| format!("status is {:?}", detect.status));
+        return Err(IpcError::safety_gate(format!(
+            "Adapter '{}' is not available for interactive sessions: {}. Run 'hydra doctor' to diagnose.",
+            request.agent_key, reason
+        ))
+        .to_string());
+    }
+
+    // M4.5: Unsafe mode policy — block unless explicitly opted in
+    if request.unsafe_mode {
+        let has_dangerous_flag = detect.supported_flags.iter().any(|f| {
+            f == "--dangerously-bypass-approvals-and-sandbox" || f == "--permission-mode"
+        });
+        if !has_dangerous_flag {
+            return Err(IpcError::unsafe_blocked(format!(
+                "Adapter '{}' does not support unsafe mode flags. Unsafe mode is only available for adapters with explicit sandbox bypass support.",
+                request.agent_key
+            ))
+            .to_string());
+        }
+    }
+
+    // M4.5: Working tree cleanliness check
     let cwd = if let Some(ref cwd_str) = request.cwd {
         std::path::PathBuf::from(cwd_str)
     } else {
         discover_repo_root().map_err(|e| e.to_string())?
     };
+
+    let wt_status = read_working_tree_status(&cwd);
+    if !wt_status.clean {
+        let detail = wt_status.message.unwrap_or_else(|| {
+            "Working tree has uncommitted changes.".to_string()
+        });
+        return Err(IpcError::dirty_worktree(format!(
+            "{}. Commit or stash changes before starting an interactive session.",
+            detail.trim_end_matches('.')
+        ))
+        .to_string());
+    }
 
     let spawn_req = hydra_core::adapter::SpawnRequest {
         task_prompt: request.task_prompt.clone(),
@@ -1878,5 +1930,37 @@ branch refs/heads/main
         let err = IpcError::not_found("session not found");
         assert_eq!(err.code, "not_found");
         assert_eq!(err.to_string(), "[not_found] session not found");
+    }
+
+    // M4.5: Safety and capability gating error variant tests
+    #[test]
+    fn ipc_error_safety_gate_variant() {
+        let err = IpcError::safety_gate("adapter not available");
+        assert_eq!(err.code, "safety_gate");
+        assert_eq!(
+            err.to_string(),
+            "[safety_gate] adapter not available"
+        );
+    }
+
+    #[test]
+    fn ipc_error_experimental_blocked_variant() {
+        let err = IpcError::experimental_blocked("cursor-agent requires confirmation");
+        assert_eq!(err.code, "experimental_blocked");
+        assert!(err.to_string().contains("experimental_blocked"));
+    }
+
+    #[test]
+    fn ipc_error_dirty_worktree_variant() {
+        let err = IpcError::dirty_worktree("uncommitted changes found");
+        assert_eq!(err.code, "dirty_worktree");
+        assert!(err.to_string().contains("dirty_worktree"));
+    }
+
+    #[test]
+    fn ipc_error_unsafe_blocked_variant() {
+        let err = IpcError::unsafe_blocked("adapter lacks dangerous flag");
+        assert_eq!(err.code, "unsafe_blocked");
+        assert!(err.to_string().contains("unsafe_blocked"));
     }
 }

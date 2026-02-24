@@ -505,6 +505,24 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
       const args = _args as Record<string, unknown> | undefined;
       const request = (args?.request ?? {}) as Record<string, unknown>;
       const agentKey = (request.agentKey as string) ?? 'claude';
+      const allowExp = (request.allowExperimental as boolean) ?? false;
+      const unsafeModeReq = (request.unsafeMode as boolean) ?? false;
+
+      const adapter = MOCK_ADAPTERS.find((a) => a.key === agentKey);
+      if (!adapter) {
+        throw new Error(`[adapter_error] unknown adapter '${agentKey}'`);
+      }
+      if (adapter.tier === 'experimental' && !allowExp) {
+        throw new Error(
+          `[experimental_blocked] Adapter '${agentKey}' is experimental. Enable 'Allow Experimental' and confirm the risk acknowledgment to use it in interactive mode.`,
+        );
+      }
+      if (unsafeModeReq) {
+        throw new Error(
+          `[unsafe_blocked] Adapter '${agentKey}' does not support unsafe mode flags. Unsafe mode is only available for adapters with explicit sandbox bypass support.`,
+        );
+      }
+
       const sessionId = `mock-session-${Date.now()}`;
       mockInteractiveSessions.set(sessionId, {
         sessionId,
