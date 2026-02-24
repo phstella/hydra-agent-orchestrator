@@ -214,6 +214,7 @@ impl SessionEventReader {
 
 pub struct TranscriptWriter {
     file: std::fs::File,
+    path: PathBuf,
     redactor: SecretRedactor,
 }
 
@@ -225,6 +226,7 @@ impl TranscriptWriter {
             .open(path)?;
         Ok(Self {
             file,
+            path: path.to_path_buf(),
             redactor: SecretRedactor::new(),
         })
     }
@@ -242,6 +244,22 @@ impl TranscriptWriter {
         let redacted = self.redactor.redact_line(&marker);
         self.file.write_all(redacted.as_bytes())?;
         self.file.flush()?;
+        Ok(())
+    }
+
+    pub fn rewrite_with_full_redaction(&mut self) -> Result<(), ArtifactError> {
+        self.file.flush()?;
+        let content = std::fs::read_to_string(&self.path)?;
+        let redacted = self.redactor.redact(&content).value;
+
+        if redacted != content {
+            std::fs::write(&self.path, redacted)?;
+            self.file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)?;
+        }
+
         Ok(())
     }
 }
@@ -381,6 +399,8 @@ impl SessionArtifactWriter {
         ended_at: &str,
         duration_ms: u64,
     ) -> Result<(), ArtifactError> {
+        self.transcript_writer.rewrite_with_full_redaction()?;
+
         self.event_writer.write_event(&SessionEvent::new(
             &format!("session_{status}"),
             serde_json::json!({ "duration_ms": duration_ms }),
@@ -702,5 +722,37 @@ mod tests {
         let summary = SessionSummary::read_from(&writer.layout().summary_path()).unwrap();
         assert_eq!(summary.status, "stopped");
         assert_eq!(summary.duration_ms, 30_000);
+    }
+
+    #[test]
+    fn session_artifact_writer_redacts_secret_spanning_output_chunks_on_finalize() {
+        let tmp = TempDir::new().unwrap();
+        let hydra_root = tmp.path().join(".hydra");
+
+        let mut writer = SessionArtifactWriter::init(
+            &hydra_root,
+            "chunk-redact",
+            "claude",
+            "2026-02-24T00:00:00Z",
+            "/repo",
+            false,
+            false,
+        )
+        .unwrap();
+
+        writer
+            .record_output(b"OPENAI_API_KEY=sk-proj-partial")
+            .unwrap();
+        writer.record_output(b"secretvalue\n").unwrap();
+        writer
+            .finalize("completed", "2026-02-24T00:00:05Z", 5_000)
+            .unwrap();
+
+        let transcript = std::fs::read_to_string(writer.layout().transcript_path()).unwrap();
+        assert!(
+            !transcript.contains("sk-proj-"),
+            "full transcript redaction should catch cross-chunk secrets"
+        );
+        assert!(transcript.contains("[REDACTED:OPENAI_KEY]"));
     }
 }

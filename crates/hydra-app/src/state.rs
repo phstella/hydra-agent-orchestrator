@@ -42,9 +42,10 @@ pub struct InteractiveSessionRuntime {
     pub status: String,
     pub started_at: String,
     pub events: Vec<InteractiveStreamEvent>,
+    pub event_base_cursor: u64,
     pub error: Option<String>,
     pub pty_session: Option<PtySession>,
-    pub artifact_writer: Option<SessionArtifactWriter>,
+    pub artifact_writer: Option<Arc<Mutex<SessionArtifactWriter>>>,
 }
 
 impl InteractiveSessionRuntime {
@@ -55,6 +56,7 @@ impl InteractiveSessionRuntime {
             status: "running".to_string(),
             started_at,
             events: Vec::new(),
+            event_base_cursor: 0,
             error: None,
             pty_session: None,
             artifact_writer: None,
@@ -83,7 +85,7 @@ impl InteractiveStateHandle {
             started_at.to_string(),
         );
         runtime.pty_session = Some(pty_session);
-        runtime.artifact_writer = artifact_writer;
+        runtime.artifact_writer = artifact_writer.map(|w| Arc::new(Mutex::new(w)));
         sessions.insert(session_id.to_string(), runtime);
     }
 
@@ -94,6 +96,8 @@ impl InteractiveStateHandle {
             if session.events.len() > MAX_INTERACTIVE_EVENTS {
                 let overflow = session.events.len() - MAX_INTERACTIVE_EVENTS;
                 session.events.drain(0..overflow);
+                session.event_base_cursor =
+                    session.event_base_cursor.saturating_add(overflow as u64);
             }
         }
     }
@@ -101,24 +105,27 @@ impl InteractiveStateHandle {
     pub async fn poll_events(
         &self,
         session_id: &str,
-        cursor: usize,
+        cursor: u64,
         max_batch: usize,
     ) -> Option<(
         Vec<InteractiveStreamEvent>,
-        usize,
+        u64,
         bool,
         String,
         Option<String>,
     )> {
         let sessions = self.sessions.lock().await;
         let session = sessions.get(session_id)?;
-        let start = cursor.min(session.events.len());
+        let start_cursor = cursor.max(session.event_base_cursor);
+        let start = (start_cursor - session.event_base_cursor) as usize;
         let end = (start + max_batch).min(session.events.len());
         let batch = session.events[start..end].to_vec();
-        let done = session.status != "running";
+        let next_cursor = session.event_base_cursor + end as u64;
+        let done = session.status != "running"
+            && next_cursor >= session.event_base_cursor + session.events.len() as u64;
         Some((
             batch,
-            end,
+            next_cursor,
             done,
             session.status.clone(),
             session.error.clone(),
@@ -153,35 +160,39 @@ impl InteractiveStateHandle {
     }
 
     pub async fn write_input(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().await;
-        let session = sessions
-            .get_mut(session_id)
-            .ok_or_else(|| "session not found".to_string())?;
-        if session.status != "running" {
-            return Err(format!("session is {}, not running", session.status));
-        }
-        let pty = session
-            .pty_session
-            .as_ref()
-            .ok_or_else(|| "PTY not available".to_string())?;
-        pty.write_input(data)
-            .await
-            .map_err(|e| format!("write failed: {e}"))?;
+        let (writer, agent_key) = {
+            let mut sessions = self.sessions.lock().await;
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| "session not found".to_string())?;
+            if session.status != "running" {
+                return Err(format!("session is {}, not running", session.status));
+            }
+            let pty = session
+                .pty_session
+                .as_ref()
+                .ok_or_else(|| "PTY not available".to_string())?;
+            pty.write_input(data)
+                .await
+                .map_err(|e| format!("write failed: {e}"))?;
+
+            (session.artifact_writer.clone(), session.agent_key.clone())
+        };
 
         let input_text = String::from_utf8_lossy(data).to_string();
 
-        if let Some(ref mut writer) = session.artifact_writer {
+        if let Some(writer) = writer {
+            let mut writer = writer.lock().await;
             let _ = writer.record_user_input(&input_text);
         }
 
         let event = InteractiveStreamEvent {
-            session_id: session.session_id.clone(),
-            agent_key: session.agent_key.clone(),
+            session_id: session_id.to_string(),
+            agent_key,
             event_type: "user_input".to_string(),
             data: serde_json::json!({ "input": input_text }),
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
-        drop(sessions);
         self.append_event(session_id, event).await;
 
         Ok(())
@@ -206,32 +217,43 @@ impl InteractiveStateHandle {
 
     /// Stop a session. Returns (was_running, current_status). Idempotent.
     pub async fn stop_session(&self, session_id: &str) -> Result<(bool, String), String> {
-        let mut sessions = self.sessions.lock().await;
-        let session = sessions
-            .get_mut(session_id)
-            .ok_or_else(|| "session not found".to_string())?;
+        let (was_running, status, writer, started_at) = {
+            let mut sessions = self.sessions.lock().await;
+            let session = sessions
+                .get_mut(session_id)
+                .ok_or_else(|| "session not found".to_string())?;
 
-        let was_running = session.status == "running";
-        if was_running {
-            if let Some(ref pty) = session.pty_session {
-                pty.stop().await;
+            let was_running = session.status == "running";
+            if was_running {
+                if let Some(ref pty) = session.pty_session {
+                    pty.stop().await;
+                }
+                session.status = "stopped".to_string();
             }
-            session.status = "stopped".to_string();
+            let status = session.status.clone();
+            (
+                was_running,
+                status,
+                session.artifact_writer.clone(),
+                session.started_at.clone(),
+            )
+        };
 
-            if let Some(ref mut writer) = session.artifact_writer {
+        if was_running {
+            if let Some(writer) = writer {
                 let ended_at = chrono::Utc::now().to_rfc3339();
-                let started = chrono::DateTime::parse_from_rfc3339(&session.started_at)
+                let started = chrono::DateTime::parse_from_rfc3339(&started_at)
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|_| chrono::Utc::now());
                 let duration_ms = (chrono::Utc::now() - started).num_milliseconds().max(0) as u64;
+                let mut writer = writer.lock().await;
                 let _ = writer.finalize("stopped", &ended_at, duration_ms);
             }
         }
-        let status = session.status.clone();
         Ok((was_running, status))
     }
 
-    pub async fn list_sessions(&self) -> Vec<(String, String, String, String, usize)> {
+    pub async fn list_sessions(&self) -> Vec<(String, String, String, String, u64)> {
         let sessions = self.sessions.lock().await;
         sessions
             .values()
@@ -241,7 +263,7 @@ impl InteractiveStateHandle {
                     s.agent_key.clone(),
                     s.status.clone(),
                     s.started_at.clone(),
-                    s.events.len(),
+                    s.event_base_cursor + s.events.len() as u64,
                 )
             })
             .collect()
@@ -249,6 +271,7 @@ impl InteractiveStateHandle {
 
     /// Shutdown all running sessions. Called on app exit.
     pub async fn shutdown_all(&self) {
+        let mut to_finalize: Vec<(Arc<Mutex<SessionArtifactWriter>>, String)> = Vec::new();
         let mut sessions = self.sessions.lock().await;
         for session in sessions.values_mut() {
             if session.status == "running" {
@@ -257,16 +280,21 @@ impl InteractiveStateHandle {
                 }
                 session.status = "stopped".to_string();
 
-                if let Some(ref mut writer) = session.artifact_writer {
-                    let ended_at = chrono::Utc::now().to_rfc3339();
-                    let started = chrono::DateTime::parse_from_rfc3339(&session.started_at)
-                        .map(|dt| dt.with_timezone(&chrono::Utc))
-                        .unwrap_or_else(|_| chrono::Utc::now());
-                    let duration_ms =
-                        (chrono::Utc::now() - started).num_milliseconds().max(0) as u64;
-                    let _ = writer.finalize("stopped", &ended_at, duration_ms);
+                if let Some(ref writer) = session.artifact_writer {
+                    to_finalize.push((writer.clone(), session.started_at.clone()));
                 }
             }
+        }
+        drop(sessions);
+
+        for (writer, started_at) in to_finalize {
+            let ended_at = chrono::Utc::now().to_rfc3339();
+            let started = chrono::DateTime::parse_from_rfc3339(&started_at)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now());
+            let duration_ms = (chrono::Utc::now() - started).num_milliseconds().max(0) as u64;
+            let mut writer = writer.lock().await;
+            let _ = writer.finalize("stopped", &ended_at, duration_ms);
         }
     }
 }
@@ -286,14 +314,15 @@ pub fn spawn_pty_event_bridge(
                 PtyEvent::Output(bytes) => {
                     let text = String::from_utf8_lossy(bytes);
 
-                    // Persist output to artifact writer
-                    {
+                    let writer = {
                         let mut sessions = state.sessions.lock().await;
-                        if let Some(session) = sessions.get_mut(&session_id) {
-                            if let Some(ref mut writer) = session.artifact_writer {
-                                let _ = writer.record_output(bytes);
-                            }
-                        }
+                        sessions
+                            .get_mut(&session_id)
+                            .and_then(|session| session.artifact_writer.clone())
+                    };
+                    if let Some(writer) = writer {
+                        let mut writer = writer.lock().await;
+                        let _ = writer.record_output(bytes);
                     }
 
                     ("output".to_string(), serde_json::json!({ "text": text }))
@@ -302,19 +331,17 @@ pub fn spawn_pty_event_bridge(
                     exit_code,
                     duration,
                 } => {
-                    // Finalize artifacts before marking completed
-                    {
+                    let writer = {
                         let mut sessions = state.sessions.lock().await;
-                        if let Some(session) = sessions.get_mut(&session_id) {
-                            if let Some(ref mut writer) = session.artifact_writer {
-                                let ended_at = chrono::Utc::now().to_rfc3339();
-                                let _ = writer.finalize(
-                                    "completed",
-                                    &ended_at,
-                                    duration.as_millis() as u64,
-                                );
-                            }
-                        }
+                        sessions
+                            .get_mut(&session_id)
+                            .and_then(|session| session.artifact_writer.clone())
+                    };
+                    if let Some(writer) = writer {
+                        let ended_at = chrono::Utc::now().to_rfc3339();
+                        let mut writer = writer.lock().await;
+                        let _ =
+                            writer.finalize("completed", &ended_at, duration.as_millis() as u64);
                     }
                     state.mark_completed(&session_id).await;
                     (
@@ -326,19 +353,16 @@ pub fn spawn_pty_event_bridge(
                     )
                 }
                 PtyEvent::Failed { error, duration } => {
-                    // Finalize artifacts before marking failed
-                    {
+                    let writer = {
                         let mut sessions = state.sessions.lock().await;
-                        if let Some(session) = sessions.get_mut(&session_id) {
-                            if let Some(ref mut writer) = session.artifact_writer {
-                                let ended_at = chrono::Utc::now().to_rfc3339();
-                                let _ = writer.finalize(
-                                    "failed",
-                                    &ended_at,
-                                    duration.as_millis() as u64,
-                                );
-                            }
-                        }
+                        sessions
+                            .get_mut(&session_id)
+                            .and_then(|session| session.artifact_writer.clone())
+                    };
+                    if let Some(writer) = writer {
+                        let ended_at = chrono::Utc::now().to_rfc3339();
+                        let mut writer = writer.lock().await;
+                        let _ = writer.finalize("failed", &ended_at, duration.as_millis() as u64);
                     }
                     state.mark_failed(&session_id, error).await;
                     (
@@ -811,6 +835,95 @@ mod tests {
         assert_ne!(status, "running");
     }
 
+    #[tokio::test]
+    async fn interactive_poll_cursor_survives_event_trimming() {
+        let state = new_interactive_state();
+
+        let (tx, _rx) = mpsc::channel(16);
+        let session = PtySession::spawn(sleep_pty_config(60), tx).unwrap();
+        state
+            .register_session("trim", "claude", "2026-02-24T00:00:00Z", session, None)
+            .await;
+
+        for idx in 0..(MAX_INTERACTIVE_EVENTS + 2) {
+            state
+                .append_event(
+                    "trim",
+                    InteractiveStreamEvent {
+                        session_id: "trim".to_string(),
+                        agent_key: "claude".to_string(),
+                        event_type: "output".to_string(),
+                        data: serde_json::json!({ "n": idx as u64 }),
+                        timestamp: "2026-02-24T00:00:00Z".to_string(),
+                    },
+                )
+                .await;
+        }
+
+        let cursor_before_trim = (MAX_INTERACTIVE_EVENTS - 1) as u64;
+        let (batch, next_cursor, done, _status, _err) = state
+            .poll_events("trim", cursor_before_trim, 4)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            batch
+                .first()
+                .and_then(|event| event.data.get("n"))
+                .and_then(|n| n.as_u64()),
+            Some(cursor_before_trim),
+            "cursor should remain monotonic and not skip events after trim",
+        );
+        assert_eq!(
+            next_cursor,
+            cursor_before_trim + batch.len() as u64,
+            "next cursor should move forward from absolute cursor"
+        );
+        assert!(!done, "running session should not report done");
+        state.stop_session("trim").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn interactive_done_waits_for_terminal_event_backlog_to_be_consumed() {
+        let state = new_interactive_state();
+
+        let (tx, _rx) = mpsc::channel(16);
+        let session = PtySession::spawn(sleep_pty_config(60), tx).unwrap();
+        state
+            .register_session("done-tail", "claude", "2026-02-24T00:00:00Z", session, None)
+            .await;
+
+        for idx in 0..20 {
+            state
+                .append_event(
+                    "done-tail",
+                    InteractiveStreamEvent {
+                        session_id: "done-tail".to_string(),
+                        agent_key: "claude".to_string(),
+                        event_type: "output".to_string(),
+                        data: serde_json::json!({ "n": idx as u64 }),
+                        timestamp: "2026-02-24T00:00:00Z".to_string(),
+                    },
+                )
+                .await;
+        }
+        state.mark_completed("done-tail").await;
+
+        let (_batch, cursor_after_first, done_first, _status, _err) =
+            state.poll_events("done-tail", 0, 5).await.unwrap();
+        assert!(
+            !done_first,
+            "completed sessions should keep done=false until unread events are drained"
+        );
+
+        let (_rest, _cursor_after_second, done_second, _status, _err) = state
+            .poll_events("done-tail", cursor_after_first, 100)
+            .await
+            .unwrap();
+        assert!(done_second, "done should flip once backlog is consumed");
+        state.stop_session("done-tail").await.unwrap();
+    }
+
     // -----------------------------------------------------------------------
     // M4.6: Artifact persistence integration tests
     // -----------------------------------------------------------------------
@@ -837,7 +950,13 @@ mod tests {
         .unwrap();
 
         state
-            .register_session("art-golden", "claude", "2026-02-24T00:00:00Z", session, Some(writer))
+            .register_session(
+                "art-golden",
+                "claude",
+                "2026-02-24T00:00:00Z",
+                session,
+                Some(writer),
+            )
             .await;
         spawn_pty_event_bridge(
             "art-golden".to_string(),
@@ -848,7 +967,10 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        state.write_input("art-golden", b"artifact test\n").await.unwrap();
+        state
+            .write_input("art-golden", b"artifact test\n")
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         let (was_running, status) = state.stop_session("art-golden").await.unwrap();
@@ -858,13 +980,20 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         let layout = hydra_core::artifact::SessionLayout::new(&hydra_root, "art-golden");
-        assert!(layout.session_json_path().exists(), "session.json should exist");
+        assert!(
+            layout.session_json_path().exists(),
+            "session.json should exist"
+        );
         assert!(layout.events_path().exists(), "events.jsonl should exist");
-        assert!(layout.transcript_path().exists(), "transcript.ansi.log should exist");
+        assert!(
+            layout.transcript_path().exists(),
+            "transcript.ansi.log should exist"
+        );
         assert!(layout.summary_path().exists(), "summary.json should exist");
 
         // Content assertions
-        let meta = hydra_core::artifact::SessionMetadata::read_from(&layout.session_json_path()).unwrap();
+        let meta =
+            hydra_core::artifact::SessionMetadata::read_from(&layout.session_json_path()).unwrap();
         assert_eq!(meta.schema_version, 1);
         assert_eq!(meta.session_id, "art-golden");
         assert_eq!(meta.agent_key, "claude");
@@ -873,19 +1002,37 @@ mod tests {
         assert!(!meta.unsafe_mode);
         assert!(!meta.experimental);
 
-        let events = hydra_core::artifact::SessionEventReader::read_all(&layout.events_path()).unwrap();
-        assert!(events.len() >= 3, "expected at least session_started + user_input + session_stopped, got {}", events.len());
+        let events =
+            hydra_core::artifact::SessionEventReader::read_all(&layout.events_path()).unwrap();
+        assert!(
+            events.len() >= 3,
+            "expected at least session_started + user_input + session_stopped, got {}",
+            events.len()
+        );
         assert_eq!(events[0].event_type, "session_started");
-        assert!(events.iter().any(|e| e.event_type == "user_input"), "should have user_input event");
-        assert!(events.last().unwrap().event_type.contains("session_"), "last event should be a session lifecycle event");
+        assert!(
+            events.iter().any(|e| e.event_type == "user_input"),
+            "should have user_input event"
+        );
+        assert!(
+            events.last().unwrap().event_type.contains("session_"),
+            "last event should be a session lifecycle event"
+        );
 
         let transcript = std::fs::read_to_string(layout.transcript_path()).unwrap();
-        assert!(transcript.contains("artifact test"), "transcript should contain user input text");
+        assert!(
+            transcript.contains("artifact test"),
+            "transcript should contain user input text"
+        );
 
-        let summary = hydra_core::artifact::SessionSummary::read_from(&layout.summary_path()).unwrap();
+        let summary =
+            hydra_core::artifact::SessionSummary::read_from(&layout.summary_path()).unwrap();
         assert_eq!(summary.session_id, "art-golden");
         assert_eq!(summary.status, "stopped");
-        assert!(summary.user_input_count >= 1, "should record at least 1 user input");
+        assert!(
+            summary.user_input_count >= 1,
+            "should record at least 1 user input"
+        );
         assert!(summary.event_count >= 3, "should record at least 3 events");
     }
 
@@ -911,7 +1058,13 @@ mod tests {
         .unwrap();
 
         state
-            .register_session("art-complete", "claude", "2026-02-24T00:00:00Z", session, Some(writer))
+            .register_session(
+                "art-complete",
+                "claude",
+                "2026-02-24T00:00:00Z",
+                session,
+                Some(writer),
+            )
             .await;
         spawn_pty_event_bridge(
             "art-complete".to_string(),
@@ -924,15 +1077,26 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1500)).await;
 
         let layout = hydra_core::artifact::SessionLayout::new(&hydra_root, "art-complete");
-        assert!(layout.session_json_path().exists(), "session.json should exist");
-        assert!(layout.summary_path().exists(), "summary.json should exist after natural completion");
+        assert!(
+            layout.session_json_path().exists(),
+            "session.json should exist"
+        );
+        assert!(
+            layout.summary_path().exists(),
+            "summary.json should exist after natural completion"
+        );
 
-        let meta = hydra_core::artifact::SessionMetadata::read_from(&layout.session_json_path()).unwrap();
+        let meta =
+            hydra_core::artifact::SessionMetadata::read_from(&layout.session_json_path()).unwrap();
         assert_eq!(meta.status, "completed");
 
-        let summary = hydra_core::artifact::SessionSummary::read_from(&layout.summary_path()).unwrap();
+        let summary =
+            hydra_core::artifact::SessionSummary::read_from(&layout.summary_path()).unwrap();
         assert_eq!(summary.status, "completed");
-        assert!(summary.output_bytes > 0, "should have captured output bytes");
+        assert!(
+            summary.output_bytes > 0,
+            "should have captured output bytes"
+        );
     }
 
     #[tokio::test]
@@ -945,20 +1109,46 @@ mod tests {
         let (tx1, rx1) = mpsc::channel(256);
         let s1 = PtySession::spawn(sleep_pty_config(60), tx1).unwrap();
         let w1 = hydra_core::artifact::SessionArtifactWriter::init(
-            &hydra_root, "shut-1", "claude", "2026-02-24T00:00:00Z", "/repo", false, false,
+            &hydra_root,
+            "shut-1",
+            "claude",
+            "2026-02-24T00:00:00Z",
+            "/repo",
+            false,
+            false,
         )
         .unwrap();
-        state.register_session("shut-1", "claude", "2026-02-24T00:00:00Z", s1, Some(w1)).await;
-        spawn_pty_event_bridge("shut-1".to_string(), "claude".to_string(), rx1, state.clone());
+        state
+            .register_session("shut-1", "claude", "2026-02-24T00:00:00Z", s1, Some(w1))
+            .await;
+        spawn_pty_event_bridge(
+            "shut-1".to_string(),
+            "claude".to_string(),
+            rx1,
+            state.clone(),
+        );
 
         let (tx2, rx2) = mpsc::channel(256);
         let s2 = PtySession::spawn(sleep_pty_config(60), tx2).unwrap();
         let w2 = hydra_core::artifact::SessionArtifactWriter::init(
-            &hydra_root, "shut-2", "codex", "2026-02-24T00:00:01Z", "/repo", false, false,
+            &hydra_root,
+            "shut-2",
+            "codex",
+            "2026-02-24T00:00:01Z",
+            "/repo",
+            false,
+            false,
         )
         .unwrap();
-        state.register_session("shut-2", "codex", "2026-02-24T00:00:01Z", s2, Some(w2)).await;
-        spawn_pty_event_bridge("shut-2".to_string(), "codex".to_string(), rx2, state.clone());
+        state
+            .register_session("shut-2", "codex", "2026-02-24T00:00:01Z", s2, Some(w2))
+            .await;
+        spawn_pty_event_bridge(
+            "shut-2".to_string(),
+            "codex".to_string(),
+            rx2,
+            state.clone(),
+        );
 
         tokio::time::sleep(Duration::from_millis(300)).await;
         state.shutdown_all().await;
@@ -966,10 +1156,18 @@ mod tests {
 
         for sid in &["shut-1", "shut-2"] {
             let layout = hydra_core::artifact::SessionLayout::new(&hydra_root, sid);
-            assert!(layout.summary_path().exists(), "summary.json should exist for {sid} after shutdown_all");
+            assert!(
+                layout.summary_path().exists(),
+                "summary.json should exist for {sid} after shutdown_all"
+            );
 
-            let meta = hydra_core::artifact::SessionMetadata::read_from(&layout.session_json_path()).unwrap();
-            assert_eq!(meta.status, "stopped", "session {sid} should be stopped after shutdown");
+            let meta =
+                hydra_core::artifact::SessionMetadata::read_from(&layout.session_json_path())
+                    .unwrap();
+            assert_eq!(
+                meta.status, "stopped",
+                "session {sid} should be stopped after shutdown"
+            );
         }
     }
 
@@ -983,7 +1181,12 @@ mod tests {
         state
             .register_session("no-art", "claude", "2026-02-24T00:00:00Z", session, None)
             .await;
-        spawn_pty_event_bridge("no-art".to_string(), "claude".to_string(), rx, state.clone());
+        spawn_pty_event_bridge(
+            "no-art".to_string(),
+            "claude".to_string(),
+            rx,
+            state.clone(),
+        );
 
         tokio::time::sleep(Duration::from_millis(1000)).await;
 

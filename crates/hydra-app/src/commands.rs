@@ -737,18 +737,18 @@ pub async fn start_interactive_session(
         .to_string());
     }
 
+    let supported_flags = detect.supported_flags.clone();
+
     // M4.5: Unsafe mode policy — block unless explicitly opted in
-    if request.unsafe_mode {
-        let has_dangerous_flag = detect.supported_flags.iter().any(|f| {
-            f == "--dangerously-bypass-approvals-and-sandbox" || f == "--permission-mode"
-        });
-        if !has_dangerous_flag {
-            return Err(IpcError::unsafe_blocked(format!(
-                "Adapter '{}' does not support unsafe mode flags. Unsafe mode is only available for adapters with explicit sandbox bypass support.",
-                request.agent_key
-            ))
-            .to_string());
-        }
+    if request.unsafe_mode
+        && !adapter_supports_interactive_unsafe_mode(adapter.key(), &supported_flags)
+    {
+        return Err(IpcError::unsafe_blocked(format!(
+            "Adapter '{}' does not support interactive unsafe mode. {}",
+            request.agent_key,
+            unsafe_mode_requirement_hint(adapter.key())
+        ))
+        .to_string());
     }
 
     // M4.5: Working tree cleanliness check
@@ -760,14 +760,12 @@ pub async fn start_interactive_session(
 
     let wt_status = read_working_tree_status(&cwd);
     if !wt_status.clean {
-        let detail = wt_status.message.unwrap_or_else(|| {
-            "Working tree has uncommitted changes.".to_string()
-        });
-        return Err(IpcError::dirty_worktree(format!(
-            "{}. Commit or stash changes before starting an interactive session.",
-            detail.trim_end_matches('.')
-        ))
-        .to_string());
+        let detail = wt_status
+            .message
+            .unwrap_or_else(|| "Working tree has uncommitted changes.".to_string());
+        return Err(
+            IpcError::dirty_worktree(interactive_dirty_worktree_message(&detail)).to_string(),
+        );
     }
 
     let spawn_req = hydra_core::adapter::SpawnRequest {
@@ -775,10 +773,10 @@ pub async fn start_interactive_session(
         worktree_path: cwd.clone(),
         timeout_seconds: 0,
         allow_network: true,
-        force_edit: false,
+        force_edit: request.unsafe_mode,
         output_json_stream: false,
         unsafe_mode: request.unsafe_mode,
-        supported_flags: adapter.detect().supported_flags.clone(),
+        supported_flags,
     };
 
     let built_cmd = adapter
@@ -820,7 +818,13 @@ pub async fn start_interactive_session(
 
     let interactive = state.interactive.clone();
     interactive
-        .register_session(&session_id, &request.agent_key, &started_at, pty_session, artifact_writer)
+        .register_session(
+            &session_id,
+            &request.agent_key,
+            &started_at,
+            pty_session,
+            artifact_writer,
+        )
         .await;
 
     crate::state::spawn_pty_event_bridge(
@@ -844,9 +848,6 @@ pub async fn poll_interactive_events(
     session_id: String,
     cursor: u64,
 ) -> Result<InteractiveEventBatch, String> {
-    let cursor = usize::try_from(cursor)
-        .map_err(|_| IpcError::validation("invalid cursor value").to_string())?;
-
     let interactive = state.interactive.clone();
     let Some((events, next_cursor, done, status, error)) = interactive
         .poll_events(&session_id, cursor, MAX_INTERACTIVE_EVENTS_PER_POLL)
@@ -858,7 +859,7 @@ pub async fn poll_interactive_events(
     Ok(InteractiveEventBatch {
         session_id,
         events,
-        next_cursor: next_cursor as u64,
+        next_cursor,
         done,
         status,
         error,
@@ -942,7 +943,7 @@ pub async fn list_interactive_sessions(
                 agent_key,
                 status,
                 started_at,
-                event_count: event_count as u64,
+                event_count,
             },
         )
         .collect())
@@ -1571,6 +1572,42 @@ fn parse_worktree_path_for_branch(porcelain: &str, branch: &str) -> Option<PathB
     None
 }
 
+fn adapter_supports_interactive_unsafe_mode(adapter_key: &str, supported_flags: &[String]) -> bool {
+    match adapter_key {
+        // Codex uses explicit dangerous bypass flag for unsafe mode.
+        "codex" => supported_flags
+            .iter()
+            .any(|f| f == "--dangerously-bypass-approvals-and-sandbox"),
+        // Claude uses permission-mode bypass in force-edit flows.
+        "claude" => supported_flags.iter().any(|f| f == "--permission-mode"),
+        _ => false,
+    }
+}
+
+fn unsafe_mode_requirement_hint(adapter_key: &str) -> &'static str {
+    match adapter_key {
+        "codex" => "Expected flag: --dangerously-bypass-approvals-and-sandbox.",
+        "claude" => "Expected flag: --permission-mode.",
+        _ => "Unsafe mode is only supported for adapters with explicit sandbox-bypass controls.",
+    }
+}
+
+fn interactive_dirty_worktree_message(detail: &str) -> String {
+    let normalized = detail.replace(
+        "before running Preview Merge",
+        "before starting an interactive session",
+    );
+
+    if normalized.to_lowercase().contains("commit or stash") {
+        normalized
+    } else {
+        format!(
+            "{}. Commit or stash changes before starting an interactive session.",
+            normalized.trim_end_matches('.')
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1879,6 +1916,56 @@ branch refs/heads/main
     }
 
     #[test]
+    fn unsafe_mode_support_for_codex_requires_dangerous_flag() {
+        let ok = adapter_supports_interactive_unsafe_mode(
+            "codex",
+            &[
+                "--json".to_string(),
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            ],
+        );
+        let blocked = adapter_supports_interactive_unsafe_mode(
+            "codex",
+            &["--json".to_string(), "--permission-mode".to_string()],
+        );
+        assert!(ok);
+        assert!(!blocked);
+    }
+
+    #[test]
+    fn unsafe_mode_support_for_claude_requires_permission_mode() {
+        let ok = adapter_supports_interactive_unsafe_mode(
+            "claude",
+            &["--print".to_string(), "--permission-mode".to_string()],
+        );
+        let blocked = adapter_supports_interactive_unsafe_mode("claude", &["--print".to_string()]);
+        assert!(ok);
+        assert!(!blocked);
+    }
+
+    #[test]
+    fn unsafe_mode_support_rejects_unknown_adapters() {
+        let blocked =
+            adapter_supports_interactive_unsafe_mode("cursor-agent", &["--force".to_string()]);
+        assert!(!blocked);
+    }
+
+    #[test]
+    fn dirty_worktree_message_rewrites_preview_merge_context() {
+        let msg = interactive_dirty_worktree_message(
+            "Working tree has uncommitted changes in: src/main.rs. Commit or stash changes before running Preview Merge.",
+        );
+        assert!(msg.contains("interactive session"));
+        assert!(!msg.contains("Preview Merge"));
+    }
+
+    #[test]
+    fn dirty_worktree_message_adds_guidance_when_missing() {
+        let msg = interactive_dirty_worktree_message("Working tree has uncommitted changes");
+        assert!(msg.contains("Commit or stash changes"));
+    }
+
+    #[test]
     fn interactive_session_started_serializes_camel_case() {
         let started = InteractiveSessionStarted {
             session_id: "s1".to_string(),
@@ -1956,10 +2043,7 @@ branch refs/heads/main
     fn ipc_error_safety_gate_variant() {
         let err = IpcError::safety_gate("adapter not available");
         assert_eq!(err.code, "safety_gate");
-        assert_eq!(
-            err.to_string(),
-            "[safety_gate] adapter not available"
-        );
+        assert_eq!(err.to_string(), "[safety_gate] adapter not available");
     }
 
     #[test]
