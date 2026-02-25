@@ -4,7 +4,7 @@
  * Covers: cockpit shell render, startup, preflight refresh, experimental modal gating,
  * race flow from cockpit, winner selection, diff candidate switching, merge dry-run gating,
  * interactive tab, session creation, output polling, send input, stop session,
- * leaderboard updates, agent focus switch, intervention, completion summary.
+ * leaderboard updates, agent focus switch, completion summary, restart/retry flows.
  */
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -1066,6 +1066,88 @@ describe('Smoke Test 21: Completion summary and review transition', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Diff Review')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 22: Completion summary can reset cockpit for a new race', () => {
+  it('returns to race config after Start New Race', async () => {
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'Test restart flow');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('completion-start-new-race'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('race-config-panel')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('completion-summary')).not.toBeInTheDocument();
+  });
+});
+
+describe('Smoke Test 23: Failed race can be retried from cockpit', () => {
+  it('keeps config visible on failure and allows immediate retry', async () => {
+    vi.mocked(ipc.startRace).mockRejectedValue(new Error('simulated race start failure'));
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'Retry after failure');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('race-config-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('strip-run-btn')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('strip-run-btn'));
+
+    await waitFor(() => {
+      expect(ipc.startRace).toHaveBeenCalledTimes(2);
+    });
+  });
+});
+
+describe('Smoke Test 24: Open Diff Review follows top winner even when list order differs', () => {
+  it('opens review focused on highest-scored candidate, not first array entry', async () => {
+    mockRaceFlow();
+
+    vi.mocked(ipc.getRaceResult).mockResolvedValue({
+      ...MOCK_RACE_RESULT,
+      agents: [
+        { ...MOCK_RACE_RESULT.agents[1], agentKey: 'codex', score: 88.5 },
+        { ...MOCK_RACE_RESULT.agents[0], agentKey: 'claude', score: 93.2 },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'Winner routing');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('completion-open-review'));
+
+    await waitFor(() => {
+      expect(ipc.getCandidateDiff).toHaveBeenCalledWith('test-run-id', 'claude');
     });
   });
 });

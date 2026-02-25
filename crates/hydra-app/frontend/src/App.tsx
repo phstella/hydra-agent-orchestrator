@@ -69,7 +69,6 @@ export default function App() {
   const [selectedWinner, setSelectedWinner] = useState<string | null>(null);
   const [workspacePath, setWorkspacePath] = useState('');
   const [workspaceDraft, setWorkspaceDraft] = useState('');
-  const [interventionError, setInterventionError] = useState<string | null>(null);
 
   const { events, push, clear, eventsByAgent } = useEventBuffer();
 
@@ -183,7 +182,6 @@ export default function App() {
     setActiveRunId(null);
     setRaceAgents([]);
     setSelectedAgent(null);
-    setInterventionError(null);
     clear();
 
     try {
@@ -213,9 +211,22 @@ export default function App() {
     setActiveView('review');
   }, []);
 
-  const handleOpenReview = useCallback(() => {
+  const handleOpenReview = useCallback((agentKey: string) => {
+    setSelectedWinner(agentKey);
     setActiveView('review');
   }, []);
+
+  const handlePrepareNewRace = useCallback(() => {
+    setRunStatus('idle');
+    setRaceError(null);
+    setRaceResult(null);
+    setSelectedWinner(null);
+    setActiveRunId(null);
+    setRaceAgents([]);
+    setSelectedAgent(null);
+    clear();
+    setActiveView('cockpit');
+  }, [clear]);
 
   const handleSaveWorkspaceSettings = useCallback(() => {
     const normalized = workspaceDraft.trim();
@@ -227,18 +238,6 @@ export default function App() {
     setWorkspacePath('');
     setWorkspaceDraft('');
     writeWorkspaceToStorage('');
-  }, []);
-
-  const handleSendInput = useCallback(
-    async (_input: string): Promise<{ success: boolean; error: string | null }> => {
-      setInterventionError(null);
-      return { success: false, error: 'Intervention during race mode is not supported yet' };
-    },
-    [],
-  );
-
-  const handleStopAgent = useCallback(() => {
-    setInterventionError('Stop during race not yet implemented. Use interrupt from CLI.');
   }, []);
 
   useEffect(() => {
@@ -339,8 +338,7 @@ export default function App() {
       runId={activeRunId}
       adapterCount={selectedAdapters.length}
       experimentalCount={selectedExperimentalCount}
-      onRun={runStatus === 'idle' ? handleStartRace : undefined}
-      onStop={runStatus === 'running' ? handleStopAgent : undefined}
+      onRun={runStatus === 'idle' || runStatus === 'failed' ? handleStartRace : undefined}
     />
   );
 
@@ -369,7 +367,6 @@ export default function App() {
             onOpenSettings={() => setActiveView('settings')}
             onStartRace={handleStartRace}
             runStatus={runStatus}
-            activeRunId={activeRunId}
             raceError={raceError}
             events={events}
             eventsByAgent={eventsByAgent}
@@ -379,9 +376,8 @@ export default function App() {
             selectedWinner={selectedWinner}
             onSelectWinner={handleWinnerSelect}
             onOpenReview={handleOpenReview}
-            onSendInput={handleSendInput}
-            onStopAgent={handleStopAgent}
-            interventionError={interventionError}
+            onOpenInteractive={() => setActiveView('interactive')}
+            onStartNewRace={handlePrepareNewRace}
           />
         );
 

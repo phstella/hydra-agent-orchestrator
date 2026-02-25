@@ -1,6 +1,5 @@
 import type { CSSProperties } from 'react';
 import { LiveOutputPanel } from './LiveOutputPanel';
-import { InputComposer } from './InputComposer';
 import { CompletionSummary } from './CompletionSummary';
 import { Badge, Button } from './design-system';
 import type { AdapterInfo, AgentStreamEvent, RaceResult } from '../types';
@@ -18,7 +17,6 @@ interface CockpitCenterProps {
   onOpenSettings: () => void;
   onStartRace: () => void;
   runStatus: string;
-  activeRunId: string | null;
   raceError: string | null;
   events: AgentStreamEvent[];
   eventsByAgent: (agentKey: string) => AgentStreamEvent[];
@@ -27,10 +25,9 @@ interface CockpitCenterProps {
   raceResult: RaceResult | null;
   selectedWinner: string | null;
   onSelectWinner: (key: string) => void;
-  onOpenReview: () => void;
-  onSendInput: (input: string) => Promise<{ success: boolean; error: string | null }>;
-  onStopAgent: () => void;
-  interventionError: string | null;
+  onOpenReview: (agentKey: string) => void;
+  onOpenInteractive: () => void;
+  onStartNewRace: () => void;
 }
 
 export function CockpitCenter({
@@ -44,7 +41,6 @@ export function CockpitCenter({
   onOpenSettings,
   onStartRace,
   runStatus,
-  activeRunId,
   raceError,
   events,
   eventsByAgent,
@@ -54,20 +50,21 @@ export function CockpitCenter({
   selectedWinner,
   onSelectWinner,
   onOpenReview,
-  onSendInput,
-  onStopAgent,
-  interventionError,
+  onOpenInteractive,
+  onStartNewRace,
 }: CockpitCenterProps) {
   const isIdle = runStatus === 'idle';
-  const isRunning = runStatus === 'running' || runStatus === 'starting';
-  const isDone = runStatus === 'completed' || runStatus === 'failed';
+  const isRunning = runStatus === 'running';
+  const isStarting = runStatus === 'starting';
+  const isFailed = runStatus === 'failed';
+  const isCompleted = runStatus === 'completed';
 
   const selectedAgentStatus = agentStatuses.find((a) => a.agentKey === selectedAgent) ?? null;
   const selectedAgentLifecycle = selectedAgentStatus?.lifecycle ?? null;
 
-  const showConfig = isIdle;
-  const showTerminal = !isIdle;
-  const showCompletion = isDone && raceResult !== null;
+  const showConfig = isIdle || isFailed;
+  const showTerminal = isRunning || isStarting || isCompleted;
+  const showCompletion = isCompleted && raceResult !== null;
 
   const containerStyle: CSSProperties = {
     display: 'flex',
@@ -106,26 +103,24 @@ export function CockpitCenter({
           </div>
 
           {isRunning && selectedAgent && selectedAgentLifecycle === 'running' && (
-            <InputComposer
-              sessionId={activeRunId}
-              sessionStatus="running"
-              onSendInput={onSendInput}
-              onStopSession={onStopAgent}
-            />
-          )}
-
-          {interventionError && (
             <div
               style={{
-                padding: 'var(--space-2) var(--space-4)',
+                padding: 'var(--space-3) var(--space-4)',
                 fontSize: 'var(--text-xs)',
-                color: 'var(--color-danger-400)',
+                color: 'var(--color-text-secondary)',
                 backgroundColor: 'var(--color-bg-900)',
                 borderTop: '1px solid var(--color-border-700)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 'var(--space-3)',
               }}
-              data-testid="cockpit-intervention-error"
+              data-testid="cockpit-intervention-info"
             >
-              {interventionError}
+              <span>Race mode is non-interactive. Use Terminal view for mid-flight intervention.</span>
+              <Button variant="secondary" size="sm" onClick={onOpenInteractive} data-testid="cockpit-open-interactive">
+                Open Terminal View
+              </Button>
             </div>
           )}
         </div>
@@ -137,6 +132,7 @@ export function CockpitCenter({
           selectedWinner={selectedWinner}
           onSelectWinner={onSelectWinner}
           onOpenReview={onOpenReview}
+          onStartNewRace={onStartNewRace}
         />
       )}
 

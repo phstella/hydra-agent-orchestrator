@@ -7,7 +7,8 @@ interface CompletionSummaryProps {
   raceResult: RaceResult;
   selectedWinner: string | null;
   onSelectWinner: (agentKey: string) => void;
-  onOpenReview: () => void;
+  onOpenReview: (agentKey: string) => void;
+  onStartNewRace: () => void;
 }
 
 function scoreColor(score: number): string {
@@ -27,6 +28,7 @@ export function CompletionSummary({
   selectedWinner,
   onSelectWinner,
   onOpenReview,
+  onStartNewRace,
 }: CompletionSummaryProps) {
   const topAgent = useMemo(() => {
     return [...raceResult.agents].sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0] ?? null;
@@ -159,10 +161,18 @@ export function CompletionSummary({
             <Button
               variant="secondary"
               size="sm"
-              onClick={onOpenReview}
+              onClick={() => onOpenReview(winner.agentKey)}
               data-testid="completion-open-review"
             >
               Open Diff Review
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onStartNewRace}
+              data-testid="completion-start-new-race"
+            >
+              Start New Race
             </Button>
           </div>
         </Card>
