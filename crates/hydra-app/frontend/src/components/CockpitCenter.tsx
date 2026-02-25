@@ -26,7 +26,7 @@ interface CockpitCenterProps {
   selectedWinner: string | null;
   onSelectWinner: (key: string) => void;
   onOpenReview: (agentKey: string) => void;
-  onOpenInteractive: () => void;
+  onOpenOrchestration: () => void;
   onStartNewRace: () => void;
 }
 
@@ -50,7 +50,7 @@ export function CockpitCenter({
   selectedWinner,
   onSelectWinner,
   onOpenReview,
-  onOpenInteractive,
+  onOpenOrchestration,
   onStartNewRace,
 }: CockpitCenterProps) {
   const isIdle = runStatus === 'idle';
@@ -117,9 +117,9 @@ export function CockpitCenter({
               }}
               data-testid="cockpit-intervention-info"
             >
-              <span>Race mode is non-interactive. Use Terminal view for mid-flight intervention.</span>
-              <Button variant="secondary" size="sm" onClick={onOpenInteractive} data-testid="cockpit-open-interactive">
-                Open Terminal View
+              <span>Race mode is non-interactive. Use Orchestration view for mid-flight intervention.</span>
+              <Button variant="secondary" size="sm" onClick={onOpenOrchestration} data-testid="cockpit-open-orchestration">
+                Open Orchestration
               </Button>
             </div>
           )}

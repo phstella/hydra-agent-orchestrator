@@ -13,7 +13,7 @@ import type { AdapterInfo, RaceResult } from './types';
 import { isExperimental, isTier1 } from './types';
 import { useEventBuffer, useAgentStatuses } from './hooks';
 
-type CockpitView = 'cockpit' | 'preflight' | 'results' | 'review' | 'interactive' | 'settings';
+type CockpitView = 'cockpit' | 'preflight' | 'results' | 'review' | 'orchestration' | 'settings';
 
 const WORKSPACE_STORAGE_KEY = 'hydra.workspace.path';
 
@@ -51,7 +51,7 @@ function writeWorkspaceToStorage(path: string): void {
 }
 
 export default function App() {
-  const [activeView, setActiveView] = useState<CockpitView>('cockpit');
+  const [activeView, setActiveView] = useState<CockpitView>('orchestration');
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [adapterLoadError, setAdapterLoadError] = useState<string | null>(null);
   const [selectedAdapters, setSelectedAdapters] = useState<string[]>([]);
@@ -319,10 +319,10 @@ export default function App() {
       />
       <NavRailButton
         icon="▸"
-        label="Terminal"
-        active={activeView === 'interactive'}
-        onClick={() => setActiveView('interactive')}
-        data-testid="nav-interactive"
+        label="Orchestrate"
+        active={activeView === 'orchestration'}
+        onClick={() => setActiveView('orchestration')}
+        data-testid="nav-orchestration"
       />
       <div style={{ flex: 1 }} />
       <NavRailButton
@@ -382,7 +382,7 @@ export default function App() {
             selectedWinner={selectedWinner}
             onSelectWinner={handleWinnerSelect}
             onOpenReview={handleOpenReview}
-            onOpenInteractive={() => setActiveView('interactive')}
+            onOpenOrchestration={() => setActiveView('orchestration')}
             onStartNewRace={handlePrepareNewRace}
           />
         );
@@ -429,7 +429,7 @@ export default function App() {
           </div>
         );
 
-      case 'interactive':
+      case 'orchestration':
         return <InteractiveWorkspace workspaceCwd={workspaceCwd} />;
 
       case 'settings':
@@ -446,7 +446,7 @@ export default function App() {
                 Settings
               </h2>
               <p style={{ marginBottom: 'var(--space-5)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
-                Configure default workspace and runtime behavior used by race, review/merge, and interactive sessions.
+                Configure default workspace and runtime behavior used by race, review/merge, and orchestration sessions.
               </p>
 
               <div style={{ marginBottom: 'var(--space-4)' }}>

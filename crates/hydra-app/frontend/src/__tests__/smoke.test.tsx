@@ -1,10 +1,11 @@
 /**
- * P3-QA-01 + M4.3/M4.4 + M4.7: GUI Smoke Test Pack
+ * P3-QA-01 + M4.3/M4.4 + M4.7 + P4.9.1: GUI Smoke Test Pack
  *
  * Covers: cockpit shell render, startup, preflight refresh, experimental modal gating,
  * race flow from cockpit, winner selection, diff candidate switching, merge dry-run gating,
- * interactive tab, session creation, output polling, send input, stop session,
- * leaderboard updates, agent focus switch, completion summary, restart/retry flows.
+ * orchestration tab, session creation, output polling, send input, stop session,
+ * leaderboard updates, agent focus switch, completion summary, restart/retry flows,
+ * default landing on orchestration, navigation transitions.
  */
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -268,7 +269,7 @@ beforeEach(() => {
 });
 
 describe('Smoke Test 1: App startup renders cockpit shell with navigation', () => {
-  it('renders cockpit shell with left rail, top strip, center, and right rail', async () => {
+  it('renders cockpit shell with left rail, top strip, and center', async () => {
     render(<App />);
 
     await waitFor(() => {
@@ -276,8 +277,9 @@ describe('Smoke Test 1: App startup renders cockpit shell with navigation', () =
       expect(screen.getByTestId('cockpit-left-rail')).toBeInTheDocument();
       expect(screen.getByTestId('cockpit-top-strip')).toBeInTheDocument();
       expect(screen.getByTestId('cockpit-center')).toBeInTheDocument();
-      expect(screen.getByTestId('cockpit-right-rail')).toBeInTheDocument();
     });
+    // Right rail only appears in cockpit view (not on default orchestration landing)
+    expect(screen.queryByTestId('cockpit-right-rail')).not.toBeInTheDocument();
   });
 
   it('renders navigation buttons in left rail', async () => {
@@ -287,31 +289,33 @@ describe('Smoke Test 1: App startup renders cockpit shell with navigation', () =
       expect(screen.getByTestId('nav-preflight')).toBeInTheDocument();
       expect(screen.getByTestId('nav-results')).toBeInTheDocument();
       expect(screen.getByTestId('nav-review')).toBeInTheDocument();
-      expect(screen.getByTestId('nav-interactive')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-orchestration')).toBeInTheDocument();
       expect(screen.getByTestId('nav-settings')).toBeInTheDocument();
     });
   });
 
-  it('defaults to cockpit view with race config', async () => {
+  it('defaults to orchestration view with create panel', async () => {
     render(<App />);
     await waitFor(() => {
-      expect(screen.getByTestId('race-config-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('orchestration-console')).toBeInTheDocument();
+      expect(screen.getByTestId('create-panel')).toBeInTheDocument();
     });
   });
 
-  it('hides leaderboard rail outside cockpit view', async () => {
+  it('shows leaderboard rail only in cockpit view', async () => {
     const user = userEvent.setup();
     render(<App />);
 
+    // Default is orchestration — no right rail
+    await waitFor(() => {
+      expect(screen.getByTestId('orchestration-console')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('cockpit-right-rail')).not.toBeInTheDocument();
+
+    // Navigate to cockpit — right rail appears
+    await user.click(screen.getByTestId('nav-cockpit'));
     await waitFor(() => {
       expect(screen.getByTestId('cockpit-right-rail')).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByTestId('nav-interactive'));
-
-    await waitFor(() => {
-      expect(screen.queryByTestId('cockpit-right-rail')).not.toBeInTheDocument();
-      expect(screen.getByTestId('orchestration-console')).toBeInTheDocument();
     });
   });
 });
@@ -347,9 +351,10 @@ describe('Smoke Test 3: Experimental adapter modal blocks confirm until acknowle
   it('opens modal when selecting an experimental adapter in cockpit config', async () => {
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
     await waitFor(() => {
-      expect(screen.getByText('cursor-agent')).toBeInTheDocument();
+      expect(screen.getByTestId('race-config-panel')).toBeInTheDocument();
     });
 
     const cursorBtn = screen.getByText('cursor-agent').closest('button');
@@ -376,9 +381,10 @@ describe('Smoke Test 4: Race flow transitions from cockpit', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
     await waitFor(() => {
-      expect(screen.getByText('claude')).toBeInTheDocument();
+      expect(screen.getByTestId('race-config-panel')).toBeInTheDocument();
     });
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
@@ -406,8 +412,9 @@ describe('Smoke Test 5: Winner selection is explicit and does not auto-merge', (
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
@@ -431,8 +438,9 @@ describe('Smoke Test 6: Diff candidate switching updates diff and file list', ()
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
@@ -465,8 +473,9 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
@@ -501,8 +510,9 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
@@ -537,8 +547,9 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
@@ -568,8 +579,9 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
@@ -592,21 +604,20 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Interactive Session Smoke Tests (M4.3 + M4.4)
+// Orchestration Session Smoke Tests (M4.3 + M4.4)
 // ---------------------------------------------------------------------------
 
-describe('Smoke Test 8: Interactive tab renders and shows empty state', () => {
-  it('renders the Interactive tab in navigation', async () => {
+describe('Smoke Test 8: Orchestration tab renders and shows empty state', () => {
+  it('renders the Orchestration tab in navigation', async () => {
     render(<App />);
     await waitFor(() => {
-      expect(screen.getByTestId('nav-interactive')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-orchestration')).toBeInTheDocument();
     });
   });
 
-  it('shows empty session state when no sessions exist', async () => {
-    const user = userEvent.setup();
+  it('shows empty session state when no sessions exist (default landing)', async () => {
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    // Orchestration is the default landing — no nav click needed
     await waitFor(() => {
       expect(screen.getByTestId('empty-session-state')).toBeInTheDocument();
     });
@@ -614,11 +625,11 @@ describe('Smoke Test 8: Interactive tab renders and shows empty state', () => {
   });
 });
 
-describe('Smoke Test 9: Create and select interactive session', () => {
+describe('Smoke Test 9: Create and select orchestration session', () => {
   it('creates session from orchestration create panel with IPC', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => {
       expect(screen.getByTestId('create-panel')).toBeInTheDocument();
@@ -647,7 +658,7 @@ describe('Smoke Test 10: Output polling renders in terminal panel', () => {
   it('polls events and displays output text', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Test task');
@@ -667,7 +678,7 @@ describe('Smoke Test 11: Send input success and failure paths', () => {
   it('sends input successfully when session is running', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Test input');
@@ -697,7 +708,7 @@ describe('Smoke Test 11: Send input success and failure paths', () => {
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Test input err');
@@ -751,7 +762,7 @@ describe('Smoke Test 12: Stop session and lifecycle transition', () => {
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Stop test');
@@ -772,13 +783,13 @@ describe('Smoke Test 12: Stop session and lifecycle transition', () => {
   });
 });
 
-describe('Smoke Test 13: Interactive terminal handles stream errors and ANSI output', () => {
+describe('Smoke Test 13: Orchestration terminal handles stream errors and ANSI output', () => {
   it('shows a connection warning when polling fails', async () => {
     vi.mocked(ipc.pollInteractiveEvents).mockRejectedValue(new Error('connection refused'));
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Poll fail test');
@@ -809,7 +820,7 @@ describe('Smoke Test 13: Interactive terminal handles stream errors and ANSI out
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'ANSI test');
@@ -823,14 +834,14 @@ describe('Smoke Test 13: Interactive terminal handles stream errors and ANSI out
 });
 
 // ---------------------------------------------------------------------------
-// M4.5: Interactive Safety and Capability Gating Smoke Tests
+// M4.5: Orchestration Safety and Capability Gating Smoke Tests
 // ---------------------------------------------------------------------------
 
 describe('Smoke Test 14: Experimental adapter shows warning and requires acknowledgment', () => {
   it('shows experimental warning when selecting cursor-agent', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('create-panel')).toBeInTheDocument());
 
@@ -847,7 +858,7 @@ describe('Smoke Test 14: Experimental adapter shows warning and requires acknowl
   it('enables start after acknowledging experimental risk', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('create-panel')).toBeInTheDocument());
 
@@ -867,7 +878,7 @@ describe('Smoke Test 15: Experimental adapter denied without confirmation shows 
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('create-panel')).toBeInTheDocument());
 
@@ -897,7 +908,7 @@ describe('Smoke Test 16: Dirty working tree policy block shows clear feedback', 
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
 
@@ -920,7 +931,7 @@ describe('Smoke Test 17: Unsupported adapter blocked with actionable reason', ()
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
 
@@ -986,8 +997,9 @@ describe('Smoke Test 19: Cockpit leaderboard updates during race', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Test leaderboard');
@@ -1009,8 +1021,9 @@ describe('Smoke Test 20: Agent focus switch updates terminal', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Test focus switch');
@@ -1033,8 +1046,9 @@ describe('Smoke Test 21: Completion summary and review transition', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Test completion');
@@ -1060,8 +1074,9 @@ describe('Smoke Test 22: Completion summary can reset cockpit for a new race', (
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Test restart flow');
@@ -1085,8 +1100,9 @@ describe('Smoke Test 23: Failed race can be retried from cockpit', () => {
 
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Retry after failure');
@@ -1119,8 +1135,9 @@ describe('Smoke Test 24: Open Diff Review follows top winner even when list orde
 
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Winner routing');
@@ -1163,8 +1180,9 @@ describe('Smoke Test 25: Early race failure marks agent cards as failed', () => 
 
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'trigger early failure');
@@ -1205,8 +1223,9 @@ describe('Smoke Test 26: Cockpit shows backend failure reason from race polling'
 
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'surface backend failure');
@@ -1225,8 +1244,9 @@ describe('Smoke Test 27: Live output supports human-readable and event views', (
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
     await user.type(screen.getByPlaceholderText(/describe the task/i), 'toggle output mode');
     await user.click(screen.getByTestId('cockpit-start-race'));
 
@@ -1249,8 +1269,9 @@ describe('Smoke Test 28: Diff viewer supports unified fallback mode', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
     await user.type(screen.getByPlaceholderText(/describe the task/i), 'diff mode toggle');
     await user.click(screen.getByTestId('cockpit-start-race'));
 
@@ -1283,8 +1304,9 @@ describe('Smoke Test 29: Quality warning appears when only speed/diff scoring is
 
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
     await user.type(screen.getByPlaceholderText(/describe the task/i), 'quality warning');
     await user.click(screen.getByTestId('cockpit-start-race'));
 
@@ -1349,8 +1371,9 @@ describe('Smoke Test 30: Human output mode parses structured JSON lines', () => 
 
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
     await user.type(screen.getByPlaceholderText(/describe the task/i), 'human output json parse');
     await user.click(screen.getByTestId('cockpit-start-race'));
 
@@ -1367,8 +1390,9 @@ describe('Smoke Test 31: Cockpit completion view does not overlap terminal', () 
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
     await user.type(screen.getByPlaceholderText(/describe the task/i), 'completion layout');
     await user.click(screen.getByTestId('cockpit-start-race'));
 
@@ -1412,8 +1436,9 @@ describe('Smoke Test 32: New-file diffs default to unified mode', () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-cockpit'));
 
-    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
     await user.type(screen.getByPlaceholderText(/describe the task/i), 'new file diff mode');
     await user.click(screen.getByTestId('cockpit-start-race'));
 
@@ -1430,7 +1455,69 @@ describe('Smoke Test 32: New-file diffs default to unified mode', () => {
 });
 
 // ---------------------------------------------------------------------------
-// M4.8.9: Interactive Orchestration Console — QA Hardening
+// P4.9.1: Orchestration IA Rename and Default Landing
+// ---------------------------------------------------------------------------
+
+describe('Smoke Test 38: Orchestration is the default landing view', () => {
+  it('renders orchestration console on startup without navigation', async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('orchestration-console')).toBeInTheDocument();
+      expect(screen.getByTestId('create-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('lanes-rail')).toBeInTheDocument();
+    });
+    // Cockpit race config is NOT shown on startup
+    expect(screen.queryByTestId('race-config-panel')).not.toBeInTheDocument();
+  });
+
+  it('navigates from orchestration to cockpit and back', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Default: orchestration
+    await waitFor(() => {
+      expect(screen.getByTestId('orchestration-console')).toBeInTheDocument();
+    });
+
+    // Navigate to cockpit
+    await user.click(screen.getByTestId('nav-cockpit'));
+    await waitFor(() => {
+      expect(screen.getByTestId('race-config-panel')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('orchestration-console')).not.toBeInTheDocument();
+
+    // Navigate back to orchestration
+    await user.click(screen.getByTestId('nav-orchestration'));
+    await waitFor(() => {
+      expect(screen.getByTestId('orchestration-console')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('race-config-panel')).not.toBeInTheDocument();
+  });
+
+  it('preserves race/results/review/settings navigation', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Navigate to each view and verify it renders
+    await user.click(screen.getByTestId('nav-preflight'));
+    await waitFor(() => {
+      expect(ipc.runPreflight).toHaveBeenCalled();
+    });
+
+    await user.click(screen.getByTestId('nav-results'));
+    await waitFor(() => {
+      expect(screen.getByText(/no results yet/i)).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('nav-settings'));
+    await waitFor(() => {
+      expect(screen.getByTestId('settings-workspace-input')).toBeInTheDocument();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M4.8.9: Orchestration Console — QA Hardening
 // ---------------------------------------------------------------------------
 
 describe('Smoke Test 33: Duplicate adapter sessions can be created from orchestration surface', () => {
@@ -1464,7 +1551,7 @@ describe('Smoke Test 33: Duplicate adapter sessions can be created from orchestr
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('create-panel')).toBeInTheDocument());
 
@@ -1530,7 +1617,7 @@ describe('Smoke Test 34: Lane selection changes focused terminal source', () => 
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
 
@@ -1600,7 +1687,7 @@ describe('Smoke Test 35: Per-lane input isolation under duplicate adapters', () 
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
 
@@ -1655,7 +1742,7 @@ describe('Smoke Test 36: Per-lane stop isolation under duplicate adapters', () =
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
 
@@ -1720,7 +1807,7 @@ describe('Smoke Test 37: Lane-local polling error does not collapse sibling lane
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByTestId('nav-interactive'));
+    await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
 
