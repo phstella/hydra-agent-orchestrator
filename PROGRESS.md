@@ -4,10 +4,10 @@ Last updated: 2026-02-25
 
 ## Current State
 
-- **Phase**: 4 **complete** (Interactive Session Mode + Cockpit Convergence)
-- **Milestone**: M4.1–M4.7 complete. M4.8 defined as next milestone (Interactive Orchestration Console, race-separated).
-- **Sprint**: M4.8 planning/alignment before Phase 5 (Collaboration Workflows).
-- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1–M4.7 are implemented. `M4.7` cockpit convergence gate is satisfied: unified 3-column dashboard (left nav rail, top status strip, center workspace, right leaderboard rail) is the default operator surface. Next planned milestone is `M4.8`: interactive orchestration flow aligned with the mockup, including multiple concurrent sessions of the same adapter type, while keeping race/scoring semantics unchanged.
+- **Phase**: 4 **complete** (Interactive Session Mode + Cockpit Convergence + Orchestration Console)
+- **Milestone**: M4.1–M4.8 complete. Ready for Phase 5 (Collaboration Workflows).
+- **Sprint**: Phase 4 complete. Phase 5 planning next.
+- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1–M4.8 are implemented. `M4.8` interactive orchestration console is complete: 3-column layout (create panel, focused terminal, running-lanes rail), session-lane identity model with duplicate adapter support, per-lane isolation for polling/input/stop, 47 smoke tests (42 migrated + 5 new M4.8.9), all backend tests pass, race semantics unchanged.
 
 ## Completed Milestones
 
@@ -57,10 +57,11 @@ Last updated: 2026-02-25
 | M4.5 | Interactive Safety and Capability Gating | 2026-02-24 | Backend gating in `start_interactive_session`: adapter tier/capability policy enforcement blocks unsupported adapters with actionable reason; experimental adapters require explicit `allowExperimental` or return `experimental_blocked` error; adapter detect status checked (blocked/missing rejected with `safety_gate` error); unsafe mode blocks adapters lacking dangerous flag (`unsafe_blocked` error); working tree cleanliness enforced pre-launch (`dirty_worktree` error). Frontend: all adapters shown in create-session form with tier badges; experimental selection shows risk warning with acknowledgment checkbox; start button disabled until acknowledged; gating errors parsed and styled by code. New IPC error variants: `safety_gate`, `experimental_blocked`, `dirty_worktree`, `unsafe_blocked`. `RegistryError` re-exported from adapter module. Card component updated to forward `data-testid`. Mock IPC simulates gating failures. 4 new Rust tests + 7 new Vitest smoke tests. |
 | M4.6 | Interactive Transcript Artifacts and E2E Tests | 2026-02-24 | `SessionLayout` for `.hydra/sessions/<session_id>/` artifact directory structure. `SessionArtifactWriter` manages full lifecycle: init creates `session.json` + `events.jsonl` + `transcript.ansi.log`; `record_output`/`record_user_input` append to JSONL and transcript; `finalize` writes `summary.json` and updates `session.json` with final status. `SessionMetadata` schema v1: `schema_version`, `session_id`, `agent_key`, `started_at`, `ended_at`, `status`, `cwd`, `unsafe_mode`, `experimental`. Secret redaction via `SecretRedactor` applied to all persisted events and transcript output. Artifact writer wired into interactive session lifecycle: initialized on `start_interactive_session`, output recorded in PTY event bridge, user input recorded on `write_input`, finalized on `stop_session`/`shutdown_all`/natural completion/failure. Graceful degradation: artifact init failure logs warning and session proceeds without persistence. 10 new hydra-core unit tests + 4 new hydra-app integration tests with explicit artifact content assertions. |
 | M4.7 | Unified Race Cockpit UX Convergence | 2026-02-25 | Desktop-first cockpit shell replaces tab-based IA as default operator surface. `CockpitShell.tsx`: 3-column layout (left nav rail 56px, top status strip 44px, center workspace flex, right leaderboard rail 320px). `CockpitCenter.tsx`: race config panel (adapters, workspace, prompt), live terminal bound to selected agent, inline intervention (InputComposer + stop), completion summary with review bridge. `LeaderboardRail.tsx`: per-agent cards with lifecycle badge, elapsed time, score snapshot, mergeability hint, failure messages, selection-driven terminal focus. `CompletionSummary.tsx`: winner card with score/mergeability, other candidates, Open Diff Review CTA. `TopStrip`: workspace, run status, adapter count, run/stop controls. Legacy views (Preflight, Results, Review, Interactive, Settings) accessible via left nav rail. Error display unified across leaderboard cards, terminal panel, and cockpit banner. 31 smoke tests (27 migrated + 4 new cockpit scenarios). All Rust tests (271 workspace + 49 hydra-app) and frontend checks (lint, typecheck, design tokens) pass. |
+| M4.8 | Interactive Orchestration Console | 2026-02-25 | 3-column orchestration layout: left create panel (always visible), center focused terminal + InputComposer, right running-lanes rail. Session-lane identity model hardened: all maps/cursors/actions keyed by `session_id`, lane labels with session-id suffix for duplicate adapter disambiguation. Multi-instance support: same adapter launches repeatedly, instance count shown per adapter. Rich lane cards: adapter key, instance index, lifecycle badge, session ID snippet, event count, elapsed time, poll error indicator. Terminal header shows disambiguated lane label. Per-lane isolation for polling errors, input writes, and stop actions. Artifact and cleanup invariants validated (61 hydra-app backend tests pass). Race regression gate passed: all workspace tests green, no race path changes. 5 new smoke tests (duplicate adapter creation, lane selection focus, per-lane input isolation, per-lane stop isolation, lane-local poll error isolation). 47 total Vitest smoke tests pass. Lint and typecheck clean. |
 
 ## In-Progress Work
 - Phase 3 closure: M3.1 acceptance criterion #3 (Linux packaging smoke evidence in published CI) still pending.
-- Phase 4 complete: M4.7 cockpit convergence gate satisfied. Ready for Phase 5.
+- Phase 4 complete: M4.8 interactive orchestration console satisfied. Ready for Phase 5.
 
 ## Phase 3 Reconciliation (M3.x -> P3)
 
@@ -167,7 +168,7 @@ Last updated: 2026-02-25
 |-------|--------|----------|-------|
 | hydra-core | Yes | Yes | 239 unit + 12 integration = 251 passing |
 | hydra-cli | Yes | Yes | 7 passing |
-| hydra-app | Yes | Requires system libs | 49 unit tests + 31 smoke tests (Vitest) |
+| hydra-app | Yes | Requires system libs | 61 unit tests + 47 smoke tests (Vitest) |
 
 ## Phase Progress
 
@@ -179,7 +180,7 @@ Last updated: 2026-02-25
 | 3 | GUI Alpha | **In Progress** | Original M3: 6/7 complete (M3.1 partial); Supplemental P3: 8/8 complete |
 | 4 | Interactive Session Mode (PTY) | **Complete** | 6/6 (M4.1, M4.2, M4.3, M4.4, M4.5, M4.6 complete) |
 | 4.7 | Cockpit Convergence Gate | **Complete** | 1/1 (M4.7 complete) |
-| 4.8 | Interactive Orchestration Console (Race-Separated) | Planned | 0/1 |
+| 4.8 | Interactive Orchestration Console (Race-Separated) | **Complete** | 1/1 (M4.8.1-M4.8.9 complete) |
 | 5 | Collaboration Workflows | Not started | 0/6 |
 | 6 | Windows Parity + Hardening | Not started | 0/6 |
 
@@ -187,18 +188,17 @@ Last updated: 2026-02-25
 
 1. Read `CLAUDE.md` for project overview and conventions.
 2. Phase 0–2 are **complete**. Phase 3 supplemental tickets are **complete** (M3.1 partial — Linux packaging smoke pending).
-3. Phase 4 M4.1–M4.7 are **complete**. `M4.7` cockpit convergence gate is satisfied.
-4. Current baseline: `hydra-core` 251 passing (239 unit + 12 integration), `hydra-cli` 19 passing (via workspace), `hydra-app` 49 Rust unit tests + 31 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean. Frontend lint and typecheck clean.
+3. Phase 4 M4.1–M4.8 are **complete**. `M4.8` interactive orchestration console is satisfied.
+4. Current baseline: `hydra-core` 251 passing (239 unit + 12 integration), `hydra-cli` 19 passing (via workspace), `hydra-app` 61 Rust unit tests + 47 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean. Frontend lint and typecheck clean.
 5. **System package requirement**: `hydra-app` needs `webkit2gtk-4.1` (`pacman -S webkit2gtk-4.1` on Arch). Without them, `cargo check/test -p hydra-app` fails at build-script stage.
-6. **Next priority**: M4.8 Interactive Orchestration Console (mockup-aligned, duplicate-adapter interactive lanes, race-separated semantics).
+6. **Next priority**: Phase 5 (Collaboration Workflows).
 7. GitHub issue creation is optional; implementation tracking is local-first for this cycle.
-8. Key files added/modified for M4.7:
-   - `crates/hydra-app/frontend/src/components/CockpitShell.tsx` — New: CockpitShell (3-column layout), NavRailButton, TopStrip components.
-   - `crates/hydra-app/frontend/src/components/CockpitCenter.tsx` — New: CockpitCenter (race config + terminal + intervention + completion), RaceConfigPanel.
-   - `crates/hydra-app/frontend/src/components/LeaderboardRail.tsx` — New: LeaderboardRail with rich agent cards (lifecycle, score, elapsed, mergeability).
-   - `crates/hydra-app/frontend/src/components/CompletionSummary.tsx` — New: Race completion summary with winner card and review bridge CTA.
-   - `crates/hydra-app/frontend/src/App.tsx` — Rewritten: cockpit shell as default surface, left rail navigation, legacy views preserved as nav destinations.
-   - `crates/hydra-app/frontend/src/__tests__/smoke.test.tsx` — Updated: 27 tests migrated to cockpit nav + 4 new cockpit-specific tests (shell render, leaderboard, focus switch, completion summary).
-9. The cockpit is the default landing surface. Preflight, Results, Review, Interactive, and Settings are accessible via the left nav rail.
+8. Key files added/modified for M4.8:
+   - `crates/hydra-app/frontend/src/components/InteractiveWorkspace.tsx` — Rewritten: 3-column orchestration console (left create panel, center focused terminal, right lanes rail). Session-lane identity model with duplicate adapter support.
+   - `crates/hydra-app/frontend/src/components/InteractiveSessionRail.tsx` — Rewritten: rich lane cards with adapter key, instance index, lifecycle, elapsed time, event count, poll error indicator. Instance index for duplicate adapter disambiguation.
+   - `crates/hydra-app/frontend/src/components/InteractiveTerminalPanel.tsx` — Updated: accepts and displays `laneLabel` prop for disambiguated terminal header.
+   - `crates/hydra-app/frontend/src/__tests__/smoke.test.tsx` — Updated: 42 tests migrated to orchestration console layout + 5 new M4.8.9 tests (duplicate adapter creation, lane selection focus, per-lane input/stop isolation, poll error isolation).
+9. The cockpit is the default landing surface. Interactive orchestration is available via the left nav rail "Terminal" button.
 10. Race-mode behavior is unchanged; all existing race/scoring/merge tests pass.
 11. Design system tokens are CSS custom properties in `tokens.css`. Feature components must NOT use hardcoded hex colors.
+12. Interactive orchestration supports multiple concurrent sessions of the same adapter type. Lane identity is session-based, not adapter-key-based.
