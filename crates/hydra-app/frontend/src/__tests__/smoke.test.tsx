@@ -1412,3 +1412,323 @@ describe('Smoke Test 32: New-file diffs default to unified mode', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// M4.8.9: Interactive Orchestration Console — QA Hardening
+// ---------------------------------------------------------------------------
+
+describe('Smoke Test 33: Duplicate adapter sessions can be created from orchestration surface', () => {
+  it('launches two codex sessions with distinct lane entries', async () => {
+    let sessionCounter = 0;
+    vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
+      sessionCounter++;
+      return {
+        sessionId: `dup-session-${sessionCounter}`,
+        agentKey: req.agentKey,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+      } as InteractiveSessionStarted;
+    });
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
+      sessionId,
+      events: [
+        {
+          sessionId,
+          agentKey: 'codex',
+          eventType: 'output',
+          data: { text: `Output from ${sessionId}\n` },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      nextCursor: 1,
+      done: false,
+      status: 'running',
+      error: null,
+    } as InteractiveEventBatch));
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-interactive'));
+
+    await waitFor(() => expect(screen.getByTestId('create-panel')).toBeInTheDocument());
+
+    // Select codex adapter
+    await user.click(screen.getByTestId('agent-select-codex'));
+
+    // Launch first codex session
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task A');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-dup-session-1')).toBeInTheDocument();
+    });
+
+    // Launch second codex session
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task B');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-item-dup-session-2')).toBeInTheDocument();
+    });
+
+    // Both sessions exist as distinct lane cards
+    expect(screen.getByTestId('session-item-dup-session-1')).toBeInTheDocument();
+    expect(screen.getByTestId('session-item-dup-session-2')).toBeInTheDocument();
+
+    // IPC called twice with codex
+    expect(ipc.startInteractiveSession).toHaveBeenCalledTimes(2);
+    expect(ipc.startInteractiveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKey: 'codex' }),
+    );
+  });
+});
+
+describe('Smoke Test 34: Lane selection changes focused terminal source', () => {
+  it('switches terminal lane label when a different lane is selected', async () => {
+    let sessionCounter = 0;
+    vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
+      sessionCounter++;
+      return {
+        sessionId: `focus-session-${sessionCounter}`,
+        agentKey: req.agentKey,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+      } as InteractiveSessionStarted;
+    });
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
+      sessionId,
+      events: [
+        {
+          sessionId,
+          agentKey: sessionId === 'focus-session-1' ? 'claude' : 'codex',
+          eventType: 'output',
+          data: { text: `Output from ${sessionId}\n` },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      nextCursor: 1,
+      done: false,
+      status: 'running',
+      error: null,
+    } as InteractiveEventBatch));
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-interactive'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+
+    // Create first session (claude)
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task A');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-focus-session-1')).toBeInTheDocument());
+
+    // Create second session (codex)
+    await user.click(screen.getByTestId('agent-select-codex'));
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task B');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-focus-session-2')).toBeInTheDocument());
+
+    // Focus should be on session 2 (most recently created) — terminal shows codex label
+    await waitFor(() => {
+      const label = screen.getByTestId('terminal-lane-label');
+      expect(label).toHaveTextContent(/codex/);
+      expect(label).toHaveTextContent(/focus-se/);
+    });
+
+    // Click session 1 lane card to switch focus
+    await user.click(screen.getByTestId('session-item-focus-session-1'));
+
+    // Terminal header should now show claude label with session 1's ID prefix
+    await waitFor(() => {
+      const label = screen.getByTestId('terminal-lane-label');
+      expect(label).toHaveTextContent(/claude/);
+      expect(label).toHaveTextContent(/focus-se/);
+    });
+  });
+});
+
+describe('Smoke Test 35: Per-lane input isolation under duplicate adapters', () => {
+  it('write action targets only the selected session', async () => {
+    let sessionCounter = 0;
+    vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
+      sessionCounter++;
+      return {
+        sessionId: `input-session-${sessionCounter}`,
+        agentKey: req.agentKey,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+      } as InteractiveSessionStarted;
+    });
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
+      sessionId,
+      events: [
+        {
+          sessionId,
+          agentKey: 'claude',
+          eventType: 'output',
+          data: { text: 'Ready\n' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      nextCursor: 1,
+      done: false,
+      status: 'running',
+      error: null,
+    } as InteractiveEventBatch));
+    vi.mocked(ipc.writeInteractiveInput).mockImplementation(async (sessionId) => ({
+      sessionId,
+      success: true,
+      error: null,
+    } as InteractiveWriteAck));
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-interactive'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+
+    // Create two claude sessions
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task A');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-input-session-1')).toBeInTheDocument());
+
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task B');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-input-session-2')).toBeInTheDocument());
+
+    // Focus is on session 2 (most recent). Send input.
+    await waitFor(() => expect(screen.getByTestId('interactive-input')).toBeInTheDocument());
+    await user.type(screen.getByTestId('interactive-input'), 'hello session 2');
+    await user.click(screen.getByTestId('send-input-btn'));
+
+    await waitFor(() => {
+      expect(ipc.writeInteractiveInput).toHaveBeenCalledWith('input-session-2', 'hello session 2');
+    });
+
+    // Input was NOT sent to session 1
+    expect(ipc.writeInteractiveInput).not.toHaveBeenCalledWith('input-session-1', expect.anything());
+  });
+});
+
+describe('Smoke Test 36: Per-lane stop isolation under duplicate adapters', () => {
+  it('stopping lane A leaves lane B running', async () => {
+    let sessionCounter = 0;
+    vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
+      sessionCounter++;
+      return {
+        sessionId: `stop-session-${sessionCounter}`,
+        agentKey: req.agentKey,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+      } as InteractiveSessionStarted;
+    });
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
+      sessionId,
+      events: [],
+      nextCursor: 0,
+      done: false,
+      status: 'running',
+      error: null,
+    } as InteractiveEventBatch));
+    vi.mocked(ipc.stopInteractiveSession).mockImplementation(async (sessionId) => ({
+      sessionId,
+      status: 'stopped',
+      wasRunning: true,
+    } as InteractiveStopResult));
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-interactive'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+
+    // Create two codex sessions
+    await user.click(screen.getByTestId('agent-select-codex'));
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task A');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-stop-session-1')).toBeInTheDocument());
+
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task B');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-stop-session-2')).toBeInTheDocument());
+
+    // Focus on session 2, stop it via InputComposer stop button
+    await waitFor(() => expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('stop-session-btn'));
+
+    await waitFor(() => {
+      expect(ipc.stopInteractiveSession).toHaveBeenCalledWith('stop-session-2');
+    });
+
+    // Stop was NOT called for session 1
+    expect(ipc.stopInteractiveSession).not.toHaveBeenCalledWith('stop-session-1');
+  });
+});
+
+describe('Smoke Test 37: Lane-local polling error does not collapse sibling lane', () => {
+  it('one lane poll error does not affect other lane state', async () => {
+    let sessionCounter = 0;
+    vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
+      sessionCounter++;
+      return {
+        sessionId: `err-session-${sessionCounter}`,
+        agentKey: req.agentKey,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+      } as InteractiveSessionStarted;
+    });
+
+    // Session 1 polls successfully; session 2 fails
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => {
+      if (sessionId === 'err-session-2') {
+        throw new Error('network timeout for session 2');
+      }
+      return {
+        sessionId,
+        events: [
+          {
+            sessionId,
+            agentKey: 'claude',
+            eventType: 'output',
+            data: { text: 'Healthy output\n' },
+            timestamp: new Date().toISOString(),
+          },
+        ],
+        nextCursor: 1,
+        done: false,
+        status: 'running',
+        error: null,
+      } as InteractiveEventBatch;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-interactive'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+
+    // Create session 1 (healthy)
+    await user.type(screen.getByTestId('session-task-prompt'), 'Healthy task');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-err-session-1')).toBeInTheDocument());
+
+    // Create session 2 (will fail polling)
+    await user.type(screen.getByTestId('session-task-prompt'), 'Failing task');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-err-session-2')).toBeInTheDocument());
+
+    // Switch to session 1 to verify it still has healthy output
+    await user.click(screen.getByTestId('session-item-err-session-1'));
+
+    await waitFor(() => {
+      const matches = screen.getAllByText(/Healthy output/);
+      expect(matches.length).toBeGreaterThan(0);
+    });
+
+    // Session 2 has a poll error indicator on its lane card
+    await waitFor(() => {
+      expect(screen.getByTestId('lane-error-err-session-2')).toBeInTheDocument();
+    });
+  });
+});
