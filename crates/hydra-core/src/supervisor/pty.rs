@@ -206,7 +206,7 @@ impl PtySession {
             }
         };
 
-        let Some(mut reader) = reader else {
+        let Some(reader) = reader else {
             let _ = event_tx
                 .send(PtyEvent::Failed {
                     error: "failed to clone PTY reader".to_string(),
@@ -216,29 +216,25 @@ impl PtySession {
             *status.lock().await = PtySessionStatus::Failed {
                 error: "failed to clone PTY reader".to_string(),
             };
+            Self::cleanup(&inner).await;
             return;
         };
 
         let (output_tx, mut output_rx) = mpsc::channel::<Result<Vec<u8>, String>>(256);
+        spawn_reader_thread(reader, output_tx);
 
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if output_tx.blocking_send(Ok(buf[..n].to_vec())).is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        let _ = output_tx.blocking_send(Err(e.to_string()));
-                        break;
-                    }
-                }
-            }
-        });
+        Self::run_loop_with_output(inner, status, stop_notify, event_tx, &mut output_rx, start)
+            .await;
+    }
 
+    async fn run_loop_with_output(
+        inner: Arc<Mutex<Option<PtyInner>>>,
+        status: Arc<Mutex<PtySessionStatus>>,
+        stop_notify: Arc<Notify>,
+        event_tx: mpsc::Sender<PtyEvent>,
+        output_rx: &mut mpsc::Receiver<Result<Vec<u8>, String>>,
+        start: Instant,
+    ) {
         let final_status;
 
         loop {
@@ -345,6 +341,29 @@ fn terminate_child_with_retry(child: &mut (dyn Child + Send)) -> Option<u32> {
     wait_for_child_exit_with_retry(child, CHILD_EXIT_POLL_ATTEMPTS)
 }
 
+fn spawn_reader_thread(
+    mut reader: Box<dyn Read + Send>,
+    output_tx: mpsc::Sender<Result<Vec<u8>, String>>,
+) {
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if output_tx.blocking_send(Ok(buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = output_tx.blocking_send(Err(e.to_string()));
+                    break;
+                }
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,6 +420,36 @@ mod tests {
             cwd: std::env::temp_dir(),
             initial_cols: 80,
             initial_rows: 24,
+        }
+    }
+
+    fn spawn_test_inner(config: PtySessionConfig) -> PtyInner {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: config.initial_rows,
+                cols: config.initial_cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty for test");
+
+        let mut cmd = CommandBuilder::new(&config.program);
+        cmd.args(&config.args);
+        cmd.cwd(&config.cwd);
+        for (key, val) in &config.env {
+            cmd.env(key, val);
+        }
+
+        let child = pair.slave.spawn_command(cmd).expect("spawn child for test");
+        drop(pair.slave);
+
+        let writer = pair.master.take_writer().expect("take PTY writer for test");
+
+        PtyInner {
+            master: pair.master,
+            writer,
+            child,
         }
     }
 
@@ -605,5 +654,56 @@ mod tests {
         }
 
         assert_eq!(session.status().await, PtySessionStatus::Stopped);
+    }
+
+    #[tokio::test]
+    async fn pty_reader_io_failure_emits_failed_and_cleans_up() {
+        let inner = Arc::new(Mutex::new(Some(spawn_test_inner(test_sleep_config(60)))));
+        let status = Arc::new(Mutex::new(PtySessionStatus::Running));
+        let stop_notify = Arc::new(Notify::new());
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+        let (output_tx, mut output_rx) = mpsc::channel(16);
+
+        output_tx
+            .send(Err("synthetic reader failure".to_string()))
+            .await
+            .expect("send synthetic failure");
+        drop(output_tx);
+
+        PtySession::run_loop_with_output(
+            Arc::clone(&inner),
+            Arc::clone(&status),
+            stop_notify,
+            event_tx,
+            &mut output_rx,
+            Instant::now(),
+        )
+        .await;
+
+        let mut saw_failed = false;
+        while let Some(event) = event_rx.recv().await {
+            if let PtyEvent::Failed { error, .. } = event {
+                assert!(
+                    error.contains("synthetic reader failure"),
+                    "failed event should preserve read error context"
+                );
+                saw_failed = true;
+                break;
+            }
+        }
+
+        assert!(
+            saw_failed,
+            "reader I/O failure should emit PtyEvent::Failed"
+        );
+        let session_status = status.lock().await.clone();
+        assert!(matches!(
+            session_status,
+            PtySessionStatus::Failed { ref error } if error.contains("synthetic reader failure")
+        ));
+        assert!(
+            inner.lock().await.is_none(),
+            "run loop should clean up PTY resources on reader failure"
+        );
     }
 }

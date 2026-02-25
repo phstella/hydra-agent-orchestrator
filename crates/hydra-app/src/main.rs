@@ -30,9 +30,20 @@ fn main() {
         .on_window_event(move |_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 let handle = interactive_handle.clone();
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(handle.shutdown_all());
+                let completed = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(
+                        hydra_app::shutdown_all_with_timeout(
+                            &handle,
+                            hydra_app::INTERACTIVE_SHUTDOWN_TIMEOUT,
+                        ),
+                    )
                 });
+                if !completed {
+                    tracing::warn!(
+                        timeout_secs = hydra_app::INTERACTIVE_SHUTDOWN_TIMEOUT.as_secs(),
+                        "interactive shutdown timed out on window destroy"
+                    );
+                }
             }
         })
         .run(tauri::generate_context!())

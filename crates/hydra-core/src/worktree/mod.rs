@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use thiserror::Error;
-use tokio::process::Command;
 use uuid::Uuid;
 
+use crate::git_exec::{run_git_program_with_timeout, GitCommandOutput, GitExecError};
 use crate::git_ref::{validate_agent_key, validate_branch_name};
 
 #[derive(Debug, Error)]
@@ -54,6 +55,8 @@ pub struct WorktreeEntry {
 pub struct WorktreeService {
     repo_root: PathBuf,
     base_dir: PathBuf,
+    git_program: String,
+    git_timeout: Duration,
 }
 
 impl WorktreeService {
@@ -61,7 +64,37 @@ impl WorktreeService {
         Self {
             repo_root,
             base_dir,
+            git_program: "git".to_string(),
+            git_timeout: crate::git_exec::DEFAULT_GIT_COMMAND_TIMEOUT,
         }
+    }
+
+    #[cfg(test)]
+    fn with_git_program_and_timeout(
+        repo_root: PathBuf,
+        base_dir: PathBuf,
+        git_program: String,
+        git_timeout: Duration,
+    ) -> Self {
+        Self {
+            repo_root,
+            base_dir,
+            git_program,
+            git_timeout,
+        }
+    }
+
+    async fn run_git_raw(&self, args: &[&str]) -> Result<GitCommandOutput, GitExecError> {
+        run_git_program_with_timeout(&self.git_program, args, &self.repo_root, self.git_timeout)
+            .await
+    }
+
+    async fn run_git(&self, args: &[&str]) -> Result<GitCommandOutput, WorktreeError> {
+        self.run_git_raw(args)
+            .await
+            .map_err(|e| WorktreeError::GitFailed {
+                detail: e.to_string(),
+            })
     }
 
     /// Create a new worktree for an agent run.
@@ -96,25 +129,9 @@ impl WorktreeService {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let output = Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                "-b",
-                &branch,
-                &wt_path.display().to_string(),
-                base_ref,
-            ])
-            .current_dir(&self.repo_root)
-            .output()
+        let wt_path_str = wt_path.display().to_string();
+        self.run_git(&["worktree", "add", "-b", &branch, &wt_path_str, base_ref])
             .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(WorktreeError::GitFailed {
-                detail: stderr.trim().to_string(),
-            });
-        }
 
         tracing::info!(
             run_id = %run_id,
@@ -134,21 +151,8 @@ impl WorktreeService {
 
     /// List all worktrees known to git in this repo.
     pub async fn list(&self) -> Result<Vec<WorktreeEntry>, WorktreeError> {
-        let output = Command::new("git")
-            .args(["worktree", "list", "--porcelain"])
-            .current_dir(&self.repo_root)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(WorktreeError::GitFailed {
-                detail: stderr.trim().to_string(),
-            });
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(parse_worktree_list_porcelain(&stdout))
+        let output = self.run_git(&["worktree", "list", "--porcelain"]).await?;
+        Ok(parse_worktree_list_porcelain(&output.stdout))
     }
 
     /// Remove a worktree by path. Cleans up both the directory and the git reference.
@@ -166,18 +170,7 @@ impl WorktreeService {
         let wt_str = wt_path.display().to_string();
         args.push(&wt_str);
 
-        let output = Command::new("git")
-            .args(&args)
-            .current_dir(&self.repo_root)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(WorktreeError::GitFailed {
-                detail: stderr.trim().to_string(),
-            });
-        }
+        self.run_git(&args).await?;
 
         tracing::info!(path = %wt_path.display(), "removed worktree");
         Ok(())
@@ -203,32 +196,15 @@ impl WorktreeService {
                         .push("worktree directory still exists after removal attempt".to_string());
                 }
 
-                match Command::new("git")
-                    .args(["worktree", "prune"])
-                    .current_dir(&self.repo_root)
-                    .output()
-                    .await
-                {
-                    Ok(output) if !output.status.success() => {
-                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                        failures.push(format!("git worktree prune failed: {stderr}"));
-                    }
-                    Err(err) => {
-                        failures.push(format!("failed to run git worktree prune: {err}"));
-                    }
-                    _ => {}
+                if let Err(err) = self.run_git_raw(&["worktree", "prune"]).await {
+                    failures.push(format!("git worktree prune failed: {err}"));
                 }
             }
         }
 
-        match Command::new("git")
-            .args(["branch", "-D", &info.branch])
-            .current_dir(&self.repo_root)
-            .output()
-            .await
-        {
-            Ok(output) if !output.status.success() => {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        match self.run_git_raw(&["branch", "-D", &info.branch]).await {
+            Err(GitExecError::NonZeroExit { stderr, .. }) => {
+                let stderr = stderr.trim().to_string();
                 // Treat already-deleted branches as success for idempotent cleanup.
                 if !stderr.contains("not found") {
                     failures.push(format!("git branch -D {} failed: {stderr}", info.branch));
@@ -240,7 +216,7 @@ impl WorktreeService {
                     info.branch
                 ));
             }
-            _ => {}
+            Ok(_) => {}
         }
 
         if !failures.is_empty() {
@@ -297,6 +273,7 @@ fn parse_worktree_list_porcelain(output: &str) -> Vec<WorktreeEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn init_test_repo(dir: &Path) {
@@ -327,6 +304,14 @@ mod tests {
             .current_dir(dir)
             .output()
             .unwrap();
+    }
+
+    #[cfg(unix)]
+    fn set_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
     }
 
     #[test]
@@ -477,5 +462,32 @@ bare
 
         let result = svc.create(run_id, "../bad", "HEAD").await;
         assert!(matches!(result, Err(WorktreeError::InvalidAgentKey { .. })));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_surfaces_git_timeout_error() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_test_repo(&repo);
+
+        let fake_git = tmp.path().join("fake-git.sh");
+        std::fs::write(&fake_git, "#!/bin/sh\nsleep 2\n").unwrap();
+        set_executable(&fake_git);
+
+        let svc = WorktreeService::with_git_program_and_timeout(
+            repo,
+            tmp.path().join("worktrees"),
+            fake_git.to_string_lossy().to_string(),
+            Duration::from_millis(50),
+        );
+
+        let err = svc.list().await.expect_err("fake git should time out");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("timed out"),
+            "timeout error should be surfaced to caller: {msg}"
+        );
     }
 }

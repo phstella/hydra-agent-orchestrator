@@ -180,6 +180,7 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
 
     let shared_budget = Arc::new(SharedBudgetState::default());
     let mut join_set = JoinSet::new();
+    let mut task_agents: HashMap<tokio::task::Id, String> = HashMap::new();
 
     for (adapter, wt_info) in adapters.iter().zip(worktrees.iter()) {
         run_event_writer.write_event(&RunEvent::new(
@@ -204,8 +205,9 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
         let shared_budget = Arc::clone(&shared_budget);
         let budget = config.scoring.budget.clone();
 
-        join_set.spawn(async move {
-            let agent_key = adapter.key().to_string();
+        let task_agent_key = adapter.key().to_string();
+        let task_agent_key_map = task_agent_key.clone();
+        let abort_handle = join_set.spawn(async move {
             let start = Instant::now();
             let run_ctx = SingleAgentRunCtx {
                 prompt: &prompt,
@@ -220,22 +222,52 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
             };
             let result = run_single_agent(adapter, run_ctx).await;
             let duration = start.elapsed();
-            (agent_key, result, duration)
+            (task_agent_key, result, duration)
         });
+        task_agents.insert(abort_handle.id(), task_agent_key_map);
     }
 
     let mut results: Vec<(String, Result<AgentRunResult>, Duration)> = Vec::new();
-    while let Some(join_result) = join_set.join_next().await {
+    let mut task_panics: Vec<serde_json::Value> = Vec::new();
+    while let Some(join_result) = join_set.join_next_with_id().await {
         match join_result {
-            Ok(tuple) => results.push(tuple),
+            Ok((task_id, tuple)) => {
+                task_agents.remove(&task_id);
+                results.push(tuple);
+            }
             Err(e) => {
-                tracing::error!(error = %e, "agent task panicked");
+                let task_id = e.id();
+                let agent_key = task_agents
+                    .remove(&task_id)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let panic_context = if e.is_panic() {
+                    format!("panic in task id {task_id}: {e}")
+                } else if e.is_cancelled() {
+                    format!("task id {task_id} was cancelled: {e}")
+                } else {
+                    e.to_string()
+                };
+
+                tracing::error!(
+                    agent = %agent_key,
+                    error = %panic_context,
+                    "agent task join failure"
+                );
+                task_panics.push(serde_json::json!({
+                    "agent": agent_key.clone(),
+                    "task_id": format!("{task_id}"),
+                    "error": panic_context.clone(),
+                }));
+                results.push((
+                    agent_key,
+                    Err(anyhow::anyhow!("agent task join failure: {panic_context}")),
+                    Duration::default(),
+                ));
             }
         }
     }
 
     let mut any_completed = false;
-    let mut overall_status = RunStatus::Failed;
 
     for (agent_key, result, _duration) in &results {
         let (status, error, usage_status, usage_total_tokens, usage_cost) = match result {
@@ -275,13 +307,6 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
         }
     }
 
-    if any_completed {
-        overall_status = RunStatus::Completed;
-    }
-    if shared_budget.should_stop() && !any_completed {
-        overall_status = RunStatus::Interrupted;
-    }
-
     let mut durations: HashMap<String, Duration> = HashMap::new();
     for (agent_key, _, duration) in &results {
         durations.insert(agent_key.clone(), *duration);
@@ -319,9 +344,12 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
         }),
     ))?;
 
-    if scoring_error.is_some() {
-        overall_status = RunStatus::Failed;
-    }
+    let overall_status = determine_overall_status(
+        any_completed,
+        shared_budget.should_stop(),
+        !task_panics.is_empty(),
+        scoring_error.is_some(),
+    );
 
     let score_map: HashMap<String, AgentScore> = ranked_scores
         .iter()
@@ -394,6 +422,7 @@ pub async fn run_race(opts: RaceOpts) -> Result<()> {
         serde_json::json!({
             "status": format!("{overall_status:?}"),
             "budget_stop_reason": budget_reason,
+            "task_panics": task_panics,
         }),
     ))?;
 
@@ -1197,6 +1226,23 @@ fn should_cleanup_worktree(retain: RetentionPolicy, status: &RunStatus) -> bool 
     }
 }
 
+fn determine_overall_status(
+    any_completed: bool,
+    budget_stop_triggered: bool,
+    had_task_panics: bool,
+    scoring_failed: bool,
+) -> RunStatus {
+    if had_task_panics || scoring_failed {
+        RunStatus::Failed
+    } else if any_completed {
+        RunStatus::Completed
+    } else if budget_stop_triggered {
+        RunStatus::Interrupted
+    } else {
+        RunStatus::Failed
+    }
+}
+
 fn normalize_requested_agents(requested: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -1361,6 +1407,17 @@ mod tests {
         ];
         let normalized = normalize_requested_agents(&input);
         assert_eq!(normalized, vec!["claude", "codex"]);
+    }
+
+    #[test]
+    fn overall_status_fails_when_any_task_panics() {
+        let status = determine_overall_status(
+            true,  // at least one agent completed
+            false, // budget stop not triggered
+            true,  // another agent panicked
+            false, // scoring succeeded
+        );
+        assert_eq!(status, RunStatus::Failed);
     }
 
     #[tokio::test]

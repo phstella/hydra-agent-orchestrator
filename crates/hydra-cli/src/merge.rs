@@ -454,6 +454,10 @@ fn run_real_patch_merge(
 
 fn write_merge_report(layout: &RunLayout, report: &MergeReport) -> Result<(PathBuf, String)> {
     let report_path = layout.base_dir().join("merge_report.json");
+    if let Some(parent) = report_path.parent() {
+        std::fs::create_dir_all(parent)
+            .context("failed to create merge report parent directory")?;
+    }
     let report_json =
         serde_json::to_string_pretty(report).context("failed to serialize merge report")?;
     std::fs::write(&report_path, &report_json).context("failed to write merge report")?;
@@ -632,11 +636,13 @@ mod tests {
     use std::fs;
     use std::process::Command;
 
+    use hydra_core::artifact::RunLayout;
     use tempfile::tempdir;
+    use uuid::Uuid;
 
     use super::{
         check_clean_working_tree, is_hydra_artifact_path, parse_porcelain_path,
-        validate_merge_inputs,
+        validate_merge_inputs, write_merge_report, MergeReport,
     };
 
     #[test]
@@ -695,5 +701,28 @@ mod tests {
         let err = validate_merge_inputs("claude", "hydra/run/agent/../claude")
             .expect_err("invalid branch should fail");
         assert!(err.to_string().contains("invalid branch name"));
+    }
+
+    #[test]
+    fn write_merge_report_creates_missing_parent_dirs() {
+        let temp = tempdir().expect("tempdir");
+        let layout = RunLayout::new(&temp.path().join(".hydra"), Uuid::new_v4());
+        let report = MergeReport {
+            agent: "claude".to_string(),
+            branch: "hydra/run/agent/claude".to_string(),
+            dry_run: true,
+            success: true,
+            has_conflicts: false,
+            stdout: String::new(),
+            stderr: String::new(),
+            source: "branch".to_string(),
+        };
+
+        let (path, json) = write_merge_report(&layout, &report).expect("write report");
+        assert!(path.exists(), "merge report should be written");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("written report should be valid JSON");
+        assert_eq!(parsed["agent"], "claude");
     }
 }

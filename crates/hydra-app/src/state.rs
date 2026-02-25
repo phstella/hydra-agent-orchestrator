@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
 use hydra_core::adapter::{AdapterRegistry, ProbeReport, ProbeRunner};
@@ -12,6 +14,8 @@ use crate::ipc_types::{AgentStreamEvent, InteractiveStreamEvent, RaceResult};
 const EVENT_CHANNEL_CAPACITY: usize = 4096;
 const MAX_STORED_EVENTS_PER_RUN: usize = 10_000;
 const MAX_INTERACTIVE_EVENTS: usize = 50_000;
+const MAX_INTERACTIVE_EVENT_TEXT_BYTES: usize = 64 * 1024;
+pub const INTERACTIVE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct RaceRuntime {
@@ -190,7 +194,7 @@ impl InteractiveStateHandle {
             session_id: session_id.to_string(),
             agent_key,
             event_type: "user_input".to_string(),
-            data: serde_json::json!({ "input": input_text }),
+            data: interactive_text_payload("input", data),
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
         self.append_event(session_id, event).await;
@@ -299,6 +303,33 @@ impl InteractiveStateHandle {
     }
 }
 
+async fn completes_within_timeout<F>(future: F, timeout: Duration) -> bool
+where
+    F: Future<Output = ()>,
+{
+    tokio::time::timeout(timeout, future).await.is_ok()
+}
+
+pub async fn shutdown_all_with_timeout(state: &InteractiveStateHandle, timeout: Duration) -> bool {
+    completes_within_timeout(state.shutdown_all(), timeout).await
+}
+
+fn interactive_text_payload(field_name: &str, data: &[u8]) -> serde_json::Value {
+    let original_bytes = data.len();
+    let kept_bytes = original_bytes.min(MAX_INTERACTIVE_EVENT_TEXT_BYTES);
+    let text = String::from_utf8_lossy(&data[..kept_bytes]).to_string();
+    if original_bytes > MAX_INTERACTIVE_EVENT_TEXT_BYTES {
+        serde_json::json!({
+            field_name: text,
+            "truncated": true,
+            "originalBytes": original_bytes as u64,
+            "keptBytes": kept_bytes as u64,
+        })
+    } else {
+        serde_json::json!({ field_name: text })
+    }
+}
+
 /// Spawn a background task that reads PTY events and forwards them to the session registry.
 pub fn spawn_pty_event_bridge(
     session_id: String,
@@ -312,8 +343,6 @@ pub fn spawn_pty_event_bridge(
             let (event_type, data) = match &evt {
                 PtyEvent::Started => ("session_started".to_string(), serde_json::json!({})),
                 PtyEvent::Output(bytes) => {
-                    let text = String::from_utf8_lossy(bytes);
-
                     let writer = {
                         let mut sessions = state.sessions.lock().await;
                         sessions
@@ -325,7 +354,10 @@ pub fn spawn_pty_event_bridge(
                         let _ = writer.record_output(bytes);
                     }
 
-                    ("output".to_string(), serde_json::json!({ "text": text }))
+                    (
+                        "output".to_string(),
+                        interactive_text_payload("text", bytes),
+                    )
                 }
                 PtyEvent::Completed {
                     exit_code,
@@ -813,6 +845,56 @@ mod tests {
         assert_eq!(back.events.len(), 1);
         assert_eq!(back.next_cursor, 1);
         assert!(!back.done);
+    }
+
+    #[test]
+    fn interactive_text_payload_truncates_oversized_events() {
+        let payload =
+            interactive_text_payload("text", &vec![b'x'; MAX_INTERACTIVE_EVENT_TEXT_BYTES + 32]);
+        assert_eq!(payload["truncated"], true);
+        assert_eq!(
+            payload["originalBytes"].as_u64(),
+            Some((MAX_INTERACTIVE_EVENT_TEXT_BYTES + 32) as u64)
+        );
+        assert_eq!(
+            payload["keptBytes"].as_u64(),
+            Some(MAX_INTERACTIVE_EVENT_TEXT_BYTES as u64)
+        );
+        assert_eq!(
+            payload["text"].as_str().map(|s| s.len()),
+            Some(MAX_INTERACTIVE_EVENT_TEXT_BYTES)
+        );
+    }
+
+    #[test]
+    fn interactive_text_payload_keeps_small_events_unchanged() {
+        let payload = interactive_text_payload("text", b"hello");
+        assert_eq!(payload["text"], "hello");
+        assert!(payload.get("truncated").is_none());
+        assert!(payload.get("originalBytes").is_none());
+        assert!(payload.get("keptBytes").is_none());
+    }
+
+    #[tokio::test]
+    async fn completes_within_timeout_reports_completion_and_timeout() {
+        assert!(
+            completes_within_timeout(async {}, Duration::from_millis(20)).await,
+            "immediate future should complete within timeout"
+        );
+        assert!(
+            !completes_within_timeout(
+                tokio::time::sleep(Duration::from_millis(80)),
+                Duration::from_millis(10)
+            )
+            .await,
+            "slow future should hit timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_with_timeout_completes_for_idle_state() {
+        let state = new_interactive_state();
+        assert!(shutdown_all_with_timeout(&state, Duration::from_millis(20)).await);
     }
 
     #[tokio::test]
