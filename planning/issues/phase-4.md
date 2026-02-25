@@ -1,12 +1,16 @@
 # Phase 4 Tickets (Interactive Session Mode) Issue Bodies
 
-Last updated: 2026-02-23
+Last updated: 2026-02-25
 
 Generated from `planning/implementation-checklist.md`.
+Local-first execution is tracked in `planning/m4.7-local-execution-pack.md`;
+this file is optional sync output only.
 
 Global label prefix: `hydra`
 
-Implementation guide: `planning/p4-interactive-session-implementation-guide.md`
+Implementation guides:
+- `planning/p4-interactive-session-implementation-guide.md`
+- `planning/p4-race-cockpit-convergence-implementation-guide.md`
 
 ## [M4.1] PTY Supervisor Path for Interactive Sessions
 
@@ -225,7 +229,62 @@ Long-term analytics dashboard; transcript semantic search.
 ```
 
 
+## [M4.7] Unified Race Cockpit UX Convergence (Pre-Phase 5 Gate)
+
+- Phase: Phase 4 Tickets (Interactive Session Mode)
+- Labels: hydra, phase-4, area-ui, type-feature
+- Estimate: L
+- Dependencies: M3.5, M4.4, M4.6
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+The GUI currently requires context switching between separate tabs (`Race`, `Results`, `Review`, `Interactive`) to complete one end-to-end operator workflow. The target UX is a single cockpit where launch, live monitoring, intervention, and winner decision happen in one place. If we start Phase 5 workflows before converging the cockpit IA, we will likely rework major UI state surfaces twice.
+
+## Scope
+Build a unified race cockpit shell aligned with the target dashboard mock:
+
+- persistent left tool rail and top status strip
+- center workspace for race configuration and focused live terminal output
+- right leaderboard/status rail with per-agent lifecycle and score signals
+- inline intervention controls for the selected running agent
+- completion summary with direct transition to diff review/merge flow
+
+Reuse existing backend IPC/runtime contracts where possible; focus on UI/state composition and streaming UX quality.
+
+## Acceptance Criteria
+- [ ] Cockpit is the default execution surface and renders a stable 3-column layout (left nav rail, center workspace, right leaderboard).
+- [ ] Race launch is available in cockpit center and uses configured workspace settings.
+- [ ] Right leaderboard updates live for per-agent status, score snapshot, and elapsed runtime.
+- [ ] Selecting an agent card switches center terminal focus without losing buffered stream context.
+- [ ] Mid-flight input and stop/interrupt controls are available inline for selected running agent.
+- [ ] Error states (launch failure, timeout, transport, parse) are visible in leaderboard + terminal header with actionable messaging.
+- [ ] Completion summary shows winner + mergeability and offers one-click transition to detailed diff review.
+- [ ] Large output streams remain responsive (bounded/tail buffering + stable auto-scroll behavior).
+- [ ] New smoke tests cover cockpit render, race start, live leaderboard updates, focus switching, intervention path, and completion summary.
+- [ ] Existing race/review/interactive tests remain green with no IPC contract regressions.
+- [ ] New frontend code remains design-token compliant (no hardcoded hex colors).
+
+## Out of Scope
+Phase 5 workflow DAG/presets, multi-user collaboration, websocket transport migration, visual workflow editor.
+
+## Dependencies
+- M3.5, M4.4, M4.6
+
+## Notes
+- Tier-1 launch adapters are claude and codex.
+- Experimental adapters require explicit opt-in.
+- This milestone is a pre-Phase-5 UX convergence gate.
+
+## Implementation Reference
+- `planning/p4-race-cockpit-convergence-implementation-guide.md` (`M4.7`)
+- `planning/m4.7-local-execution-pack.md` (`M4.7` local tracking)
+- `planning/m4.7-desktop-ui-contract.md` (`M4.7` desktop behavior)
+```
+
+
 ## Coverage Check
 
-- Total issues generated: 6
-- Expected range: `M4.1` through `M4.6`
+- Total issues generated: 7
+- Expected range: `M4.1` through `M4.7`

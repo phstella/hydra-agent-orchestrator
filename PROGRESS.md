@@ -1,13 +1,13 @@
 # Hydra Progress Tracker
 
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 
 ## Current State
 
 - **Phase**: 4 **complete** (Interactive Session Mode)
 - **Milestone**: M4.1 + M4.2 + M4.3 + M4.4 + M4.5 + M4.6 complete (PTY supervisor, interactive session runtime/IPC, interactive UI shell + terminal panel, mid-flight intervention controls, interactive safety and capability gating, transcript artifacts and E2E tests). Phase 3 functionally complete (M3.1 partial — Linux packaging smoke pending).
-- **Sprint**: Phase 4 complete. Next: Phase 5 (Collaboration Workflows) or Phase 6 (Windows Parity + Hardening).
-- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1–M4.6 are now implemented. M4.6 adds interactive session artifact persistence (session.json, events.jsonl, transcript.ansi.log, summary.json) under `.hydra/sessions/<session_id>/`, secret redaction on all persisted artifacts, and comprehensive integration tests for artifact lifecycle. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean with 271 tests total (`hydra-core`: 240 unit + 12 integration, `hydra-cli`: 19 tests). `hydra-app` passes with 49 Rust tests. Frontend: 26 Vitest smoke tests. All lint and type checks pass.
+- **Sprint**: Pre-Phase-5 convergence planning and local execution setup. `M4.7` (Unified Race Cockpit UX Convergence) is defined as the gate before Phase 5 implementation.
+- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1–M4.6 are implemented. `M4.7` is planned as a desktop-first cockpit convergence milestone with local-only execution tracking (`planning/m4.7-local-execution-pack.md`) before Collaboration Workflows start. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean with 271 tests total (`hydra-core`: 240 unit + 12 integration, `hydra-cli`: 19 tests). `hydra-app` passes with 49 Rust tests. Frontend: 27 Vitest smoke tests. All lint and type checks pass.
 
 ## Completed Milestones
 
@@ -59,6 +59,7 @@ Last updated: 2026-02-24
 
 ## In-Progress Work
 - Phase 3 closure: M3.1 acceptance criterion #3 (Linux packaging smoke evidence in published CI) still pending.
+- Phase 4 bridge planning: `M4.7` (Unified Race Cockpit UX Convergence) added as pre-Phase-5 gate with desktop-first viewport policy and local execution pack.
 
 ## Phase 3 Reconciliation (M3.x -> P3)
 
@@ -161,7 +162,7 @@ Last updated: 2026-02-24
 |-------|--------|----------|-------|
 | hydra-core | Yes | Yes | 239 unit + 12 integration = 251 passing |
 | hydra-cli | Yes | Yes | 7 passing |
-| hydra-app | Yes | Requires system libs | 42 unit tests + 26 smoke tests (Vitest) |
+| hydra-app | Yes | Requires system libs | 42 unit tests + 27 smoke tests (Vitest) |
 
 ## Phase Progress
 
@@ -172,6 +173,7 @@ Last updated: 2026-02-24
 | 2 | Multi-Agent Race + Scoring | **Complete** | 12/12 |
 | 3 | GUI Alpha | **In Progress** | Original M3: 6/7 complete (M3.1 partial); Supplemental P3: 8/8 complete |
 | 4 | Interactive Session Mode (PTY) | **Complete** | 6/6 (M4.1, M4.2, M4.3, M4.4, M4.5, M4.6 complete) |
+| 4.7 | Cockpit Convergence Gate | Planned | 0/1 (`M4.7` defined as pre-Phase-5 UX gate) |
 | 5 | Collaboration Workflows | Not started | 0/6 |
 | 6 | Windows Parity + Hardening | Not started | 0/6 |
 
@@ -179,15 +181,17 @@ Last updated: 2026-02-24
 
 1. Read `CLAUDE.md` for project overview and conventions.
 2. Phase 0–2 are **complete**. Phase 3 supplemental tickets are **complete** (M3.1 partial — Linux packaging smoke pending).
-3. Phase 4 M4.1–M4.6 are **complete** — PTY supervisor, interactive session runtime/IPC, interactive UI shell + terminal panel, mid-flight intervention controls, interactive safety/capability gating, and transcript artifact persistence with E2E tests.
-4. Current baseline: `hydra-core` 251 passing (239 unit + 12 integration), `hydra-cli` 19 passing (via workspace), `hydra-app` 42 Rust unit tests + 26 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean.
+3. Phase 4 M4.1–M4.6 are **complete** and `M4.7` (Unified Race Cockpit UX Convergence) is now planned as the gate before Phase 5.
+4. Current baseline: `hydra-core` 251 passing (239 unit + 12 integration), `hydra-cli` 19 passing (via workspace), `hydra-app` 42 Rust unit tests + 27 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean.
 5. **System package requirement**: `hydra-app` needs `webkit2gtk-4.1` (`pacman -S webkit2gtk-4.1` on Arch). Without them, `cargo check/test -p hydra-app` fails at build-script stage.
-6. **Next priority**: Phase 5 (Collaboration Workflows) or Phase 6 (Windows Parity + Hardening).
-7. Key files added/modified for M4.6:
+6. **Next priority**: execute `M4.7` from `planning/m4.7-local-execution-pack.md` (desktop-first), then move to Phase 5 (Collaboration Workflows).
+7. GitHub issue creation is optional; implementation tracking is local-first for this cycle.
+8. For cockpit implementation details, use `planning/m4.7-desktop-ui-contract.md` and `planning/p4-race-cockpit-convergence-implementation-guide.md`.
+9. Key files added/modified for M4.6:
    - `crates/hydra-core/src/artifact/session.rs` — New module: `SessionLayout`, `SessionMetadata`, `SessionEvent`, `SessionEventWriter`, `SessionEventReader`, `TranscriptWriter`, `SessionSummary`, `SessionArtifactWriter`. 10 unit tests.
    - `crates/hydra-core/src/artifact/mod.rs` — Added `session` submodule and re-exports.
    - `crates/hydra-app/src/state.rs` — `InteractiveSessionRuntime` gained `artifact_writer: Option<SessionArtifactWriter>` field. `register_session` takes optional artifact writer. PTY event bridge records output to artifact writer. `stop_session`/`shutdown_all` finalize artifacts. `write_input` records user input to artifacts. 4 new integration tests.
    - `crates/hydra-app/src/commands.rs` — `start_interactive_session` initializes `SessionArtifactWriter` after PTY spawn. Graceful fallback on init failure.
-8. Interactive session artifacts are persisted under `.hydra/sessions/<session_id>/` with: `session.json` (metadata), `events.jsonl` (append-only event log), `transcript.ansi.log` (raw terminal output), `summary.json` (finalized session stats).
-9. Race-mode behavior is unchanged; all existing race/scoring/merge tests pass.
-10. Design system tokens are CSS custom properties in `tokens.css`. Feature components must NOT use hardcoded hex colors.
+10. Interactive session artifacts are persisted under `.hydra/sessions/<session_id>/` with: `session.json` (metadata), `events.jsonl` (append-only event log), `transcript.ansi.log` (raw terminal output), `summary.json` (finalized session stats).
+11. Race-mode behavior is unchanged; all existing race/scoring/merge tests pass.
+12. Design system tokens are CSS custom properties in `tokens.css`. Feature components must NOT use hardcoded hex colors.

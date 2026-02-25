@@ -1,6 +1,6 @@
 # Product Roadmap
 
-Last updated: 2026-02-23
+Last updated: 2026-02-25
 
 ## 1. Planning Assumptions
 
@@ -114,17 +114,25 @@ Deliverables:
 - mid-flight intervention controls (send prompt/input, interrupt, resume)
 - adapter capability and safety gating for interactive mode
 - transcript and session artifact persistence plus e2e coverage
+- **pre-Phase-5 convergence gate (M4.7)**: unified race cockpit shell that combines launch, live leaderboard, focused terminal stream, inline intervention, and review transition in one operator surface
+  - execution mode: local-first tracking
+  - viewport policy: desktop-first (`>=1280px` primary, `>=1024px` minimum)
+  - implementation references: `planning/m4.7-local-execution-pack.md`, `planning/m4.7-desktop-ui-contract.md`
 
 Exit criteria:
 - user can start interactive session and send input to a running agent
 - terminal rendering is human-readable with ANSI support and stable under load
 - interactive session artifacts persist and replay is available
 - race/scoring mode behavior remains unchanged and deterministic
+- cockpit UI removes mandatory cross-tab switching for the primary operator loop (launch -> monitor -> intervene -> select winner -> review)
 
 ## 9. Phase 5 (2-3 weeks): Collaboration Workflows
 
 Goal:
 - move beyond race mode into structured cooperation
+
+Entry gate:
+- `M4.7` cockpit convergence must be complete before Phase 5 implementation begins.
 
 Deliverables:
 - builder/reviewer/refiner preset
@@ -205,10 +213,12 @@ Pre-release checklist:
 3. Scoring outputs reproducible from saved artifacts.
 4. No known data-loss paths in cleanup/merge logic.
 
-## 15. Issue Tracking Note
+## 15. Execution Tracking Note
 
-- Milestone-to-ticket breakdown is maintained in `planning/implementation-checklist.md`.
-- Use milestone IDs (`M0.1`, `M1.1`, etc.) as canonical issue prefixes.
+- Milestone definitions are maintained in `planning/implementation-checklist.md`.
+- Active implementation tracking should use local execution packs/checklists in `planning/`.
+- Use milestone IDs (`M0.1`, `M1.1`, etc.) as canonical task prefixes in commits and local logs.
+- GitHub issue body files under `planning/issues/` are optional synchronization artifacts, not required for execution.
 
 ## 16. Resolved Roadmap Questions
 

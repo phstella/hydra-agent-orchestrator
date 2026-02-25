@@ -18,7 +18,8 @@ PROGRESS.md            <- living state file (update every session)
 research.md            <- research index and product summary
 docs/                  <- reference documentation (architecture, adapters, scoring, etc.)
 planning/              <- project management (roadmap, checklist, issues, sprints)
-  issues/              <- per-phase issue packs
+  issues/              <- optional per-phase issue packs (sync only)
+  *-local-*.md         <- local execution packs/checklists (primary execution tracking)
 instructions/          <- per-phase implementation guidance for agents
 ```
 
@@ -66,6 +67,7 @@ crates/
 
 `M<phase>.<sequence>` - e.g., `M0.1`, `M2.11`, `M6.6`.
 Use as commit prefix and issue title prefix.
+Use as local task/checklist prefix when operating without GitHub tickets.
 
 ## PROGRESS.md Protocol
 

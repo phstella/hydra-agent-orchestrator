@@ -3,17 +3,24 @@
 **Goal**: Move beyond race mode into structured multi-agent cooperation.
 
 **Duration estimate**: 2-3 weeks
+**Execution mode**: Local-first (use local execution packs; GitHub issue sync optional).
 
 ## Milestones
 
 | ID | Title | Estimate | Dependencies |
 |----|-------|----------|--------------|
-| M5.1 | Workflow Engine Core | M | M2.10 |
+| M5.1 | Workflow Engine Core | M | M2.10, M4.7 |
 | M5.2 | Builder-Reviewer-Refiner Preset | M | M5.1 |
 | M5.3 | Specialization Preset | M | M5.1 |
 | M5.4 | Iterative Refinement Preset | M | M5.1, M2.7 |
 | M5.5 | Workflow CLI and GUI Timeline | M | M5.2, M5.3, M5.4 |
 | M5.6 | Workflow Integration Tests | M | M5.2, M5.3, M5.4 |
+
+## Entry Gate
+
+Before starting Phase 5 implementation, complete `M4.7` (Unified Race Cockpit
+UX Convergence) to avoid reworking timeline/intervention surfaces during
+workflow UI integration.
 
 ## Parallelization
 
@@ -47,5 +54,6 @@ After M5.1 (workflow engine core), the three presets build in parallel:
 
 - Acceptance criteria: `planning/implementation-checklist.md` section 8
 - Workflow specifications: `docs/collaboration-workflows.md`
-- Issue bodies: `planning/issues/phase-5.md`
+- Local execution conventions: `planning/local-execution-conventions.md`
+- Issue bodies (optional sync only): `planning/issues/phase-5.md`
 - Detailed implementation contract: `planning/p5-collaboration-workflows-implementation-guide.md`
