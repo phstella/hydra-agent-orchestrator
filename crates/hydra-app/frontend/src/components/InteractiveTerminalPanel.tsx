@@ -1,7 +1,8 @@
-import { useEffect, useRef, useMemo } from 'react';
+import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import type { InteractiveStreamEvent } from '../types';
 import { Badge } from './design-system';
+import { XTermRenderer } from './XTermRenderer';
 
 interface InteractiveTerminalPanelProps {
   sessionId: string | null;
@@ -13,8 +14,6 @@ interface InteractiveTerminalPanelProps {
   transportError: string | null;
 }
 
-const VISIBLE_TAIL = 500;
-
 export function InteractiveTerminalPanel({
   sessionId,
   agentKey,
@@ -23,26 +22,11 @@ export function InteractiveTerminalPanel({
   events,
   transportError,
 }: InteractiveTerminalPanelProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const userScrolledUp = useRef(false);
-
-  const visibleEvents = useMemo(() => {
-    if (events.length <= VISIBLE_TAIL) return events;
-    return events.slice(events.length - VISIBLE_TAIL);
-  }, [events]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || userScrolledUp.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [visibleEvents]);
-
-  const handleScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    userScrolledUp.current = !atBottom;
-  };
+  // Extract raw text from events, preserving ANSI escape sequences.
+  const chunks = useMemo(
+    () => events.map(extractRawText).filter((t) => t.length > 0),
+    [events],
+  );
 
   const containerStyle: CSSProperties = {
     display: 'flex',
@@ -69,15 +53,13 @@ export function InteractiveTerminalPanel({
     color: sessionId ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
   };
 
-  const scrollAreaStyle: CSSProperties = {
+  const emptyAreaStyle: CSSProperties = {
     flex: 1,
     minHeight: 0,
-    overflowY: 'auto',
-    padding: 'var(--space-3)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'var(--color-bg-950)',
-    fontFamily: 'var(--font-mono)',
-    fontSize: 'var(--text-xs)',
-    lineHeight: 'var(--leading-relaxed)',
   };
 
   const statusVariant = status
@@ -90,27 +72,13 @@ export function InteractiveTerminalPanel({
       } as Record<string, 'info' | 'success' | 'danger' | 'warning'>)[status] ?? 'neutral'
     : undefined;
 
-  useEffect(() => {
-    userScrolledUp.current = false;
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [sessionId]);
-
   if (!sessionId) {
     return (
       <div style={containerStyle}>
         <div style={headerStyle}>
           <span style={titleStyle}>Terminal Output</span>
         </div>
-        <div
-          style={{
-            ...scrollAreaStyle,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
+        <div style={emptyAreaStyle}>
           <div
             style={{
               color: 'var(--color-text-muted)',
@@ -133,114 +101,55 @@ export function InteractiveTerminalPanel({
           {laneLabel ? `Terminal: ${laneLabel}` : agentKey ? `Terminal: ${agentKey}` : 'Terminal Output'}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          {events.length > VISIBLE_TAIL && (
-            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-              showing last {VISIBLE_TAIL} of {events.length}
-            </span>
-          )}
           {status && statusVariant && (
             <Badge variant={statusVariant as 'info' | 'success' | 'danger' | 'warning'} dot>{status}</Badge>
           )}
         </div>
       </div>
 
-      <div
-        ref={scrollRef}
-        style={scrollAreaStyle}
-        onScroll={handleScroll}
-        data-testid="terminal-output"
-      >
-        {transportError && (
-          <div
-            style={{
-              marginBottom: 'var(--space-2)',
-              padding: 'var(--space-2)',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: 'color-mix(in srgb, var(--color-warning-500) 12%, transparent)',
-              border: '1px solid var(--color-warning-500)',
-              color: 'var(--color-warning-400)',
-              fontSize: 'var(--text-xs)',
-            }}
-            data-testid="terminal-transport-error"
-          >
-            Connection issue: {transportError}. Retrying...
-          </div>
-        )}
-        {visibleEvents.length === 0 ? (
-          <div style={{ color: 'var(--color-text-muted)', padding: 'var(--space-4)' }}>
-            Waiting for output...
-          </div>
-        ) : (
-          visibleEvents.map((evt, idx) => (
-            <TerminalLine key={`${evt.timestamp}-${idx}`} event={evt} />
-          ))
-        )}
-      </div>
+      {transportError && (
+        <div
+          style={{
+            padding: 'var(--space-2) var(--space-4)',
+            backgroundColor: 'color-mix(in srgb, var(--color-warning-500) 12%, transparent)',
+            borderBottom: '1px solid var(--color-warning-500)',
+            color: 'var(--color-warning-400)',
+            fontSize: 'var(--text-xs)',
+            flexShrink: 0,
+          }}
+          data-testid="terminal-transport-error"
+        >
+          Connection issue: {transportError}. Retrying...
+        </div>
+      )}
+
+      <XTermRenderer
+        resetKey={sessionId}
+        chunks={chunks}
+      />
     </div>
   );
 }
 
-function TerminalLine({ event }: { event: InteractiveStreamEvent }) {
-  const text = extractText(event);
-  if (!text) return null;
-
-  const isInput = event.eventType === 'user_input';
-  const isSystem = event.eventType === 'session_started' ||
-    event.eventType === 'session_completed' ||
-    event.eventType === 'session_failed' ||
-    event.eventType === 'session_stopped';
-
-  const lineStyle: CSSProperties = {
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-all',
-    padding: '1px 0',
-    color: isInput
-      ? 'var(--color-marine-400)'
-      : isSystem
-        ? 'var(--color-text-muted)'
-        : 'var(--color-text-secondary)',
-  };
-
-  return (
-    <div style={lineStyle}>
-      {isInput && <span style={{ color: 'var(--color-marine-300)', marginRight: 'var(--space-1)' }}>▸ </span>}
-      {text}
-    </div>
-  );
-}
-
-function extractText(event: InteractiveStreamEvent): string {
+/**
+ * Extract raw text from an event, preserving ANSI escape sequences
+ * so the xterm.js renderer can interpret them with full fidelity.
+ */
+function extractRawText(event: InteractiveStreamEvent): string {
   if (!event.data || typeof event.data !== 'object') {
-    if (typeof event.data === 'string') return normalizeTerminalText(event.data);
+    if (typeof event.data === 'string') return event.data;
     return '';
   }
   const data = event.data as Record<string, unknown>;
-  if (typeof data.text === 'string') return normalizeTerminalText(data.text);
-  if (typeof data.line === 'string') return normalizeTerminalText(data.line);
-  if (typeof data.input === 'string') return normalizeTerminalText(data.input);
-  if (typeof data.message === 'string') return normalizeTerminalText(data.message);
-  if (event.eventType === 'session_started') return '--- Session started ---';
-  if (event.eventType === 'session_completed') return '--- Session completed ---';
-  if (event.eventType === 'session_failed') return '--- Session failed ---';
-  if (event.eventType === 'session_stopped') return '--- Session stopped ---';
+  if (typeof data.text === 'string') return data.text;
+  if (typeof data.line === 'string') return data.line;
+  if (typeof data.input === 'string') return data.input;
+  if (typeof data.message === 'string') return data.message;
+  if (event.eventType === 'session_started') return '\r\n--- Session started ---\r\n';
+  if (event.eventType === 'session_completed') return '\r\n--- Session completed ---\r\n';
+  if (event.eventType === 'session_failed') return '\r\n--- Session failed ---\r\n';
+  if (event.eventType === 'session_stopped') return '\r\n--- Session stopped ---\r\n';
   const keys = Object.keys(data);
   if (keys.length === 0) return '';
-  return normalizeTerminalText(JSON.stringify(data));
-}
-
-function normalizeTerminalText(raw: string): string {
-  if (!raw) return '';
-
-  const withoutOsc = raw.replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '');
-  const withoutCsi = withoutOsc.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
-  const normalizedCr = withoutCsi
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((line) => {
-      const lastCr = line.lastIndexOf('\r');
-      return lastCr >= 0 ? line.slice(lastCr + 1) : line;
-    })
-    .join('\n');
-
-  return normalizedCr.replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
+  return JSON.stringify(data);
 }

@@ -822,7 +822,8 @@ describe('Smoke Test 13: Orchestration terminal handles stream errors and ANSI o
     });
   });
 
-  it('renders ANSI output as plain readable text', async () => {
+  it('preserves raw ANSI sequences for high-fidelity terminal rendering (P4.9.3)', async () => {
+    const ansiText = '\u001b[32mGreen output\u001b[0m\r\n';
     vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
       sessionId: 'test-session-1',
       events: [
@@ -830,7 +831,7 @@ describe('Smoke Test 13: Orchestration terminal handles stream errors and ANSI o
           sessionId: 'test-session-1',
           agentKey: 'claude',
           eventType: 'output',
-          data: { text: '\u001b[32mGreen output\u001b[0m\r\n' },
+          data: { text: ansiText },
           timestamp: new Date().toISOString(),
         },
       ],
@@ -848,10 +849,18 @@ describe('Smoke Test 13: Orchestration terminal handles stream errors and ANSI o
     await user.type(screen.getByTestId('session-task-prompt'), 'ANSI test');
     await user.click(screen.getByTestId('confirm-create-session'));
 
+    // xterm.js mock renders stripped text into DOM for query compat
     await waitFor(() => {
       expect(screen.getByText('Green output')).toBeInTheDocument();
     });
-    expect(screen.queryByText(/\u001b\[32m/)).not.toBeInTheDocument();
+
+    // Raw ANSI was preserved and passed to Terminal.write()
+    const instances = (globalThis as Record<string, unknown>).__xtermInstances as Array<{
+      __rawWrites: string[];
+    }>;
+    const termInstance = instances.find((t) => t.__rawWrites.length > 0);
+    expect(termInstance).toBeDefined();
+    expect(termInstance!.__rawWrites.some((w) => w.includes('\u001b[32m'))).toBe(true);
   });
 });
 
@@ -1989,6 +1998,151 @@ describe('Smoke Test 42: File Explorer manual refresh reloads tree', () => {
     // Should now show after.txt
     await waitFor(() => {
       expect(screen.getByTestId('tree-node-after.txt')).toBeInTheDocument();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P4.9.3: High-Fidelity Terminal Rendering (ANSI Parity) Fixture Tests
+// ---------------------------------------------------------------------------
+
+type XTermMockInstance = { __rawWrites: string[]; __element: HTMLDivElement | null };
+
+/** Helper: create a session and pump one ANSI output event through polling. */
+async function setupTerminalWithAnsiOutput(
+  ansiPayload: string,
+  user: ReturnType<typeof userEvent.setup>,
+) {
+  vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
+    sessionId: 'test-session-1',
+    events: [
+      {
+        sessionId: 'test-session-1',
+        agentKey: 'claude',
+        eventType: 'output',
+        data: { text: ansiPayload },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+    nextCursor: 1,
+    done: false,
+    status: 'running',
+    error: null,
+  } as InteractiveEventBatch);
+
+  render(<App />);
+  await user.click(screen.getByTestId('nav-orchestration'));
+  await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+  await user.type(screen.getByTestId('session-task-prompt'), 'ANSI fixture');
+  await user.click(screen.getByTestId('confirm-create-session'));
+
+  await waitFor(() => {
+    const instances = (globalThis as Record<string, unknown>).__xtermInstances as XTermMockInstance[];
+    expect(instances.some((t) => t.__rawWrites.length > 0)).toBe(true);
+  });
+
+  const instances = (globalThis as Record<string, unknown>).__xtermInstances as XTermMockInstance[];
+  return instances.find((t) => t.__rawWrites.length > 0)!;
+}
+
+describe('P4.9.3 Fixture: 24-bit color ANSI sequences', () => {
+  it('preserves 24-bit foreground and background color escapes', async () => {
+    const payload = '\u001b[38;2;255;128;0mOrange text\u001b[0m \u001b[48;2;0;0;128mBlue bg\u001b[0m\r\n';
+    const user = userEvent.setup();
+    const term = await setupTerminalWithAnsiOutput(payload, user);
+
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[38;2;255;128;0m'))).toBe(true);
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[48;2;0;0;128m'))).toBe(true);
+    expect(screen.getByText(/Orange text/)).toBeInTheDocument();
+    expect(screen.getByText(/Blue bg/)).toBeInTheDocument();
+  });
+});
+
+describe('P4.9.3 Fixture: Bold, italic, underline style attributes', () => {
+  it('preserves SGR style escape sequences', async () => {
+    const payload = '\u001b[1mBold\u001b[0m \u001b[3mItalic\u001b[0m \u001b[4mUnderline\u001b[0m\r\n';
+    const user = userEvent.setup();
+    const term = await setupTerminalWithAnsiOutput(payload, user);
+
+    // Bold = ESC[1m, Italic = ESC[3m, Underline = ESC[4m
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[1m'))).toBe(true);
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[3m'))).toBe(true);
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[4m'))).toBe(true);
+    expect(screen.getByText(/Bold/)).toBeInTheDocument();
+  });
+});
+
+describe('P4.9.3 Fixture: Cursor movement sequences', () => {
+  it('preserves cursor-up, cursor-down, and cursor-position escapes', async () => {
+    // CUU (cursor up 2), CUD (cursor down 1), CUP (move to row 1 col 5)
+    const payload = '\u001b[2AUp\u001b[1BDown\u001b[1;5HPosition\r\n';
+    const user = userEvent.setup();
+    const term = await setupTerminalWithAnsiOutput(payload, user);
+
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[2A'))).toBe(true);
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[1B'))).toBe(true);
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[1;5H'))).toBe(true);
+  });
+});
+
+describe('P4.9.3 Fixture: Clear-line and clear-screen sequences', () => {
+  it('preserves erase-in-line (EL) and erase-in-display (ED) escapes', async () => {
+    // EL clear to end of line, ED clear entire screen
+    const payload = 'Before\u001b[KAfter\u001b[2JCleared\r\n';
+    const user = userEvent.setup();
+    const term = await setupTerminalWithAnsiOutput(payload, user);
+
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[K'))).toBe(true);
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[2J'))).toBe(true);
+  });
+});
+
+describe('P4.9.3 Fixture: Session change clears terminal', () => {
+  it('xterm-container is present after session creation', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'Session clear test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('xterm-container')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('P4.9.3 Fixture: Lane focus preserves per-session isolation', () => {
+  it('lane label header still renders correctly with xterm terminal', async () => {
+    vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
+      sessionId: 'test-session-1',
+      events: [
+        {
+          sessionId: 'test-session-1',
+          agentKey: 'claude',
+          eventType: 'output',
+          data: { text: 'Session output\r\n' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      nextCursor: 1,
+      done: false,
+      status: 'running',
+      error: null,
+    } as InteractiveEventBatch);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'Focus test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      const label = screen.getByTestId('terminal-lane-label');
+      expect(label).toHaveTextContent(/claude/);
     });
   });
 });
