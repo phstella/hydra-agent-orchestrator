@@ -1,6 +1,6 @@
-# Implementation Checklist (Issue-Ready)
+# Implementation Checklist (Execution-Ready)
 
-Last updated: 2026-02-23
+Last updated: 2026-02-25
 
 ## 1. Locked Product Decisions
 
@@ -9,7 +9,7 @@ Last updated: 2026-02-23
 3. Linux is release blocker for all core flows.
 4. Windows parity is required before v1 release candidate.
 
-## 2. Issue Template (Use For Every Ticket)
+## 2. Task Template (Use For Local Packs or Tickets)
 
 ```md
 Title: [M#.##] <short outcome-focused title>
@@ -29,6 +29,9 @@ Acceptance Criteria
 Out of Scope
 - Explicit non-goals for this ticket.
 ```
+
+Local-first note:
+- Use this template inside `planning/*-local-*.md` when not creating GitHub issues.
 
 ## 3. Phase 0 Tickets (Validation and Guardrails)
 
@@ -577,13 +580,42 @@ Out of Scope
 3. Existing race-mode tests remain green and behavior remains unchanged.
 - Out of Scope: long-term analytics dashboard; transcript semantic search.
 
+### M4.7 Unified Race Cockpit UX Convergence (Pre-Phase 5 Gate)
+
+- Labels: `phase-4`, `area-ui`, `type-feature`
+- Estimate: `L`
+- Dependencies: `M3.5`, `M4.4`, `M4.6`
+- Problem: The current GUI is functionally complete but fragmented across separate tabs (`Race`, `Results`, `Review`, `Interactive`). The target operating model is a single cockpit where launch, live monitoring, intervention, and winner decision happen in one place. Starting Phase 5 workflows on top of the current split IA would force avoidable UI/state rework.
+- Scope: Build a unified dashboard shell aligned with the target mock:
+  - persistent left tool rail and top status strip
+  - center workspace with race configuration + focused live terminal stream
+  - right leaderboard/status rail with per-agent lifecycle and score signals
+  - inline intervention controls for selected running agent
+  - completion summary with direct path to detailed review
+  - desktop-first viewport policy (`>=1280px` primary, `>=1024px` minimum for this milestone)
+  Reuse existing IPC/runtime contracts where possible; refactor UI composition and state wiring without regressing race determinism.
+- Acceptance Criteria:
+1. Dashboard renders as a persistent 3-column cockpit (left navigation rail, center workspace, right leaderboard rail) and becomes the default execution surface.
+2. Race configuration and launch happen from cockpit center; selected workspace is visible and linked to Settings.
+3. Right rail shows live per-agent lifecycle (`running/completed/failed/timed_out`), score snapshot, and elapsed time while race is active.
+4. Selecting an agent in the leaderboard switches terminal focus in under one polling cycle without losing buffered output.
+5. Mid-flight controls (send input + stop/interrupt) are available in cockpit context for the selected running agent.
+6. Error states (adapter launch failure, command parse failure, timeout, transport issues) are surfaced in both leaderboard and terminal context with actionable text.
+7. On race completion, cockpit shows winner/mergeability summary and offers one-click transition to diff review/merge panel.
+8. Streaming output remains responsive under large logs (bounded buffering, tail-windowing, stable auto-scroll behavior).
+9. Frontend smoke coverage includes cockpit shell render, race start, live leaderboard update, agent focus switch, intervention success/failure path, and completion summary.
+10. Existing Rust and frontend test suites remain green; no regression in race/review/interactive contracts.
+11. New UI code remains design-token compliant (no hardcoded hex colors; existing theme variables only).
+- Out of Scope: Phase 5 workflow DAG/presets, multi-user collaboration, websocket transport migration, visual workflow editor.
+- Execution Note: Use `planning/m4.7-local-execution-pack.md` as the primary task tracker for M4.7; `planning/issues/phase-4.md` is optional sync output only.
+
 ## 8. Phase 5 Tickets (Collaboration Workflows)
 
 ### M5.1 Workflow Engine Core
 
 - Labels: `phase-5`, `area-workflow`, `type-feature`
 - Estimate: `M`
-- Dependencies: `M2.10`
+- Dependencies: `M2.10`, `M4.7`
 - Problem: Race mode only supports independent parallel execution. Structured cooperation patterns (builder/reviewer, specialization, iterative refinement) require a DAG-based workflow engine that manages step execution, artifact passing, and conditional branching.
 - Scope: Implement a DAG step executor that runs workflow nodes sequentially or in parallel based on graph structure. Support artifact passing between nodes via immutable artifact IDs. Honor per-node timeout and retry policies. Persist workflow run summary.
 - Acceptance Criteria:
