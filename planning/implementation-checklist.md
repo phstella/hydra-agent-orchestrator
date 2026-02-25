@@ -632,13 +632,87 @@ Local-first note:
 - Out of Scope: workflow DAG/presets, cross-agent artifact handoff, auto-merge, multi-user collaboration.
 - Execution Note: This milestone explicitly treats interactive orchestration and race orchestration as separate feature tracks. Use `planning/m4.8-interactive-orchestration-pack.md` as the primary tracker, `planning/p4-interactive-orchestration-console-implementation-guide.md` as the implementation contract, and `planning/m4.8-interactive-desktop-ui-contract.md` as the desktop behavior contract; `planning/issues/phase-4.md` remains optional sync output.
 
+### P4.9.1 Orchestration IA Rename and Default Landing
+
+- Labels: `phase-4`, `area-ui`, `type-feature`
+- Estimate: `M`
+- Dependencies: `M4.8`
+- Problem: The product still exposes the legacy `Interactive` naming and defaults to race cockpit, which conflicts with the updated UX goal: orchestration-first operation and parity with terminal-native coding workflows.
+- Scope: Rename user-facing `Interactive` navigation/surfaces to `Orchestration`, update route/view identifiers and tests, and make `Orchestration` the always-on default landing view at app startup.
+- Acceptance Criteria:
+1. App opens in `Orchestration` by default on every launch.
+2. UI labels/test IDs/routes are updated from `Interactive` to `Orchestration` (compat aliases allowed only where required for migration stability).
+3. Existing race/results/review/settings flows remain reachable and behaviorally unchanged.
+4. Smoke tests cover default landing behavior and navigation transitions.
+- Out of Scope: file explorer implementation; terminal renderer replacement.
+
+### P4.9.2 File Explorer Tab with Real-Time Filesystem Watch
+
+- Labels: `phase-4`, `area-ui`, `area-core`, `type-feature`
+- Estimate: `L`
+- Dependencies: `P4.9.1`, `M1.3`
+- Problem: Operators currently lack a reliable live view of repository state while agents modify files, forcing context switching to external tools and increasing risk of stale review context.
+- Scope: Add a dedicated `File Explorer` tab that shows the full workspace tree and auto-updates from filesystem watcher events. Include an explicit manual `Refresh` control for on-demand resync.
+- Acceptance Criteria:
+1. Explorer renders full repository tree rooted at active workspace (`workspaceCwd`) with no default path hiding.
+2. Tree updates automatically from filesystem watcher events (`create/modify/delete/rename`) without manual reload.
+3. Manual `Refresh` button triggers full tree resync.
+4. Large repos remain responsive (lazy expansion and/or virtualization) under high event volume.
+5. Watcher lifecycle is cleanly managed on workspace switch and app shutdown.
+- Out of Scope: symbol search, code preview panel, semantic code graph, git diff visualization.
+
+### P4.9.3 High-Fidelity Terminal Rendering (ANSI Parity)
+
+- Labels: `phase-4`, `area-ui`, `area-core`, `type-feature`
+- Estimate: `L`
+- Dependencies: `P4.9.1`, `M4.1`, `M4.2`
+- Problem: Current orchestration terminal normalizes/strips control sequences, resulting in lower fidelity than native Claude Code/Codex CLI terminal usage.
+- Scope: Upgrade orchestration terminal rendering to preserve and render raw PTY output with high ANSI fidelity (color, style, cursor movement, clear behaviors, scrollback), while maintaining streaming stability and lane focus semantics.
+- Acceptance Criteria:
+1. Raw PTY stream is preserved for renderer path (no destructive ANSI stripping in orchestration display flow).
+2. ANSI fixtures validate 24-bit color, style attributes, cursor movement, clear-line/screen behavior, and multiline wrapping.
+3. Streaming remains stable under sustained output load with bounded memory usage.
+4. Copy/select/scrollback behavior remains usable for code/log workflows.
+5. Existing lane/session focus and per-session isolation behaviors remain intact.
+- Out of Scope: tmux/session multiplexing, terminal recording UI, remote terminal protocol support.
+
+### P4.9.4 Direct External CLI Invocation and Deploy Trigger Simplification
+
+- Labels: `phase-4`, `area-adapter`, `area-core`, `area-ui`, `type-feature`
+- Estimate: `L`
+- Dependencies: `P4.9.1`, `M2.1`, `M4.5`
+- Problem: Rebuilding advanced tool-native features inside Hydra adds complexity and diverges from the intended minimal-wrapper strategy.
+- Scope: Implement direct invocation of external tool binaries (`claude`, `codex`) from orchestration lanes, selected automatically from the adapter selector. Simplify `Deploy Agent` into a trigger that launches the selected external tool in the orchestration environment.
+- Acceptance Criteria:
+1. Deploy trigger launches selected external CLI in the lane PTY with workspace-scoped execution.
+2. Tool selection is derived from orchestration adapter dropdown/selector with no extra normalization layer.
+3. Tool-native features are accessible via pass-through invocation strategy (no duplicate Hydra-side reimplementation).
+4. Pre-launch safety/capability gates remain enforced (tier policy, experimental confirmation, unsafe/worktree checks).
+5. Launch failures (missing binary, unsupported flags, auth/session issues) surface actionable error messages in UI.
+- Out of Scope: cross-tool abstraction layer, unified feature schema, remote-host execution.
+
+### P4.9.5 Terminal-Only Input Model (Native CLI Parity)
+
+- Labels: `phase-4`, `area-ui`, `area-core`, `type-feature`
+- Estimate: `M`
+- Dependencies: `P4.9.3`, `P4.9.4`
+- Problem: Side-panel composer UX differs from native terminal workflows and creates dual-input ambiguity in orchestration sessions.
+- Scope: Transition orchestration to terminal-only input, removing side `InputComposer` from steady-state operation and ensuring intervention/input flows occur directly in the terminal stream like native Claude Code/Codex CLI sessions.
+- Acceptance Criteria:
+1. Orchestration input is performed through the terminal surface only during normal operation.
+2. Side `InputComposer` is removed from primary orchestration UX (or retained only behind explicit debug/developer guard).
+3. Session/lane isolation for input remains correct across concurrent sessions.
+4. Operator stop/interrupt semantics remain available and clearly discoverable.
+5. Smoke tests cover terminal-only input, concurrent-lane isolation, and no-regression behavior.
+- Out of Scope: chat-style side composer redesign, multimodal prompt editor, collaborative cursors.
+
 ## 8. Phase 5 Tickets (Collaboration Workflows)
 
 ### M5.1 Workflow Engine Core
 
 - Labels: `phase-5`, `area-workflow`, `type-feature`
 - Estimate: `M`
-- Dependencies: `M2.10`, `M4.8`
+- Dependencies: `M2.10`, `M4.8`, `P4.9.5`
 - Problem: Race mode only supports independent parallel execution. Structured cooperation patterns (builder/reviewer, specialization, iterative refinement) require a DAG-based workflow engine that manages step execution, artifact passing, and conditional branching.
 - Scope: Implement a DAG step executor that runs workflow nodes sequentially or in parallel based on graph structure. Support artifact passing between nodes via immutable artifact IDs. Honor per-node timeout and retry policies. Persist workflow run summary.
 - Acceptance Criteria:

@@ -142,6 +142,7 @@ Goal:
 
 Entry gate:
 - `M4.8` interactive orchestration console must be complete before Phase 5 implementation begins.
+- UX/parity track `P4.9` (section 18) must be complete before Phase 5 implementation begins.
 
 Deliverables:
 - builder/reviewer/refiner preset
@@ -238,3 +239,96 @@ Pre-release checklist:
 ## 17. Open Roadmap Questions
 
 1. Should we publish plugin API in v1 or keep adapters internal until stabilized?
+
+## 18. UX and Feature-Parity Roadmap Update (Pre-Phase-5 Track)
+
+### 18.1 High-Level Roadmap Changes
+
+Implementation goals update:
+1. Add a dedicated `File Explorer` tab with a live repository tree.
+2. Rename the `Interactive` surface to `Orchestration` and promote it to the primary/default operator surface.
+3. Upgrade orchestration terminal rendering to high-fidelity ANSI parity (colors + formatting + cursor behavior), aligned with native terminal workflows.
+4. Prefer wrapping existing external coding CLIs (Codex / Claude Code) for advanced capabilities instead of re-implementing feature parity inside Hydra UI.
+5. Adopt terminal-only input in orchestration to match native Claude Code/Codex CLI usage, with a simplified deploy trigger that launches external tools.
+
+Execution sequence (P4.9):
+1. `P4.9.1` IA and navigation update: `Interactive` -> `Orchestration`; set as default tab.
+2. `P4.9.2` File Explorer tab with real-time repo updates on filesystem changes.
+3. `P4.9.3` Terminal renderer parity upgrade for full ANSI handling.
+4. `P4.9.4` External CLI wrapper flow + simplified `Deploy Agent` trigger.
+5. `P4.9.5` Input architecture convergence: terminal-only interaction model.
+
+### 18.2 Technical Requirements Expansion
+
+#### A. File Explorer Tab (Real-Time Repo View)
+
+Scope:
+1. Add top-level `File Explorer` tab in the app shell.
+2. Display full repository tree rooted at active workspace (`workspaceCwd`).
+3. Keep tree synchronized with current filesystem state while agents run.
+
+Technical requirements:
+1. Introduce backend IPC for repository tree snapshots (initial load + targeted subtree refresh).
+2. Add filesystem watch stream (workspace-scoped) that emits create/modify/delete/rename events.
+3. Trigger tree updates from watcher events only.
+4. Coalesce burst events to avoid UI thrash (debounced incremental updates).
+5. Show the full repository tree (no default path hiding, including ignored paths).
+6. Add explicit manual refresh control (`Refresh`) for user-invoked resync.
+7. Handle large repos with virtualization/lazy expansion to keep UI responsive.
+
+Acceptance targets:
+1. Explorer reflects agent-written file changes without manual refresh.
+2. No stale tree state after agent completion.
+3. UI remains responsive under high file-event volume.
+
+#### B. Orchestration Tab Restructure + Terminal Fidelity
+
+Scope:
+1. Rename all user-facing `Interactive` labels/routes/test IDs to `Orchestration` (with migration-safe aliases where needed).
+2. Make `Orchestration` the always-on default app landing tab.
+3. Replace stripped-text terminal rendering with high-fidelity ANSI rendering.
+
+Technical requirements:
+1. Preserve raw PTY output stream for rendering (do not strip ANSI escape sequences in orchestration terminal path).
+2. Adopt a terminal renderer with robust ANSI support (24-bit color, bold/italic/underline, cursor movement, clear-line/screen behavior, scrollback).
+3. Maintain lane/session focus behavior and existing intervention controls after renderer swap.
+4. Ensure terminal remains stable under streaming load (bounded memory, smooth append, no dropped frames under normal event rates).
+5. Keep copy/paste/select behavior usable for code and logs.
+
+Acceptance targets:
+1. ANSI fixtures render with expected color/format fidelity.
+2. Terminal experience is visually equivalent to native CLI sessions for supported ANSI features.
+3. Default landing view is `Orchestration`, not race cockpit.
+
+#### C. External CLI Wrapping, Deploy Trigger, and Input Strategy
+
+Scope:
+1. Integrate Codex/Claude Code as wrapped external tool invocations inside orchestration lanes.
+2. Simplify `Deploy Agent` into a trigger action that launches selected external tool workflow.
+3. Converge on terminal-first input model.
+
+Technical requirements:
+1. Invoke external tool binaries directly (no Hydra normalization/shim layer for advanced tool features).
+2. Select tool automatically from the user-selected adapter dropdown/selector in orchestration UI.
+3. Reuse existing CLI-native features (file tagging, skill invocation, tool-specific workflows) through pass-through arguments rather than UI reimplementation.
+4. Route launched tool stdout/stderr through PTY session stream so output appears in orchestration terminal.
+5. Keep policy gates (experimental/safety/unsafe/worktree cleanliness) enforced before launching wrapped commands.
+6. Use terminal-native input as the primary and long-term interaction model.
+7. Remove side `InputComposer` from steady-state orchestration UX after migration.
+8. Track launch failures with actionable error surfacing (missing binary, unsupported flags, auth/session issues).
+
+Acceptance targets:
+1. User can launch Codex/Claude Code from orchestration with one trigger action.
+2. Advanced tool-native features are accessible via wrapper strategy.
+3. Input UX matches native terminal behavior for Claude Code/Codex sessions (terminal-only interaction model).
+4. No separate side input composer is required for normal orchestration operation.
+
+### 18.3 Integration Decisions (Locked)
+
+1. Tool invocation model: direct binary wrapping only (no normalization layer).
+2. Tool selection: automatic based on orchestration adapter dropdown/selector.
+3. File explorer update source: filesystem watcher events only.
+4. File explorer fallback: include manual refresh button.
+5. Explorer visibility policy: show full tree, no default hiding.
+6. App landing behavior: always open `Orchestration` by default.
+7. Input convergence target: terminal-only, native CLI-like interaction in orchestration.

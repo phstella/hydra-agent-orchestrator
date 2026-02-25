@@ -1,4 +1,4 @@
-# Phase 4 Tickets (Interactive Session Mode) Issue Bodies
+# Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity) Issue Bodies
 
 Last updated: 2026-02-25
 
@@ -332,8 +332,187 @@ Workflow DAG/presets, cross-agent artifact handoff, auto-merge, multi-user colla
 - `planning/p4-race-cockpit-convergence-implementation-guide.md` (`M4.7` shell context)
 ```
 
+## [P4.9.1] Orchestration IA Rename and Default Landing
+
+- Phase: Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity)
+- Labels: hydra, phase-4, area-ui, type-feature
+- Estimate: M
+- Dependencies: M4.8
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+The product still exposes legacy `Interactive` naming and does not default to orchestration-first operation, which conflicts with the updated UX direction.
+
+## Scope
+Rename user-facing `Interactive` labels/routes/surfaces to `Orchestration` and make Orchestration the always-on default landing view at app startup.
+
+## Acceptance Criteria
+- [ ] App launches to `Orchestration` by default on every startup.
+- [ ] UI labels and route/test identifiers are migrated from `Interactive` to `Orchestration`.
+- [ ] Existing race/results/review/settings flows remain reachable and behaviorally unchanged.
+- [ ] Smoke coverage validates default landing + navigation transitions.
+
+## Out of Scope
+File explorer implementation; terminal renderer fidelity work.
+
+## Dependencies
+- M4.8
+
+## Notes
+- Align naming with roadmap section 18 (`P4.9` track).
+
+## Implementation Reference
+- `planning/roadmap.md` (Section 18, `P4.9.1`)
+```
+
+## [P4.9.2] File Explorer Tab with Real-Time Filesystem Watch
+
+- Phase: Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity)
+- Labels: hydra, phase-4, area-ui, area-core, type-feature
+- Estimate: L
+- Dependencies: P4.9.1, M1.3
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Operators lack a reliable live repository tree inside Hydra while agents are changing files, leading to stale context and external-tool dependency.
+
+## Scope
+Add a `File Explorer` tab showing the full workspace tree. Auto-update from filesystem watcher events only, with a manual `Refresh` button for explicit resync.
+
+## Acceptance Criteria
+- [ ] Explorer renders full repository tree rooted at active workspace (`workspaceCwd`) with no default hiding.
+- [ ] Tree updates on watcher events (`create/modify/delete/rename`) without manual page refresh.
+- [ ] Manual `Refresh` triggers full tree resync.
+- [ ] Watcher lifecycle is correctly handled on workspace switch and app shutdown.
+- [ ] UI remains responsive for large repositories and event bursts.
+
+## Out of Scope
+Symbol indexing, semantic code graph, built-in diff viewer inside explorer.
+
+## Dependencies
+- P4.9.1, M1.3
+
+## Notes
+- Integration decision: watcher events are primary source; manual refresh is fallback.
+
+## Implementation Reference
+- `planning/roadmap.md` (Section 18, `P4.9.2`)
+```
+
+## [P4.9.3] High-Fidelity Terminal Rendering (ANSI Parity)
+
+- Phase: Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity)
+- Labels: hydra, phase-4, area-ui, area-core, type-feature
+- Estimate: L
+- Dependencies: P4.9.1, M4.1, M4.2
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Current orchestration terminal rendering normalizes output and does not match native terminal fidelity expected for Claude Code/Codex CLI use.
+
+## Scope
+Upgrade terminal rendering to preserve raw PTY stream and render full ANSI behavior (color/style/cursor control/clear semantics/scrollback) with stable streaming performance.
+
+## Acceptance Criteria
+- [ ] Orchestration display path preserves raw PTY output (no destructive ANSI stripping).
+- [ ] ANSI fixtures verify 24-bit color, style, cursor movement, and clear-line/screen behavior.
+- [ ] Stream performance remains stable under sustained output with bounded memory.
+- [ ] Copy/select/scrollback behavior remains usable.
+- [ ] Existing lane/session focus and isolation behavior remains correct.
+
+## Out of Scope
+Terminal multiplexing, session recording UI, remote terminal protocol support.
+
+## Dependencies
+- P4.9.1, M4.1, M4.2
+
+## Notes
+- UX parity target: native terminal behavior for supported ANSI features.
+
+## Implementation Reference
+- `planning/roadmap.md` (Section 18, `P4.9.3`)
+```
+
+## [P4.9.4] Direct External CLI Invocation and Deploy Trigger Simplification
+
+- Phase: Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity)
+- Labels: hydra, phase-4, area-adapter, area-core, area-ui, type-feature
+- Estimate: L
+- Dependencies: P4.9.1, M2.1, M4.5
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Reimplementing advanced features from vendor CLIs adds unnecessary surface area and slows parity with existing coding tools.
+
+## Scope
+Invoke `claude`/`codex` directly from orchestration lanes with no normalization layer. Simplify `Deploy Agent` into a trigger that launches the selected adapter CLI from the dropdown/selector.
+
+## Acceptance Criteria
+- [ ] Deploy trigger launches selected external CLI in lane PTY using active workspace context.
+- [ ] Tool selection is automatically derived from orchestration adapter selector.
+- [ ] Pass-through strategy enables tool-native features without Hydra-side duplication.
+- [ ] Existing safety/capability gates remain enforced before launch.
+- [ ] Launch failures (missing binary, unsupported flags, auth/session issues) are surfaced with actionable messaging.
+
+## Out of Scope
+Cross-tool normalization schema, abstraction shim, remote execution backend.
+
+## Dependencies
+- P4.9.1, M2.1, M4.5
+
+## Notes
+- Integration decision: direct wrapping only, least implementation overhead.
+
+## Implementation Reference
+- `planning/roadmap.md` (Section 18, `P4.9.4`)
+```
+
+## [P4.9.5] Terminal-Only Input Model (Native CLI Parity)
+
+- Phase: Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity)
+- Labels: hydra, phase-4, area-ui, area-core, type-feature
+- Estimate: M
+- Dependencies: P4.9.3, P4.9.4
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Dual input surfaces (terminal + side composer) diverge from native terminal workflows and create ambiguity in orchestration operation.
+
+## Scope
+Adopt terminal-only input for orchestration sessions and remove side `InputComposer` from steady-state UX (debug-only retention allowed if explicitly gated).
+
+## Acceptance Criteria
+- [ ] Normal orchestration input is performed directly in terminal.
+- [ ] Side `InputComposer` is removed from primary orchestration UX (or hidden behind explicit debug guard).
+- [ ] Concurrent-session input isolation remains correct per lane/session.
+- [ ] Stop/interrupt semantics remain available and discoverable.
+- [ ] Smoke coverage validates terminal-only input and no-regression behavior.
+
+## Out of Scope
+Chat-style side panels, rich prompt editor, multimodal input workflows.
+
+## Dependencies
+- P4.9.3, P4.9.4
+
+## Notes
+- UX target: same interaction model users expect in normal terminals with Claude Code/Codex CLI.
+
+## Implementation Reference
+- `planning/roadmap.md` (Section 18, `P4.9.5`)
+```
+
 
 ## Coverage Check
 
-- Total issues generated: 8
-- Expected range: `M4.1` through `M4.8`
+- Total issues generated: 13
+- Expected range: `M4.1` through `M4.8`, plus `P4.9.1` through `P4.9.5`
