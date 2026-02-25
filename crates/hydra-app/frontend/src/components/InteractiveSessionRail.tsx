@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import type { CSSProperties } from 'react';
-import { Badge, Button } from './design-system';
+import { Badge } from './design-system';
 import type { InteractiveSessionSummary } from '../types';
 
 type SessionLifecycle = 'running' | 'completed' | 'failed' | 'stopped' | 'paused';
@@ -8,10 +8,9 @@ type SessionLifecycle = 'running' | 'completed' | 'failed' | 'stopped' | 'paused
 interface InteractiveSessionRailProps {
   sessions: InteractiveSessionSummary[];
   selectedSessionId: string | null;
+  pollErrors: Map<string, string>;
   onSelectSession: (sessionId: string) => void;
-  onCreateSession: () => void;
   onStopSession: (sessionId: string) => void;
-  creating: boolean;
 }
 
 const lifecycleBadgeVariant: Record<SessionLifecycle, 'info' | 'success' | 'danger' | 'warning'> = {
@@ -37,30 +36,56 @@ function toLifecycle(status: string): SessionLifecycle {
   return 'stopped';
 }
 
+/** Compute elapsed time string from startedAt ISO timestamp. */
+function elapsedSince(startedAt: string): string {
+  const start = new Date(startedAt).getTime();
+  if (Number.isNaN(start)) return '';
+  const seconds = Math.floor((Date.now() - start) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
 export function InteractiveSessionRail({
   sessions,
   selectedSessionId,
+  pollErrors,
   onSelectSession,
-  onCreateSession,
   onStopSession,
-  creating,
 }: InteractiveSessionRailProps) {
+  // Build adapter instance index for lane labels (M4.8.2)
+  const instanceIndex = useMemo(() => {
+    const counts = new Map<string, number>();
+    const index = new Map<string, number>();
+    for (const s of sessions) {
+      const count = (counts.get(s.agentKey) ?? 0) + 1;
+      counts.set(s.agentKey, count);
+      index.set(s.sessionId, count);
+    }
+    // Only show index when adapter has >1 session
+    const result = new Map<string, number | null>();
+    for (const s of sessions) {
+      result.set(s.sessionId, (counts.get(s.agentKey) ?? 0) > 1 ? index.get(s.sessionId)! : null);
+    }
+    return result;
+  }, [sessions]);
+
   const containerStyle: CSSProperties = {
     display: 'flex',
     flexDirection: 'column',
     gap: 'var(--space-2)',
-    minWidth: 240,
     height: '100%',
   };
 
+  const runningCount = sessions.filter((s) => s.status === 'running').length;
+
   return (
-    <div style={containerStyle}>
+    <div style={containerStyle} data-testid="session-rail">
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '0 var(--space-2)',
           marginBottom: 'var(--space-1)',
         }}
       >
@@ -73,17 +98,13 @@ export function InteractiveSessionRail({
             letterSpacing: '0.05em',
           }}
         >
-          Sessions
+          Lanes
         </span>
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={onCreateSession}
-          loading={creating}
-          data-testid="create-session-btn"
-        >
-          + New
-        </Button>
+        {runningCount > 0 && (
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-marine-400)' }}>
+            {runningCount} active
+          </span>
+        )}
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
@@ -91,20 +112,23 @@ export function InteractiveSessionRail({
           <div
             style={{
               color: 'var(--color-text-muted)',
-              fontSize: 'var(--text-sm)',
+              fontSize: 'var(--text-xs)',
               padding: 'var(--space-3) var(--space-2)',
+              textAlign: 'center',
             }}
             data-testid="empty-session-state"
           >
-            No sessions yet. Create one to get started.
+            No lanes. Launch one from the create panel.
           </div>
         )}
 
         {sessions.map((session) => (
-          <SessionRailItem
+          <LaneCard
             key={session.sessionId}
             session={session}
+            instanceIndex={instanceIndex.get(session.sessionId) ?? null}
             selected={selectedSessionId === session.sessionId}
+            pollError={pollErrors.get(session.sessionId) ?? null}
             onSelect={() => onSelectSession(session.sessionId)}
             onStop={() => onStopSession(session.sessionId)}
           />
@@ -114,27 +138,31 @@ export function InteractiveSessionRail({
   );
 }
 
-function SessionRailItem({
+function LaneCard({
   session,
+  instanceIndex,
   selected,
+  pollError,
   onSelect,
   onStop,
 }: {
   session: InteractiveSessionSummary;
+  instanceIndex: number | null;
   selected: boolean;
+  pollError: string | null;
   onSelect: () => void;
   onStop: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const lifecycle = toLifecycle(session.status);
   const isRunning = lifecycle === 'running';
+  const elapsed = elapsedSince(session.startedAt);
 
-  const itemStyle: CSSProperties = {
+  const cardStyle: CSSProperties = {
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 'var(--space-2)',
-    padding: 'var(--space-2) var(--space-3)',
+    flexDirection: 'column',
+    gap: 'var(--space-1)',
+    padding: 'var(--space-2)',
     borderRadius: 'var(--radius-md)',
     cursor: 'pointer',
     transition: 'all var(--transition-fast)',
@@ -148,68 +176,100 @@ function SessionRailItem({
         : 'transparent',
   };
 
-  const nameStyle: CSSProperties = {
-    fontSize: 'var(--text-sm)',
-    fontWeight: selected
-      ? ('var(--weight-semibold)' as unknown as number)
-      : ('var(--weight-normal)' as unknown as number),
-    color: selected ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-    fontFamily: 'var(--font-mono)',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  };
-
-  const metaStyle: CSSProperties = {
-    fontSize: 'var(--text-xs)',
-    color: 'var(--color-text-muted)',
-    marginTop: 2,
-  };
-
   return (
     <div
-      style={itemStyle}
+      style={cardStyle}
       onClick={onSelect}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       data-testid={`session-item-${session.sessionId}`}
     >
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+      {/* Row 1: adapter key + instance index + lifecycle badge */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-1)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', minWidth: 0 }}>
           {isRunning && <PulsingDot />}
-          <span style={nameStyle}>{session.agentKey}</span>
-        </div>
-        <div style={metaStyle}>
-          {session.eventCount} events · {session.sessionId.slice(0, 8)}
-        </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexShrink: 0 }}>
-        <Badge variant={lifecycleBadgeVariant[lifecycle]} dot>
-          {lifecycleLabel[lifecycle]}
-        </Badge>
-        {isRunning && selected && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onStop();
-            }}
-            title="Stop session"
-            data-testid={`stop-session-${session.sessionId}`}
+          <span
             style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--color-danger-400)',
-              cursor: 'pointer',
               fontSize: 'var(--text-sm)',
-              padding: '2px',
-              lineHeight: 1,
+              fontWeight: selected
+                ? ('var(--weight-semibold)' as unknown as number)
+                : ('var(--weight-normal)' as unknown as number),
+              color: selected ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+              fontFamily: 'var(--font-mono)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
+            data-testid={`lane-label-${session.sessionId}`}
           >
-            ■
-          </button>
-        )}
+            {session.agentKey}
+            {instanceIndex !== null && (
+              <span style={{ color: 'var(--color-text-muted)' }}> #{instanceIndex}</span>
+            )}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexShrink: 0 }}>
+          <Badge variant={lifecycleBadgeVariant[lifecycle]} dot>
+            {lifecycleLabel[lifecycle]}
+          </Badge>
+          {isRunning && selected && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStop();
+              }}
+              title="Stop lane"
+              data-testid={`stop-session-${session.sessionId}`}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--color-danger-400)',
+                cursor: 'pointer',
+                fontSize: 'var(--text-sm)',
+                padding: '2px',
+                lineHeight: 1,
+              }}
+            >
+              ■
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Row 2: session ID snippet + event count + elapsed */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: 'var(--text-xs)',
+          color: 'var(--color-text-muted)',
+        }}
+      >
+        <span style={{ fontFamily: 'var(--font-mono)' }}>
+          {session.sessionId.slice(0, 8)}
+        </span>
+        <span>
+          {session.eventCount} evts{elapsed ? ` · ${elapsed}` : ''}
+        </span>
+      </div>
+
+      {/* Row 3: poll error indicator (M4.8.5) */}
+      {pollError && (
+        <div
+          style={{
+            fontSize: '10px',
+            color: 'var(--color-warning-400)',
+            padding: '2px var(--space-1)',
+            borderRadius: 'var(--radius-sm)',
+            backgroundColor: 'color-mix(in srgb, var(--color-warning-500) 8%, transparent)',
+          }}
+          data-testid={`lane-error-${session.sessionId}`}
+        >
+          Poll error
+        </div>
+      )}
     </div>
   );
 }

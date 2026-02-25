@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { InteractiveSessionRail } from './InteractiveSessionRail';
 import { InteractiveTerminalPanel } from './InteractiveTerminalPanel';
 import { InputComposer } from './InputComposer';
-import { Card, Button, Badge } from './design-system';
+import { Button, Badge } from './design-system';
 import {
   startInteractiveSession,
   pollInteractiveEvents,
@@ -41,17 +41,28 @@ function parseGatingErrorCode(errorStr: string): string | null {
   return match ? match[1] : null;
 }
 
+/** Count running sessions for a given adapter key. */
+function countAdapterInstances(sessions: InteractiveSessionSummary[], adapterKey: string): number {
+  return sessions.filter((s) => s.agentKey === adapterKey && s.status === 'running').length;
+}
+
 interface InteractiveWorkspaceProps {
   workspaceCwd: string | null;
 }
 
 export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps) {
+  // ---------------------------------------------------------------------------
+  // Session state (all keyed by session_id — M4.8.2)
+  // ---------------------------------------------------------------------------
   const [sessions, setSessions] = useState<InteractiveSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [sessionEvents, setSessionEvents] = useState<Map<string, InteractiveStreamEvent[]>>(new Map());
   const [pollErrors, setPollErrors] = useState<Map<string, string>>(new Map());
+
+  // ---------------------------------------------------------------------------
+  // Create-form state
+  // ---------------------------------------------------------------------------
   const [creating, setCreating] = useState(false);
-  const [showNewForm, setShowNewForm] = useState(false);
   const [agentKey, setAgentKey] = useState('');
   const [allAdapters, setAllAdapters] = useState<AdapterInfo[]>([]);
   const [availableAgents, setAvailableAgents] = useState<string[]>([]);
@@ -63,10 +74,16 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const [experimentalAcknowledged, setExperimentalAcknowledged] = useState(false);
   const [unsafeMode, setUnsafeMode] = useState(false);
 
+  // ---------------------------------------------------------------------------
+  // Polling refs (session_id keyed — M4.8.2)
+  // ---------------------------------------------------------------------------
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pollCursors = useRef<Map<string, number>>(new Map());
   const pollingSessions = useRef<Set<string>>(new Set());
 
+  // ---------------------------------------------------------------------------
+  // Initial load
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
 
@@ -117,6 +134,9 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     };
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // Polling — per-session isolated (M4.8.5)
+  // ---------------------------------------------------------------------------
   const startPolling = useCallback((sessionId: string) => {
     if (pollingSessions.current.has(sessionId)) return;
     pollingSessions.current.add(sessionId);
@@ -206,13 +226,9 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     });
   }, [sessions, startPolling]);
 
-  const handleCreateSession = useCallback(() => {
-    setShowNewForm(true);
-    setCreateError(null);
-    setCreateErrorCode(null);
-    setExperimentalAcknowledged(false);
-  }, []);
-
+  // ---------------------------------------------------------------------------
+  // Session creation — supports duplicate adapter instances (M4.8.3)
+  // ---------------------------------------------------------------------------
   const selectedAdapterInfo = allAdapters.find((a) => a.key === agentKey) ?? null;
   const selectedIsExperimental = selectedAdapterInfo?.tier === 'experimental';
   const needsExperimentalConfirmation = selectedIsExperimental && !experimentalAcknowledged;
@@ -259,7 +275,6 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
 
       setSessions((prev) => [newSession, ...prev]);
       setSelectedSessionId(result.sessionId);
-      setShowNewForm(false);
       setTaskPrompt('');
       setUnsafeMode(false);
       setAllowExperimental(false);
@@ -274,6 +289,9 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     }
   }, [agentKey, taskPrompt, startPolling, allowExperimental, experimentalAcknowledged, unsafeMode, needsExperimentalConfirmation, workspaceCwd]);
 
+  // ---------------------------------------------------------------------------
+  // Stop — per-lane isolated (M4.8.6)
+  // ---------------------------------------------------------------------------
   const handleStopSession = useCallback(async (sessionId: string) => {
     try {
       const result = await stopInteractiveSession(sessionId);
@@ -299,6 +317,9 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     }
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // Input — per-lane isolated (M4.8.6)
+  // ---------------------------------------------------------------------------
   const handleSendInput = useCallback(
     async (input: string) => {
       if (!selectedSessionId) {
@@ -310,6 +331,9 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     [selectedSessionId],
   );
 
+  // ---------------------------------------------------------------------------
+  // Derived state for focused lane
+  // ---------------------------------------------------------------------------
   const selectedSession = sessions.find((s) => s.sessionId === selectedSessionId) ?? null;
   const selectedEvents = selectedSessionId
     ? (sessionEvents.get(selectedSessionId) ?? [])
@@ -318,6 +342,12 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     ? (pollErrors.get(selectedSessionId) ?? null)
     : null;
 
+  // Count duplicate adapter instances for lane label disambiguation (M4.8.2)
+  const runningInstanceCount = agentKey ? countAdapterInstances(sessions, agentKey) : 0;
+
+  // ---------------------------------------------------------------------------
+  // Cleanup on unmount
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     return () => {
       pollTimers.current.forEach((timer) => clearTimeout(timer));
@@ -327,262 +357,280 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     };
   }, []);
 
-  const containerStyle: CSSProperties = {
+  // ---------------------------------------------------------------------------
+  // Orchestration Console Layout (M4.8.1)
+  //
+  // 3-column layout:
+  //   Left:   Create panel (adapter, prompt, safety, launch)
+  //   Center: Focused terminal + intervention controls for selected lane
+  //   Right:  Running-lanes rail with per-session cards
+  // ---------------------------------------------------------------------------
+  const shellStyle: CSSProperties = {
+    display: 'flex',
+    flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
+  };
+
+  const leftPanelStyle: CSSProperties = {
+    width: 300,
+    flexShrink: 0,
+    borderRight: '1px solid var(--color-border-700)',
+    backgroundColor: 'var(--color-bg-900)',
     display: 'flex',
     flexDirection: 'column',
-    maxWidth: 1200,
-    margin: '0 auto',
-    padding: 'var(--space-6)',
-    gap: 'var(--space-4)',
-    minHeight: 0,
+    overflowY: 'auto',
+    padding: 'var(--space-4)',
+    gap: 'var(--space-3)',
+  };
+
+  const centerStyle: CSSProperties = {
     flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  };
+
+  const rightPanelStyle: CSSProperties = {
+    width: 280,
+    flexShrink: 0,
+    borderLeft: '1px solid var(--color-border-700)',
+    backgroundColor: 'var(--color-bg-850)',
+    display: 'flex',
+    flexDirection: 'column',
+    overflowY: 'auto',
+    padding: 'var(--space-3)',
   };
 
   return (
-    <div style={containerStyle}>
-      {showNewForm && (
-        <Card padding="lg" data-testid="new-session-form">
-          <h3
-            style={{
-              fontSize: 'var(--text-lg)',
-              fontWeight: 'var(--weight-bold)' as unknown as number,
-              marginBottom: 'var(--space-3)',
-            }}
-          >
-            New Interactive Session
-          </h3>
-
-          <div style={{ marginBottom: 'var(--space-3)' }}>
-            <div
-              style={{
-                marginBottom: 'var(--space-2)',
-                fontSize: 'var(--text-sm)',
-                color: 'var(--color-text-secondary)',
-              }}
-            >
-              Agent
-            </div>
-            <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-              {availableAgents.map((key) => {
-                const adapterInfo = allAdapters.find((a) => a.key === key);
-                const isExp = adapterInfo?.tier === 'experimental';
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => {
-                      setAgentKey(key);
-                      if (isExp) {
-                        setAllowExperimental(true);
-                      } else {
-                        setAllowExperimental(false);
-                        setExperimentalAcknowledged(false);
-                      }
-                      setCreateError(null);
-                      setCreateErrorCode(null);
-                    }}
-                    data-testid={`agent-select-${key}`}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 'var(--space-2)',
-                      borderRadius: 'var(--radius-md)',
-                      border: agentKey === key
-                        ? '1px solid var(--color-marine-500)'
-                        : '1px solid var(--color-border-700)',
-                      backgroundColor: agentKey === key
-                        ? 'color-mix(in srgb, var(--color-marine-500) 12%, transparent)'
-                        : 'var(--color-surface-800)',
-                      color: 'var(--color-text-primary)',
-                      padding: 'var(--space-2) var(--space-3)',
-                      cursor: 'pointer',
-                      fontFamily: 'var(--font-family)',
-                      fontSize: 'var(--text-sm)',
-                    }}
-                  >
-                    {key}
-                    <Badge variant={isExp ? 'warning' : 'success'}>
-                      {isExp ? 'Experimental' : 'Tier-1'}
-                    </Badge>
-                  </button>
-                );
-              })}
-              {availableAgents.length === 0 && (
-                <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>
-                  No adapters available
-                </span>
-              )}
-            </div>
-            {agentLoadError && (
-              <div style={{ marginTop: 'var(--space-2)', color: 'var(--color-warning-400)', fontSize: 'var(--text-xs)' }}>
-                {agentLoadError}
-              </div>
-            )}
-          </div>
-
-          {selectedIsExperimental && (
-            <div
-              style={{
-                marginBottom: 'var(--space-3)',
-                padding: 'var(--space-3)',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--color-warning-400)',
-                backgroundColor: 'color-mix(in srgb, var(--color-warning-400) 8%, transparent)',
-              }}
-              data-testid="experimental-warning"
-            >
-              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-semibold)' as unknown as number, color: 'var(--color-warning-400)', marginBottom: 'var(--space-2)' }}>
-                Experimental Adapter Warning
-              </div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-2)' }}>
-                This adapter is experimental and may produce unstable results, consume resources unpredictably, or fail without clear error messages. Use at your own risk.
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={experimentalAcknowledged}
-                  onChange={(e) => setExperimentalAcknowledged(e.target.checked)}
-                  data-testid="experimental-acknowledge-checkbox"
-                />
-                <span style={{ color: 'var(--color-text-primary)' }}>I understand the risks and want to proceed</span>
-              </label>
-            </div>
-          )}
-
-          <div style={{ marginBottom: 'var(--space-3)' }}>
-            <div
-              style={{
-                marginBottom: 'var(--space-2)',
-                fontSize: 'var(--text-sm)',
-                color: 'var(--color-text-secondary)',
-              }}
-            >
-              Task Prompt
-            </div>
-            <div
-              style={{
-                marginBottom: 'var(--space-2)',
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-muted)',
-              }}
-              data-testid="interactive-workspace-path"
-            >
-              Workspace: {workspaceCwd ?? '(current repository)'}
-            </div>
-            <textarea
-              value={taskPrompt}
-              onChange={(e) => setTaskPrompt(e.target.value)}
-              placeholder="Describe what you want the agent to work on..."
-              rows={3}
-              data-testid="session-task-prompt"
-              style={{
-                width: '100%',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--color-border-700)',
-                backgroundColor: 'var(--color-bg-900)',
-                color: 'var(--color-text-primary)',
-                padding: 'var(--space-3)',
-                resize: 'vertical',
-                fontFamily: 'var(--font-family)',
-                fontSize: 'var(--text-sm)',
-              }}
-            />
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
-            <Button
-              variant="primary"
-              onClick={handleConfirmCreate}
-              loading={creating}
-              disabled={availableAgents.length === 0 || (selectedIsExperimental && !experimentalAcknowledged)}
-              data-testid="confirm-create-session"
-            >
-              Start Session
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => setShowNewForm(false)}
-            >
-              Cancel
-            </Button>
-          </div>
-
-          {createError && (
-            <div
-              style={{
-                marginTop: 'var(--space-2)',
-                color: createErrorCode === 'dirty_worktree'
-                  ? 'var(--color-warning-400)'
-                  : 'var(--color-danger-400)',
-                fontSize: 'var(--text-sm)',
-                padding: 'var(--space-2) var(--space-3)',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: createErrorCode
-                  ? 'color-mix(in srgb, var(--color-danger-400) 8%, transparent)'
-                  : 'transparent',
-              }}
-              data-testid="create-session-error"
-            >
-              {createError}
-            </div>
-          )}
-        </Card>
-      )}
-
-      <div
-        style={{
-          display: 'flex',
-          border: '1px solid var(--color-border-700)',
-          borderRadius: 'var(--radius-lg)',
-          backgroundColor: 'var(--color-surface-800)',
-          overflow: 'hidden',
-          flex: 1,
-          minHeight: 480,
-        }}
-      >
+    <div style={shellStyle} data-testid="orchestration-console">
+      {/* ---- Left: Create Panel ---- */}
+      <div style={leftPanelStyle} data-testid="create-panel">
         <div
           style={{
-            borderRight: '1px solid var(--color-border-700)',
-            padding: 'var(--space-3)',
-            overflowY: 'auto',
-            flexShrink: 0,
+            fontSize: 'var(--text-sm)',
+            fontWeight: 'var(--weight-bold)' as unknown as number,
+            color: 'var(--color-text-muted)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            marginBottom: 'var(--space-1)',
           }}
         >
-          <InteractiveSessionRail
-            sessions={sessions}
-            selectedSessionId={selectedSessionId}
-            onSelectSession={(id) => {
-              setSelectedSessionId(id);
-              const session = sessions.find((entry) => entry.sessionId === id);
-              if (!session || session.status === 'running') {
-                startPolling(id);
-              }
+          New Lane
+        </div>
+
+        {/* Agent selection */}
+        <div>
+          <div style={{ marginBottom: 'var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+            Agent
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+            {availableAgents.map((key) => {
+              const adapterInfo = allAdapters.find((a) => a.key === key);
+              const isExp = adapterInfo?.tier === 'experimental';
+              const instanceCount = countAdapterInstances(sessions, key);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setAgentKey(key);
+                    if (isExp) {
+                      setAllowExperimental(true);
+                    } else {
+                      setAllowExperimental(false);
+                      setExperimentalAcknowledged(false);
+                    }
+                    setCreateError(null);
+                    setCreateErrorCode(null);
+                  }}
+                  data-testid={`agent-select-${key}`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-1)',
+                    borderRadius: 'var(--radius-md)',
+                    border: agentKey === key
+                      ? '1px solid var(--color-marine-500)'
+                      : '1px solid var(--color-border-700)',
+                    backgroundColor: agentKey === key
+                      ? 'color-mix(in srgb, var(--color-marine-500) 12%, transparent)'
+                      : 'var(--color-surface-800)',
+                    color: 'var(--color-text-primary)',
+                    padding: 'var(--space-1) var(--space-2)',
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-family)',
+                    fontSize: 'var(--text-xs)',
+                  }}
+                >
+                  {key}
+                  <Badge variant={isExp ? 'warning' : 'success'}>
+                    {isExp ? 'Exp' : 'T1'}
+                  </Badge>
+                  {instanceCount > 0 && (
+                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-marine-400)' }}>
+                      ({instanceCount})
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            {availableAgents.length === 0 && (
+              <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                No adapters available
+              </span>
+            )}
+          </div>
+          {agentLoadError && (
+            <div style={{ marginTop: 'var(--space-1)', color: 'var(--color-warning-400)', fontSize: 'var(--text-xs)' }}>
+              {agentLoadError}
+            </div>
+          )}
+        </div>
+
+        {/* Experimental warning */}
+        {selectedIsExperimental && (
+          <div
+            style={{
+              padding: 'var(--space-2)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-warning-400)',
+              backgroundColor: 'color-mix(in srgb, var(--color-warning-400) 8%, transparent)',
             }}
-            onCreateSession={handleCreateSession}
-            onStopSession={handleStopSession}
-            creating={creating}
+            data-testid="experimental-warning"
+          >
+            <div style={{ fontSize: 'var(--text-xs)', fontWeight: 'var(--weight-semibold)' as unknown as number, color: 'var(--color-warning-400)', marginBottom: 'var(--space-1)' }}>
+              Experimental Adapter Warning
+            </div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-2)' }}>
+              This adapter is experimental and may produce unstable results, consume resources unpredictably, or fail without clear error messages. Use at your own risk.
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--text-xs)', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={experimentalAcknowledged}
+                onChange={(e) => setExperimentalAcknowledged(e.target.checked)}
+                data-testid="experimental-acknowledge-checkbox"
+              />
+              <span style={{ color: 'var(--color-text-primary)' }}>I understand the risks</span>
+            </label>
+          </div>
+        )}
+
+        {/* Task prompt */}
+        <div>
+          <div style={{ marginBottom: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+            Task Prompt
+          </div>
+          <div
+            style={{ marginBottom: 'var(--space-1)', fontSize: '10px', color: 'var(--color-text-muted)' }}
+            data-testid="interactive-workspace-path"
+          >
+            Workspace: {workspaceCwd ?? '(current repository)'}
+          </div>
+          <textarea
+            value={taskPrompt}
+            onChange={(e) => setTaskPrompt(e.target.value)}
+            placeholder="Describe what you want the agent to work on..."
+            rows={3}
+            data-testid="session-task-prompt"
+            style={{
+              width: '100%',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border-700)',
+              backgroundColor: 'var(--color-bg-900)',
+              color: 'var(--color-text-primary)',
+              padding: 'var(--space-2)',
+              resize: 'vertical',
+              fontFamily: 'var(--font-family)',
+              fontSize: 'var(--text-xs)',
+            }}
           />
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
-          <InteractiveTerminalPanel
-            sessionId={selectedSessionId}
-            agentKey={selectedSession?.agentKey ?? null}
-            status={selectedSession?.status ?? null}
-            events={selectedEvents}
-            transportError={selectedPollError}
-          />
-
-          <InputComposer
-            sessionId={selectedSessionId}
-            sessionStatus={selectedSession?.status ?? null}
-            onSendInput={handleSendInput}
-            onStopSession={() => {
-              if (selectedSessionId) handleStopSession(selectedSessionId);
-            }}
-          />
+        {/* Launch button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleConfirmCreate}
+            loading={creating}
+            disabled={availableAgents.length === 0 || (selectedIsExperimental && !experimentalAcknowledged)}
+            data-testid="confirm-create-session"
+          >
+            Launch Lane
+          </Button>
+          {runningInstanceCount > 0 && (
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+              {runningInstanceCount} running
+            </span>
+          )}
         </div>
+
+        {/* Create error */}
+        {createError && (
+          <div
+            style={{
+              color: createErrorCode === 'dirty_worktree'
+                ? 'var(--color-warning-400)'
+                : 'var(--color-danger-400)',
+              fontSize: 'var(--text-xs)',
+              padding: 'var(--space-2)',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: createErrorCode
+                ? 'color-mix(in srgb, var(--color-danger-400) 8%, transparent)'
+                : 'transparent',
+            }}
+            data-testid="create-session-error"
+          >
+            {createError}
+          </div>
+        )}
+      </div>
+
+      {/* ---- Center: Focused Terminal + Input ---- */}
+      <div style={centerStyle}>
+        <InteractiveTerminalPanel
+          sessionId={selectedSessionId}
+          agentKey={selectedSession?.agentKey ?? null}
+          laneLabel={selectedSession ? laneLabel(selectedSession) : null}
+          status={selectedSession?.status ?? null}
+          events={selectedEvents}
+          transportError={selectedPollError}
+        />
+
+        <InputComposer
+          sessionId={selectedSessionId}
+          sessionStatus={selectedSession?.status ?? null}
+          onSendInput={handleSendInput}
+          onStopSession={() => {
+            if (selectedSessionId) handleStopSession(selectedSessionId);
+          }}
+        />
+      </div>
+
+      {/* ---- Right: Running-Lanes Rail ---- */}
+      <div style={rightPanelStyle} data-testid="lanes-rail">
+        <InteractiveSessionRail
+          sessions={sessions}
+          selectedSessionId={selectedSessionId}
+          pollErrors={pollErrors}
+          onSelectSession={(id) => {
+            setSelectedSessionId(id);
+            const session = sessions.find((entry) => entry.sessionId === id);
+            if (!session || session.status === 'running') {
+              startPolling(id);
+            }
+          }}
+          onStopSession={handleStopSession}
+        />
       </div>
     </div>
   );
+}
+
+/** Generate a human-readable lane label for disambiguation (M4.8.2). */
+export function laneLabel(session: InteractiveSessionSummary): string {
+  return `${session.agentKey} · ${session.sessionId.slice(0, 8)}`;
 }

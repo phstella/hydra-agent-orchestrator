@@ -6,6 +6,8 @@ import { Badge } from './design-system';
 interface InteractiveTerminalPanelProps {
   sessionId: string | null;
   agentKey: string | null;
+  /** Disambiguated lane label, e.g. "codex · a1b2c3d4" (M4.8.2). */
+  laneLabel: string | null;
   status: string | null;
   events: InteractiveStreamEvent[];
   transportError: string | null;
@@ -16,6 +18,7 @@ const VISIBLE_TAIL = 500;
 export function InteractiveTerminalPanel({
   sessionId,
   agentKey,
+  laneLabel,
   status,
   events,
   transportError,
@@ -117,8 +120,8 @@ export function InteractiveTerminalPanel({
   return (
     <div style={containerStyle} data-testid="terminal-panel">
       <div style={headerStyle}>
-        <span style={titleStyle}>
-          {agentKey ? `Terminal: ${agentKey}` : 'Terminal Output'}
+        <span style={titleStyle} data-testid="terminal-lane-label">
+          {laneLabel ? `Terminal: ${laneLabel}` : agentKey ? `Terminal: ${agentKey}` : 'Terminal Output'}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
           {events.length > VISIBLE_TAIL && (

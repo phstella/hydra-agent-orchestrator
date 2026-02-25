@@ -599,18 +599,13 @@ describe('Smoke Test 8: Interactive tab renders and shows empty state', () => {
 });
 
 describe('Smoke Test 9: Create and select interactive session', () => {
-  it('opens new session form and creates session with IPC', async () => {
+  it('creates session from orchestration create panel with IPC', async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('create-session-btn')).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByTestId('create-session-btn'));
-
-    await waitFor(() => {
+      expect(screen.getByTestId('create-panel')).toBeInTheDocument();
       expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument();
     });
 
@@ -638,9 +633,6 @@ describe('Smoke Test 10: Output polling renders in terminal panel', () => {
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
-
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Test task');
     await user.click(screen.getByTestId('confirm-create-session'));
@@ -660,9 +652,6 @@ describe('Smoke Test 11: Send input success and failure paths', () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
-
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Test input');
@@ -694,8 +683,6 @@ describe('Smoke Test 11: Send input success and failure paths', () => {
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Test input err');
     await user.click(screen.getByTestId('confirm-create-session'));
@@ -750,8 +737,6 @@ describe('Smoke Test 12: Stop session and lifecycle transition', () => {
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Stop test');
     await user.click(screen.getByTestId('confirm-create-session'));
@@ -779,8 +764,6 @@ describe('Smoke Test 13: Interactive terminal handles stream errors and ANSI out
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'Poll fail test');
     await user.click(screen.getByTestId('confirm-create-session'));
@@ -812,8 +795,6 @@ describe('Smoke Test 13: Interactive terminal handles stream errors and ANSI out
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
     await user.type(screen.getByTestId('session-task-prompt'), 'ANSI test');
     await user.click(screen.getByTestId('confirm-create-session'));
@@ -835,10 +816,7 @@ describe('Smoke Test 14: Experimental adapter shows warning and requires acknowl
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
-
-    await waitFor(() => expect(screen.getByTestId('new-session-form')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('create-panel')).toBeInTheDocument());
 
     const cursorBtn = screen.getByTestId('agent-select-cursor-agent');
     await user.click(cursorBtn);
@@ -855,10 +833,7 @@ describe('Smoke Test 14: Experimental adapter shows warning and requires acknowl
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
-
-    await waitFor(() => expect(screen.getByTestId('new-session-form')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('create-panel')).toBeInTheDocument());
 
     await user.click(screen.getByTestId('agent-select-cursor-agent'));
     await waitFor(() => expect(screen.getByTestId('experimental-warning')).toBeInTheDocument());
@@ -878,9 +853,7 @@ describe('Smoke Test 15: Experimental adapter denied without confirmation shows 
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
-    await waitFor(() => expect(screen.getByTestId('new-session-form')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('create-panel')).toBeInTheDocument());
 
     await user.click(screen.getByTestId('agent-select-cursor-agent'));
     await waitFor(() => expect(screen.getByTestId('experimental-warning')).toBeInTheDocument());
@@ -910,8 +883,6 @@ describe('Smoke Test 16: Dirty working tree policy block shows clear feedback', 
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
 
     await user.type(screen.getByTestId('session-task-prompt'), 'test dirty tree');
@@ -935,8 +906,6 @@ describe('Smoke Test 17: Unsupported adapter blocked with actionable reason', ()
     render(<App />);
     await user.click(screen.getByTestId('nav-interactive'));
 
-    await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
-    await user.click(screen.getByTestId('create-session-btn'));
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
 
     await user.type(screen.getByTestId('session-task-prompt'), 'test blocked adapter');
