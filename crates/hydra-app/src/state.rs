@@ -763,6 +763,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interactive_duplicate_adapter_sessions_isolated() {
+        let state = new_interactive_state();
+
+        let (tx1, rx1) = mpsc::channel(256);
+        let s1 = PtySession::spawn(sleep_pty_config(60), tx1).unwrap();
+        state
+            .register_session("dup-a", "claude", "2026-02-24T00:00:00Z", s1, None)
+            .await;
+        spawn_pty_event_bridge("dup-a".to_string(), "claude".to_string(), rx1, state.clone());
+
+        let (tx2, rx2) = mpsc::channel(256);
+        let s2 = PtySession::spawn(sleep_pty_config(60), tx2).unwrap();
+        state
+            .register_session("dup-b", "claude", "2026-02-24T00:00:01Z", s2, None)
+            .await;
+        spawn_pty_event_bridge("dup-b".to_string(), "claude".to_string(), rx2, state.clone());
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let list = state.list_sessions().await;
+        let claude_count = list.iter().filter(|s| s.1 == "claude").count();
+        assert_eq!(
+            claude_count, 2,
+            "expected two concurrent sessions for the same adapter key"
+        );
+
+        // Stop one duplicate-adapter lane and verify the sibling stays running.
+        let (was_running_a, status_a) = state.stop_session("dup-a").await.unwrap();
+        assert!(was_running_a);
+        assert_eq!(status_a, "stopped");
+        assert_eq!(state.get_status("dup-a").await, Some("stopped".to_string()));
+        assert_eq!(state.get_status("dup-b").await, Some("running".to_string()));
+
+        // Session-scoped write isolation: stopped lane rejects input, sibling lane accepts.
+        assert!(state.write_input("dup-a", b"late write").await.is_err());
+        state.write_input("dup-b", b"keep running\n").await.unwrap();
+
+        let (events_b, _, _, _, _) = state.poll_events("dup-b", 0, 512).await.unwrap();
+        assert!(
+            events_b.iter().any(|e| e.event_type == "user_input"),
+            "expected user_input event only on running sibling lane"
+        );
+
+        state.stop_session("dup-b").await.unwrap();
+    }
+
+    #[tokio::test]
     async fn interactive_shutdown_all_stops_running_sessions() {
         let state = new_interactive_state();
 
