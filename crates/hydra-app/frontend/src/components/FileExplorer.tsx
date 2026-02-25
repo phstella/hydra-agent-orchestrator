@@ -13,6 +13,16 @@ const WATCH_POLL_INTERVAL_MS = 1_000;
 const WATCH_POLL_RETRY_MS = 3_000;
 const DEBOUNCE_REFRESH_MS = 300;
 
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, '/');
+}
+
+function parentDirectory(path: string, fallback: string): string {
+  const lastSlash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  if (lastSlash <= 0) return fallback;
+  return path.slice(0, lastSlash);
+}
+
 interface FileExplorerProps {
   workspaceCwd: string | null;
 }
@@ -106,12 +116,19 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
       // Determine which directories need refreshing
       const dirsToRefresh = new Set<string>();
       for (const evt of events) {
-        const parentDir = evt.path.substring(0, evt.path.lastIndexOf('/')) || effectivePath;
-        if (parentDir === effectivePath) {
+        const parentDir = parentDirectory(evt.path, effectivePath);
+        if (normalizePath(parentDir) === normalizePath(effectivePath)) {
           dirsToRefresh.add('__root__');
         }
         if (expanded.has(parentDir)) {
           dirsToRefresh.add(parentDir);
+        } else {
+          const altParentDir = parentDir.includes('\\')
+            ? parentDir.replace(/\\/g, '/')
+            : parentDir.replace(/\//g, '\\');
+          if (expanded.has(altParentDir)) {
+            dirsToRefresh.add(altParentDir);
+          }
         }
       }
 
@@ -137,6 +154,10 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
   // -------------------------------------------------------------------------
   useEffect(() => {
     if (!effectivePath) return;
+
+    setWatcherId(null);
+    setWatchError(null);
+    pollCursor.current = 0;
 
     let cancelled = false;
     let currentWatcherId: string | null = null;
@@ -179,6 +200,7 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
           }
 
           if (!batch.active) {
+            setWatcherId((current) => (current === wid ? null : current));
             return;
           }
 

@@ -263,7 +263,7 @@ export interface DirectoryListing {
 }
 
 export interface FileWatchEvent {
-  eventType: string; // "create" | "modify" | "delete"
+  eventType: string; // "create" | "modify" | "delete" | "rename"
   path: string;
   timestamp: string;
 }

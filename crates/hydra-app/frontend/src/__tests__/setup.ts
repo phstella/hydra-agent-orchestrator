@@ -29,13 +29,122 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 // `__rawWrites` via the globally-exposed `__xtermInstances` array.
 // ---------------------------------------------------------------------------
 
-function stripAnsi(str: string): string {
-  return str
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
-    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '')
-    .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
+function lineStart(text: string, cursor: number): number {
+  const idx = text.lastIndexOf('\n', Math.max(0, cursor - 1));
+  return idx >= 0 ? idx + 1 : 0;
+}
+
+function lineEnd(text: string, cursor: number): number {
+  const idx = text.indexOf('\n', cursor);
+  return idx >= 0 ? idx : text.length;
+}
+
+function applyAnsiToText(
+  existing: string,
+  cursorStart: number,
+  input: string,
+): { text: string; cursor: number } {
+  let text = existing;
+  let cursor = Math.max(0, Math.min(cursorStart, text.length));
+  let i = 0;
+
+  while (i < input.length) {
+    const ch = input[i];
+
+    if (ch === '\u001b') {
+      // Skip OSC sequences.
+      if (input[i + 1] === ']') {
+        const bellIdx = input.indexOf('\u0007', i + 2);
+        const stIdx = input.indexOf('\u001b\\', i + 2);
+        if (bellIdx >= 0) {
+          i = bellIdx + 1;
+          continue;
+        }
+        if (stIdx >= 0) {
+          i = stIdx + 2;
+          continue;
+        }
+        break;
+      }
+
+      // Handle CSI sequences.
+      if (input[i + 1] === '[') {
+        let j = i + 2;
+        while (j < input.length && !/[A-Za-z]/.test(input[j])) j++;
+        if (j >= input.length) break;
+        const final = input[j];
+        const params = input.slice(i + 2, j);
+
+        switch (final) {
+          case 'J':
+            // ED: ESC[2J clear entire screen.
+            if (params === '2') {
+              text = '';
+              cursor = 0;
+            }
+            break;
+          case 'K': {
+            // EL: clear to end of line.
+            const end = lineEnd(text, cursor);
+            text = text.slice(0, cursor) + text.slice(end);
+            break;
+          }
+          case 'H':
+          case 'f':
+            // CUP/HVP: only model home for tests.
+            if (params === '' || params === '1;1') {
+              cursor = 0;
+            }
+            break;
+          case 'm':
+          case 'A':
+          case 'B':
+          case 'C':
+          case 'D':
+            // SGR and cursor moves are preserved in raw writes; no-op in mock text.
+            break;
+          default:
+            break;
+        }
+
+        i = j + 1;
+        continue;
+      }
+    }
+
+    if (ch === '\r') {
+      cursor = lineStart(text, cursor);
+      i += 1;
+      continue;
+    }
+
+    if (ch === '\n') {
+      if (cursor >= text.length) {
+        text += '\n';
+      } else {
+        text = text.slice(0, cursor) + '\n' + text.slice(cursor);
+      }
+      cursor += 1;
+      i += 1;
+      continue;
+    }
+
+    // Drop non-printable controls.
+    if (ch < ' ' || ch === '\x7f') {
+      i += 1;
+      continue;
+    }
+
+    if (cursor < text.length) {
+      text = text.slice(0, cursor) + ch + text.slice(cursor + 1);
+    } else {
+      text += ch;
+    }
+    cursor += 1;
+    i += 1;
+  }
+
+  return { text, cursor };
 }
 
 export interface MockTerminalInstance {
@@ -53,6 +162,7 @@ class MockTerminal implements MockTerminalInstance {
   __rawWrites: string[] = [];
   __element: HTMLDivElement | null = null;
   options: Record<string, unknown> = {};
+  __cursor = 0;
 
   constructor(opts?: Record<string, unknown>) {
     if (opts) this.options = { ...opts };
@@ -69,8 +179,9 @@ class MockTerminal implements MockTerminalInstance {
     const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
     this.__rawWrites.push(str);
     if (this.__element) {
-      const plain = stripAnsi(str);
-      this.__element.textContent = (this.__element.textContent ?? '') + plain;
+      const next = applyAnsiToText(this.__element.textContent ?? '', this.__cursor, str);
+      this.__cursor = next.cursor;
+      this.__element.textContent = next.text;
     }
     if (callback) callback();
   }
@@ -79,10 +190,13 @@ class MockTerminal implements MockTerminalInstance {
 
   clear() {
     this.__rawWrites = [];
+    this.__cursor = 0;
     if (this.__element) this.__element.textContent = '';
   }
 
-  reset() {}
+  reset() {
+    this.__cursor = 0;
+  }
 
   dispose() {
     if (this.__element?.parentNode) {

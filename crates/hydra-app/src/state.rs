@@ -523,12 +523,7 @@ pub struct FileWatcherStateHandle {
 }
 
 impl FileWatcherStateHandle {
-    pub async fn register_watcher(
-        &self,
-        watcher_id: &str,
-        root: &str,
-        stop_flag: Arc<AtomicBool>,
-    ) {
+    pub async fn register_watcher(&self, watcher_id: &str, root: &str, stop_flag: Arc<AtomicBool>) {
         let mut watchers = self.watchers.lock().await;
         watchers.insert(
             watcher_id.to_string(),
@@ -589,18 +584,16 @@ impl FileWatcherStateHandle {
 
     pub async fn stop_watcher(&self, watcher_id: &str) -> Option<bool> {
         let mut watchers = self.watchers.lock().await;
-        let w = watchers.get_mut(watcher_id)?;
+        let w = watchers.remove(watcher_id)?;
         let was_active = w.active;
         w.stop_flag.store(true, Ordering::Relaxed);
-        w.active = false;
         Some(was_active)
     }
 
     pub async fn stop_all(&self) {
         let mut watchers = self.watchers.lock().await;
-        for w in watchers.values_mut() {
+        for (_, w) in watchers.drain() {
             w.stop_flag.store(true, Ordering::Relaxed);
-            w.active = false;
         }
     }
 }
@@ -725,6 +718,12 @@ mod tests {
     fn new_interactive_state() -> InteractiveStateHandle {
         InteractiveStateHandle {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn new_file_watcher_state() -> FileWatcherStateHandle {
+        FileWatcherStateHandle {
+            watchers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -878,14 +877,24 @@ mod tests {
         state
             .register_session("dup-a", "claude", "2026-02-24T00:00:00Z", s1, None)
             .await;
-        spawn_pty_event_bridge("dup-a".to_string(), "claude".to_string(), rx1, state.clone());
+        spawn_pty_event_bridge(
+            "dup-a".to_string(),
+            "claude".to_string(),
+            rx1,
+            state.clone(),
+        );
 
         let (tx2, rx2) = mpsc::channel(256);
         let s2 = PtySession::spawn(sleep_pty_config(60), tx2).unwrap();
         state
             .register_session("dup-b", "claude", "2026-02-24T00:00:01Z", s2, None)
             .await;
-        spawn_pty_event_bridge("dup-b".to_string(), "claude".to_string(), rx2, state.clone());
+        spawn_pty_event_bridge(
+            "dup-b".to_string(),
+            "claude".to_string(),
+            rx2,
+            state.clone(),
+        );
 
         tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -1429,5 +1438,41 @@ mod tests {
         let (events, _, done, _, _) = state.poll_events("no-art", 0, 1000).await.unwrap();
         assert!(!events.is_empty());
         assert!(done);
+    }
+
+    #[tokio::test]
+    async fn file_watcher_stop_removes_runtime_and_sets_stop_flag() {
+        let state = new_file_watcher_state();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        state
+            .register_watcher("w-stop", "/tmp/workspace", Arc::clone(&stop_flag))
+            .await;
+
+        let result = state.stop_watcher("w-stop").await;
+        assert_eq!(result, Some(true));
+        assert!(stop_flag.load(Ordering::Relaxed));
+        assert!(state.poll_events("w-stop", 0, 10).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn file_watcher_stop_all_clears_registry_and_sets_flags() {
+        let state = new_file_watcher_state();
+        let stop_a = Arc::new(AtomicBool::new(false));
+        let stop_b = Arc::new(AtomicBool::new(false));
+
+        state
+            .register_watcher("w-a", "/tmp/a", Arc::clone(&stop_a))
+            .await;
+        state
+            .register_watcher("w-b", "/tmp/b", Arc::clone(&stop_b))
+            .await;
+
+        state.stop_all().await;
+
+        assert!(stop_a.load(Ordering::Relaxed));
+        assert!(stop_b.load(Ordering::Relaxed));
+        assert!(state.poll_events("w-a", 0, 10).await.is_none());
+        assert!(state.poll_events("w-b", 0, 10).await.is_none());
     }
 }

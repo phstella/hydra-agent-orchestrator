@@ -546,7 +546,9 @@ fn cargo_hydra_cli_parts_without_binary() -> Vec<String> {
     vec![
         "run".to_string(),
         "--manifest-path".to_string(),
-        cargo_hydra_cli_manifest_path().to_string_lossy().to_string(),
+        cargo_hydra_cli_manifest_path()
+            .to_string_lossy()
+            .to_string(),
         "-p".to_string(),
         "hydra-cli".to_string(),
         "--".to_string(),
@@ -586,7 +588,7 @@ fn resolve_repo_root_internal(
         PathBuf::from(path)
     } else {
         std::env::current_dir()
-            .map_err(|e| IpcError::internal(format!("failed to resolve current directory: {e}")))?    
+            .map_err(|e| IpcError::internal(format!("failed to resolve current directory: {e}")))?
     };
 
     if !target_dir.exists() {
@@ -651,7 +653,9 @@ fn initialize_git_repository(target_dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to run git init: {e}"))?;
 
     if !init_output.status.success() {
-        let stderr = String::from_utf8_lossy(&init_output.stderr).trim().to_string();
+        let stderr = String::from_utf8_lossy(&init_output.stderr)
+            .trim()
+            .to_string();
         return Err(if stderr.is_empty() {
             "git init failed".to_string()
         } else {
@@ -710,8 +714,12 @@ fn initialize_git_repository(target_dir: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to create initial commit: {e}"))?;
 
     if !commit_output.status.success() {
-        let stderr = String::from_utf8_lossy(&commit_output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&commit_output.stderr)
+            .trim()
+            .to_string();
+        let stdout = String::from_utf8_lossy(&commit_output.stdout)
+            .trim()
+            .to_string();
         return Err(if !stderr.is_empty() {
             format!("initial commit failed: {stderr}")
         } else if !stdout.is_empty() {
@@ -1867,6 +1875,18 @@ fn unsafe_mode_requirement_hint(adapter_key: &str) -> &'static str {
 
 const MAX_FILE_WATCH_EVENTS_PER_POLL: usize = 512;
 
+fn file_watch_event_type(kind: &notify::EventKind) -> Option<&'static str> {
+    use notify::event::ModifyKind;
+
+    match kind {
+        notify::EventKind::Create(_) => Some("create"),
+        notify::EventKind::Modify(ModifyKind::Name(_)) => Some("rename"),
+        notify::EventKind::Modify(_) => Some("modify"),
+        notify::EventKind::Remove(_) => Some("delete"),
+        _ => None,
+    }
+}
+
 #[tauri::command]
 pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
     let dir = PathBuf::from(&path);
@@ -1909,12 +1929,10 @@ pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
             .as_ref()
             .and_then(|md| md.modified().ok())
             .and_then(|mt| {
-                mt.duration_since(std::time::UNIX_EPOCH)
-                    .ok()
-                    .map(|d| {
-                        chrono::DateTime::from_timestamp(d.as_secs() as i64, d.subsec_nanos())
-                            .map(|dt| dt.to_rfc3339())
-                    })
+                mt.duration_since(std::time::UNIX_EPOCH).ok().map(|d| {
+                    chrono::DateTime::from_timestamp(d.as_secs() as i64, d.subsec_nanos())
+                        .map(|dt| dt.to_rfc3339())
+                })
             })
             .flatten();
 
@@ -1964,6 +1982,7 @@ pub async fn start_file_watcher(
     let handle = state.file_watcher.clone();
     let wid = watcher_id.clone();
     let stop = Arc::clone(&stop_flag);
+    let runtime = tokio::runtime::Handle::current();
 
     // Spawn watcher on a dedicated OS thread (notify requires it on some platforms)
     std::thread::spawn(move || {
@@ -1975,15 +1994,12 @@ pub async fn start_file_watcher(
             Err(e) => {
                 let handle_clone = handle.clone();
                 let wid_clone = wid.clone();
-                // Use a one-shot runtime to report the error
-                if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                    rt.block_on(async {
-                        handle_clone
-                            .mark_error(&wid_clone, format!("Failed to create watcher: {e}"))
-                            .await;
-                        handle_clone.mark_inactive(&wid_clone).await;
-                    });
-                }
+                runtime.block_on(async {
+                    handle_clone
+                        .mark_error(&wid_clone, format!("Failed to create watcher: {e}"))
+                        .await;
+                    handle_clone.mark_inactive(&wid_clone).await;
+                });
                 return;
             }
         };
@@ -1991,14 +2007,12 @@ pub async fn start_file_watcher(
         if let Err(e) = watcher.watch(&root_path, RecursiveMode::Recursive) {
             let handle_clone = handle.clone();
             let wid_clone = wid.clone();
-            if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                rt.block_on(async {
-                    handle_clone
-                        .mark_error(&wid_clone, format!("Failed to watch path: {e}"))
-                        .await;
-                    handle_clone.mark_inactive(&wid_clone).await;
-                });
-            }
+            runtime.block_on(async {
+                handle_clone
+                    .mark_error(&wid_clone, format!("Failed to watch path: {e}"))
+                    .await;
+                handle_clone.mark_inactive(&wid_clone).await;
+            });
             return;
         }
 
@@ -2009,11 +2023,9 @@ pub async fn start_file_watcher(
 
             match rx.recv_timeout(std::time::Duration::from_millis(200)) {
                 Ok(Ok(event)) => {
-                    let event_type = match event.kind {
-                        notify::EventKind::Create(_) => "create",
-                        notify::EventKind::Modify(_) => "modify",
-                        notify::EventKind::Remove(_) => "delete",
-                        _ => continue,
+                    let event_type = match file_watch_event_type(&event.kind) {
+                        Some(value) => value,
+                        None => continue,
                     };
                     let timestamp = chrono::Utc::now().to_rfc3339();
 
@@ -2025,36 +2037,35 @@ pub async fn start_file_watcher(
                         };
                         let handle_clone = handle.clone();
                         let wid_clone = wid.clone();
-                        if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                            rt.block_on(async {
-                                handle_clone
-                                    .append_watch_event(&wid_clone, watch_event)
-                                    .await;
-                            });
-                        }
+                        runtime.block_on(async {
+                            handle_clone
+                                .append_watch_event(&wid_clone, watch_event)
+                                .await;
+                        });
                     }
                 }
                 Ok(Err(e)) => {
                     let handle_clone = handle.clone();
                     let wid_clone = wid.clone();
-                    if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                        rt.block_on(async {
-                            handle_clone
-                                .mark_error(&wid_clone, format!("Watcher error: {e}"))
-                                .await;
-                        });
-                    }
+                    runtime.block_on(async {
+                        handle_clone
+                            .mark_error(&wid_clone, format!("Watcher error: {e}"))
+                            .await;
+                    });
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
+
+        let handle_clone = handle.clone();
+        let wid_clone = wid.clone();
+        runtime.block_on(async {
+            handle_clone.mark_inactive(&wid_clone).await;
+        });
     });
 
-    Ok(FileWatcherStarted {
-        watcher_id,
-        root,
-    })
+    Ok(FileWatcherStarted { watcher_id, root })
 }
 
 #[tauri::command]
@@ -2229,7 +2240,10 @@ mod tests {
             .stderr(Stdio::null())
             .status()
             .unwrap();
-        assert!(head_status.success(), "auto-init should create initial HEAD");
+        assert!(
+            head_status.success(),
+            "auto-init should create initial HEAD"
+        );
         let gitignore = std::fs::read_to_string(workspace.join(".gitignore")).unwrap();
         assert!(
             gitignore.lines().any(|line| line.trim() == ".hydra/"),
@@ -2520,6 +2534,29 @@ index 3333333..4444444 100644
         assert_eq!(
             parse_porcelain_path("R  src/old.rs -> src/new.rs"),
             Some("src/new.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn file_watch_event_type_maps_rename_create_modify_delete() {
+        use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
+        use notify::EventKind;
+
+        assert_eq!(
+            file_watch_event_type(&EventKind::Create(CreateKind::Any)),
+            Some("create")
+        );
+        assert_eq!(
+            file_watch_event_type(&EventKind::Modify(ModifyKind::Any)),
+            Some("modify")
+        );
+        assert_eq!(
+            file_watch_event_type(&EventKind::Modify(ModifyKind::Name(RenameMode::Any,))),
+            Some("rename")
+        );
+        assert_eq!(
+            file_watch_event_type(&EventKind::Remove(RemoveKind::Any)),
+            Some("delete")
         );
     }
 

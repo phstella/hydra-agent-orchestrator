@@ -320,7 +320,7 @@ export default function App() {
       />
       <NavRailButton
         icon="▸"
-        label="Orchestrate"
+        label="Orchestration"
         active={activeView === 'orchestration'}
         onClick={() => setActiveView('orchestration')}
         data-testid="nav-orchestration"

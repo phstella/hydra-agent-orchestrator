@@ -2002,6 +2002,51 @@ describe('Smoke Test 42: File Explorer manual refresh reloads tree', () => {
   });
 });
 
+describe('Smoke Test 43: File Explorer watcher events trigger debounced refresh', () => {
+  it('reloads root listing after a rename watcher event', async () => {
+    let listCallCount = 0;
+    vi.mocked(ipc.listDirectory).mockImplementation(async () => {
+      listCallCount++;
+      return {
+        path: '.',
+        entries: listCallCount === 1
+          ? [{ name: 'before.txt', path: './before.txt', entryType: 'file', size: 50, modifiedAt: '2026-02-25T00:00:00Z' }]
+          : [{ name: 'after.txt', path: './after.txt', entryType: 'file', size: 75, modifiedAt: '2026-02-25T01:00:00Z' }],
+        error: null,
+      };
+    });
+
+    vi.mocked(ipc.startFileWatcher).mockResolvedValue({ watcherId: 'watch-rename', root: '.' });
+
+    let pollCallCount = 0;
+    vi.mocked(ipc.pollFileWatchEvents).mockImplementation(async () => {
+      pollCallCount++;
+      return {
+        watcherId: 'watch-rename',
+        events: pollCallCount === 1
+          ? [{ eventType: 'rename', path: './after.txt', timestamp: '2026-02-25T01:00:00Z' }]
+          : [],
+        nextCursor: pollCallCount,
+        active: true,
+        error: null,
+      };
+    });
+    vi.mocked(ipc.stopFileWatcher).mockResolvedValue({ watcherId: 'watch-rename', wasActive: true });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-files'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tree-node-before.txt')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tree-node-after.txt')).toBeInTheDocument();
+    }, { timeout: 3000 });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // P4.9.3: High-Fidelity Terminal Rendering (ANSI Parity) Fixture Tests
 // ---------------------------------------------------------------------------
@@ -2074,14 +2119,15 @@ describe('P4.9.3 Fixture: Bold, italic, underline style attributes', () => {
 
 describe('P4.9.3 Fixture: Cursor movement sequences', () => {
   it('preserves cursor-up, cursor-down, and cursor-position escapes', async () => {
-    // CUU (cursor up 2), CUD (cursor down 1), CUP (move to row 1 col 5)
-    const payload = '\u001b[2AUp\u001b[1BDown\u001b[1;5HPosition\r\n';
+    // CUU (cursor up 2), CUD (cursor down 1), CUP (move to row 1 col 1)
+    const payload = 'abc\u001b[2A\u001b[1B\u001b[1;1HZ\r\n';
     const user = userEvent.setup();
     const term = await setupTerminalWithAnsiOutput(payload, user);
 
     expect(term.__rawWrites.some((w) => w.includes('\u001b[2A'))).toBe(true);
     expect(term.__rawWrites.some((w) => w.includes('\u001b[1B'))).toBe(true);
-    expect(term.__rawWrites.some((w) => w.includes('\u001b[1;5H'))).toBe(true);
+    expect(term.__rawWrites.some((w) => w.includes('\u001b[1;1H'))).toBe(true);
+    expect(screen.getByText(/Zbc/)).toBeInTheDocument();
   });
 });
 
@@ -2094,6 +2140,9 @@ describe('P4.9.3 Fixture: Clear-line and clear-screen sequences', () => {
 
     expect(term.__rawWrites.some((w) => w.includes('\u001b[K'))).toBe(true);
     expect(term.__rawWrites.some((w) => w.includes('\u001b[2J'))).toBe(true);
+    expect(screen.getByText(/Cleared/)).toBeInTheDocument();
+    expect(screen.queryByText(/Before/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/After/)).not.toBeInTheDocument();
   });
 });
 
