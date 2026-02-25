@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useMemo, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
 import type { InteractiveStreamEvent } from '../types';
 import { Badge } from './design-system';
 import { XTermRenderer } from './XTermRenderer';
+import type { XTermRendererHandle } from './XTermRenderer';
 
 interface InteractiveTerminalPanelProps {
   sessionId: string | null;
@@ -12,16 +13,20 @@ interface InteractiveTerminalPanelProps {
   status: string | null;
   events: InteractiveStreamEvent[];
   transportError: string | null;
+  /** P4.9.5: Callback for terminal keyboard input routed to PTY stdin. */
+  onTerminalInput?: (data: string) => void;
 }
 
-export function InteractiveTerminalPanel({
+export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, InteractiveTerminalPanelProps>(
+  function InteractiveTerminalPanel({
   sessionId,
   agentKey,
   laneLabel,
   status,
   events,
   transportError,
-}: InteractiveTerminalPanelProps) {
+  onTerminalInput,
+}, ref) {
   // Extract raw text from events, preserving ANSI escape sequences.
   const chunks = useMemo(
     () => events.map(extractRawText).filter((t) => t.length > 0),
@@ -124,12 +129,14 @@ export function InteractiveTerminalPanel({
       )}
 
       <XTermRenderer
+        ref={ref}
         resetKey={sessionId}
         chunks={chunks}
+        onData={status === 'running' ? onTerminalInput : undefined}
       />
     </div>
   );
-}
+});
 
 /**
  * Extract raw text from an event, preserving ANSI escape sequences

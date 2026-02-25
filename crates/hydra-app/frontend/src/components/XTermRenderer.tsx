@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -50,25 +50,48 @@ export interface XTermRendererProps {
    * resets and replays the current array.
    */
   chunks: string[];
+
+  /**
+   * P4.9.5: Callback for terminal keyboard input. When set, stdin is
+   * enabled and keystrokes are forwarded to this handler.
+   */
+  onData?: (data: string) => void;
 }
 
-export function XTermRenderer({ resetKey, chunks }: XTermRendererProps) {
+export interface XTermRendererHandle {
+  focus: () => void;
+}
+
+export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>(
+  function XTermRenderer({ resetKey, chunks, onData }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const writtenRef = useRef(0);
   const resetKeyRef = useRef<string | null>(null);
+  const onDataRef = useRef(onData);
+  onDataRef.current = onData;
+
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      if (typeof termRef.current?.focus === 'function') {
+        termRef.current.focus();
+      }
+    },
+  }));
 
   // ── Mount / unmount terminal ──────────────────────────────────────────
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
+    const stdinEnabled = !!onDataRef.current;
+
     const term = new Terminal({
-      cursorBlink: false,
-      cursorStyle: 'bar',
-      cursorInactiveStyle: 'none',
-      disableStdin: true,
+      cursorBlink: stdinEnabled,
+      cursorStyle: stdinEnabled ? 'block' : 'bar',
+      cursorInactiveStyle: stdinEnabled ? 'outline' : 'none',
+      disableStdin: !stdinEnabled,
       scrollback: SCROLLBACK_LINES,
       fontSize: 13,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
@@ -83,6 +106,13 @@ export function XTermRenderer({ resetKey, chunks }: XTermRendererProps) {
 
     // Initial fit after open
     try { fit.fit(); } catch { /* layout not ready */ }
+
+    // P4.9.5: Forward keyboard input to PTY via onData callback
+    if (stdinEnabled && typeof term.onData === 'function') {
+      term.onData((data) => {
+        onDataRef.current?.(data);
+      });
+    }
 
     termRef.current = term;
     fitRef.current = fit;
@@ -153,4 +183,4 @@ export function XTermRenderer({ resetKey, chunks }: XTermRendererProps) {
       data-testid="xterm-container"
     />
   );
-}
+});

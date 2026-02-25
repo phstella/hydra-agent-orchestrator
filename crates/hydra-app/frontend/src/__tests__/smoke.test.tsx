@@ -1,12 +1,13 @@
 /**
- * P3-QA-01 + M4.3/M4.4 + M4.7 + P4.9.1: GUI Smoke Test Pack
+ * P3-QA-01 + M4.3/M4.4 + M4.7 + P4.9.1 + P4.9.4 + P4.9.5: GUI Smoke Test Pack
  *
  * Covers: cockpit shell render, startup, preflight refresh, experimental modal gating,
  * race flow from cockpit, winner selection, diff candidate switching, merge dry-run gating,
- * orchestration tab, session creation, output polling, send input, stop session,
+ * orchestration tab, session creation, output polling, stop session,
  * leaderboard updates, agent focus switch, completion summary, restart/retry flows,
  * default landing on orchestration, navigation transitions,
- * file explorer tab, tree rendering, live filesystem watch, manual refresh.
+ * file explorer tab, tree rendering, live filesystem watch, manual refresh,
+ * direct external CLI deploy trigger (P4.9.4), terminal-only input model (P4.9.5).
  */
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -696,8 +697,8 @@ describe('Smoke Test 10: Output polling renders in terminal panel', () => {
   });
 });
 
-describe('Smoke Test 11: Send input success and failure paths', () => {
-  it('sends input successfully when session is running', async () => {
+describe('Smoke Test 11: P4.9.5 terminal-only input model', () => {
+  it('does not render InputComposer in orchestration view', async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByTestId('nav-orchestration'));
@@ -707,44 +708,25 @@ describe('Smoke Test 11: Send input success and failure paths', () => {
     await user.click(screen.getByTestId('confirm-create-session'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('interactive-input')).toBeInTheDocument();
+      expect(screen.getByTestId('terminal-toolbar')).toBeInTheDocument();
     });
 
-    const inputField = screen.getByTestId('interactive-input');
-    await user.type(inputField, 'do something');
-
-    const sendBtn = screen.getByTestId('send-input-btn');
-    await user.click(sendBtn);
-
-    await waitFor(() => {
-      expect(ipc.writeInteractiveInput).toHaveBeenCalledWith('test-session-1', 'do something');
-    });
+    expect(screen.queryByTestId('input-composer')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('interactive-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('send-input-btn')).not.toBeInTheDocument();
   });
 
-  it('shows error feedback when write fails', async () => {
-    vi.mocked(ipc.writeInteractiveInput).mockResolvedValue({
-      sessionId: 'test-session-1',
-      success: false,
-      error: 'Session is not running',
-    });
-
+  it('renders terminal-toolbar with stop button when session is running', async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByTestId('nav-orchestration'));
 
     await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
-    await user.type(screen.getByTestId('session-task-prompt'), 'Test input err');
+    await user.type(screen.getByTestId('session-task-prompt'), 'Test stop');
     await user.click(screen.getByTestId('confirm-create-session'));
 
-    await waitFor(() => expect(screen.getByTestId('interactive-input')).toBeInTheDocument());
-
-    const inputField = screen.getByTestId('interactive-input');
-    await user.type(inputField, 'bad input');
-    await user.click(screen.getByTestId('send-input-btn'));
-
     await waitFor(() => {
-      expect(screen.getByTestId('input-error')).toBeInTheDocument();
-      expect(screen.getByText(/Session is not running/)).toBeInTheDocument();
+      expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument();
     });
   });
 });
@@ -1731,16 +1713,12 @@ describe('Smoke Test 35: Per-lane input isolation under duplicate adapters', () 
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-input-session-2')).toBeInTheDocument());
 
-    // Focus is on session 2 (most recent). Send input.
-    await waitFor(() => expect(screen.getByTestId('interactive-input')).toBeInTheDocument());
-    await user.type(screen.getByTestId('interactive-input'), 'hello session 2');
-    await user.click(screen.getByTestId('send-input-btn'));
+    // Focus is on session 2 (most recent). Terminal-only input is active.
+    // In terminal-only model, input goes through xterm onData which isn't testable
+    // in jsdom. Verify stop button is available for the focused session instead.
+    await waitFor(() => expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument());
 
-    await waitFor(() => {
-      expect(ipc.writeInteractiveInput).toHaveBeenCalledWith('input-session-2', 'hello session 2');
-    });
-
-    // Input was NOT sent to session 1
+    // Verify writeInteractiveInput was NOT called for session 1 (no cross-lane leakage)
     expect(ipc.writeInteractiveInput).not.toHaveBeenCalledWith('input-session-1', expect.anything());
   });
 });
@@ -1787,7 +1765,7 @@ describe('Smoke Test 36: Per-lane stop isolation under duplicate adapters', () =
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-stop-session-2')).toBeInTheDocument());
 
-    // Focus on session 2, stop it via InputComposer stop button
+    // Focus on session 2, stop it via terminal toolbar stop button
     await waitFor(() => expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('stop-session-btn'));
 
@@ -2193,5 +2171,197 @@ describe('P4.9.3 Fixture: Lane focus preserves per-session isolation', () => {
       const label = screen.getByTestId('terminal-lane-label');
       expect(label).toHaveTextContent(/claude/);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P4.9.4: Direct external CLI invocation smoke tests
+// ---------------------------------------------------------------------------
+
+describe('P4.9.4: Deploy launches selected external tool', () => {
+  it('deploy button triggers startInteractiveSession with selected adapter', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('agent-select-codex'));
+    await user.type(screen.getByTestId('session-task-prompt'), 'deploy test task');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(ipc.startInteractiveSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentKey: 'codex',
+          taskPrompt: 'deploy test task',
+        }),
+      );
+    });
+  });
+
+  it('shows actionable error for binary_missing', async () => {
+    vi.mocked(ipc.startInteractiveSession).mockRejectedValue(
+      new Error("[binary_missing] Adapter 'unknown-tool' binary not found in PATH. Install it or configure the path in hydra.toml."),
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'binary missing test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('create-session-error')).toHaveTextContent(/binary not found/);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('create-session-error-hint')).toBeInTheDocument();
+    });
+  });
+
+  it('shows actionable error for launch_error', async () => {
+    vi.mocked(ipc.startInteractiveSession).mockRejectedValue(
+      new Error('[launch_error] PTY spawn failed: permission denied'),
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'launch error test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('create-session-error')).toHaveTextContent(/PTY spawn failed/);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('create-session-error-hint')).toHaveTextContent(/auth\/session/);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P4.9.5: Terminal-only input model smoke tests
+// ---------------------------------------------------------------------------
+
+describe('P4.9.5: Terminal-only input model', () => {
+  it('orchestration does not render side InputComposer', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('orchestration-console')).toBeInTheDocument());
+
+    expect(screen.queryByTestId('input-composer')).not.toBeInTheDocument();
+  });
+
+  it('terminal toolbar renders stop button for running session', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'toolbar test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-toolbar')).toBeInTheDocument();
+      expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument();
+    });
+  });
+
+  it('terminal toolbar shows session ended indicator after stop', async () => {
+    let pollCount = 0;
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async () => {
+      pollCount++;
+      if (pollCount <= 2) {
+        return {
+          sessionId: 'test-session-1',
+          events: [],
+          nextCursor: pollCount,
+          done: false,
+          status: 'running',
+          error: null,
+        } as InteractiveEventBatch;
+      }
+      return {
+        sessionId: 'test-session-1',
+        events: [],
+        nextCursor: pollCount,
+        done: true,
+        status: 'stopped',
+        error: null,
+      } as InteractiveEventBatch;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'ended indicator test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('stop-session-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-ended-indicator')).toHaveTextContent('Session stopped');
+    });
+    expect(screen.queryByTestId('stop-session-btn')).not.toBeInTheDocument();
+  });
+
+  it('concurrent lanes: stop button targets focused lane only', async () => {
+    let sessionCounter = 0;
+    vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
+      sessionCounter++;
+      return {
+        sessionId: `concurrent-${sessionCounter}`,
+        agentKey: req.agentKey,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+      } as InteractiveSessionStarted;
+    });
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
+      sessionId,
+      events: [],
+      nextCursor: 0,
+      done: false,
+      status: 'running',
+      error: null,
+    } as InteractiveEventBatch));
+    vi.mocked(ipc.stopInteractiveSession).mockImplementation(async (sessionId) => ({
+      sessionId,
+      status: 'stopped',
+      wasRunning: true,
+    } as InteractiveStopResult));
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task 1');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-concurrent-1')).toBeInTheDocument());
+
+    await user.type(screen.getByTestId('session-task-prompt'), 'Task 2');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-concurrent-2')).toBeInTheDocument());
+
+    // Focus is on session 2 (most recent). Stop it.
+    await waitFor(() => expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('stop-session-btn'));
+
+    await waitFor(() => {
+      expect(ipc.stopInteractiveSession).toHaveBeenCalledWith('concurrent-2');
+    });
+    expect(ipc.stopInteractiveSession).not.toHaveBeenCalledWith('concurrent-1');
   });
 });

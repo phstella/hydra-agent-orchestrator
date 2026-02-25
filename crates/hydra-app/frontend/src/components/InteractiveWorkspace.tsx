@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { InteractiveSessionRail } from './InteractiveSessionRail';
 import { InteractiveTerminalPanel } from './InteractiveTerminalPanel';
-import { InputComposer } from './InputComposer';
+import type { XTermRendererHandle } from './XTermRenderer';
 import { Button, Badge } from './design-system';
 import {
   startInteractiveSession,
@@ -39,6 +39,26 @@ function isAdapterSelectable(adapter: AdapterInfo): boolean {
 function parseGatingErrorCode(errorStr: string): string | null {
   const match = errorStr.match(/^\[([\w_]+)\]/);
   return match ? match[1] : null;
+}
+
+/** P4.9.4: Map error codes to actionable user-facing hints. */
+function errorHintForCode(code: string | null, agentKey: string): string | null {
+  switch (code) {
+    case 'binary_missing':
+      return `Install the ${agentKey} CLI or add its path to hydra.toml.`;
+    case 'launch_error':
+      return 'Check that the tool binary is runnable and your auth/session is valid.';
+    case 'safety_gate':
+      return 'Run "hydra doctor" to diagnose adapter readiness.';
+    case 'experimental_blocked':
+      return 'Enable the experimental risk acknowledgment above.';
+    case 'dirty_worktree':
+      return 'Commit or stash your changes before deploying.';
+    case 'unsafe_blocked':
+      return 'This adapter does not support unsafe mode.';
+    default:
+      return null;
+  }
 }
 
 /** Count running sessions for a given adapter key. */
@@ -80,6 +100,9 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pollCursors = useRef<Map<string, number>>(new Map());
   const pollingSessions = useRef<Set<string>>(new Set());
+
+  // P4.9.5: Terminal ref for focus management
+  const terminalRef = useRef<XTermRendererHandle>(null);
 
   // ---------------------------------------------------------------------------
   // Initial load
@@ -318,15 +341,14 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   }, []);
 
   // ---------------------------------------------------------------------------
-  // Input — per-lane isolated (M4.8.6)
+  // Input — P4.9.5: terminal-direct via onData (no side InputComposer)
   // ---------------------------------------------------------------------------
-  const handleSendInput = useCallback(
-    async (input: string) => {
-      if (!selectedSessionId) {
-        return { success: false, error: 'No session selected' };
-      }
-      const result = await writeInteractiveInput(selectedSessionId, input);
-      return { success: result.success, error: result.error };
+  const handleTerminalInput = useCallback(
+    (data: string) => {
+      if (!selectedSessionId) return;
+      writeInteractiveInput(selectedSessionId, data).catch(() => {
+        // best-effort; PTY write failures are surfaced via poll errors
+      });
     },
     [selectedSessionId],
   );
@@ -356,6 +378,17 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       pollingSessions.current.clear();
     };
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // P4.9.5: Focus terminal when lane selection changes
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (selectedSessionId) {
+      requestAnimationFrame(() => {
+        terminalRef.current?.focus();
+      });
+    }
+  }, [selectedSessionId]);
 
   // ---------------------------------------------------------------------------
   // Orchestration Console Layout (M4.8.1)
@@ -560,7 +593,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
             disabled={availableAgents.length === 0 || (selectedIsExperimental && !experimentalAcknowledged)}
             data-testid="confirm-create-session"
           >
-            Launch Lane
+            Deploy
           </Button>
           {runningInstanceCount > 0 && (
             <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
@@ -586,29 +619,74 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
             data-testid="create-session-error"
           >
             {createError}
+            {(() => {
+              const hint = errorHintForCode(createErrorCode, agentKey);
+              return hint ? (
+                <div
+                  style={{ marginTop: 'var(--space-1)', color: 'var(--color-text-muted)' }}
+                  data-testid="create-session-error-hint"
+                >
+                  {hint}
+                </div>
+              ) : null;
+            })()}
           </div>
         )}
       </div>
 
-      {/* ---- Center: Focused Terminal + Input ---- */}
+      {/* ---- Center: Focused Terminal + Toolbar ---- */}
       <div style={centerStyle}>
         <InteractiveTerminalPanel
+          ref={terminalRef}
           sessionId={selectedSessionId}
           agentKey={selectedSession?.agentKey ?? null}
           laneLabel={selectedSession ? laneLabel(selectedSession) : null}
           status={selectedSession?.status ?? null}
           events={selectedEvents}
           transportError={selectedPollError}
+          onTerminalInput={selectedSession?.status === 'running' ? handleTerminalInput : undefined}
         />
 
-        <InputComposer
-          sessionId={selectedSessionId}
-          sessionStatus={selectedSession?.status ?? null}
-          onSendInput={handleSendInput}
-          onStopSession={() => {
-            if (selectedSessionId) handleStopSession(selectedSessionId);
-          }}
-        />
+        {/* P4.9.5: Terminal toolbar — stop + status (replaces InputComposer) */}
+        {selectedSessionId && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--space-3)',
+              padding: 'var(--space-2) var(--space-4)',
+              borderTop: '1px solid var(--color-border-700)',
+              backgroundColor: 'var(--color-bg-900)',
+              flexShrink: 0,
+            }}
+            data-testid="terminal-toolbar"
+          >
+            {selectedSession?.status === 'running' && (
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => {
+                  if (selectedSessionId) handleStopSession(selectedSessionId);
+                }}
+                data-testid="stop-session-btn"
+              >
+                Stop
+              </Button>
+            )}
+            {selectedSession?.status && selectedSession.status !== 'running' && selectedSession.status !== 'unknown' && (
+              <span
+                style={{
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--color-text-muted)',
+                  whiteSpace: 'nowrap',
+                }}
+                data-testid="session-ended-indicator"
+              >
+                Session {selectedSession.status}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ---- Right: Running-Lanes Rail ---- */}
