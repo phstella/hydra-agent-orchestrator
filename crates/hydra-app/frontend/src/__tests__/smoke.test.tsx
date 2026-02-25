@@ -1,9 +1,10 @@
 /**
- * P3-QA-01 + M4.3/M4.4: GUI Smoke Test Pack
+ * P3-QA-01 + M4.3/M4.4 + M4.7: GUI Smoke Test Pack
  *
- * Covers: startup, preflight refresh, experimental modal gating, race flow,
- * winner selection, diff candidate switching, merge dry-run gating,
- * interactive tab, session creation, output polling, send input, stop session.
+ * Covers: cockpit shell render, startup, preflight refresh, experimental modal gating,
+ * race flow from cockpit, winner selection, diff candidate switching, merge dry-run gating,
+ * interactive tab, session creation, output polling, send input, stop session,
+ * leaderboard updates, agent focus switch, intervention, completion summary.
  */
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -266,38 +267,53 @@ beforeEach(() => {
   setupDefaultMocks();
 });
 
-describe('Smoke Test 1: App startup renders tabs and preflight screen', () => {
-  it('renders navigation tabs including Preflight, Race, Results, Review', async () => {
+describe('Smoke Test 1: App startup renders cockpit shell with navigation', () => {
+  it('renders cockpit shell with left rail, top strip, center, and right rail', async () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: /preflight/i })).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: /race/i })).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: /results/i })).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: /review/i })).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: /settings/i })).toBeInTheDocument();
+      expect(screen.getByTestId('cockpit-shell')).toBeInTheDocument();
+      expect(screen.getByTestId('cockpit-left-rail')).toBeInTheDocument();
+      expect(screen.getByTestId('cockpit-top-strip')).toBeInTheDocument();
+      expect(screen.getByTestId('cockpit-center')).toBeInTheDocument();
+      expect(screen.getByTestId('cockpit-right-rail')).toBeInTheDocument();
     });
   });
 
-  it('defaults to preflight tab', async () => {
+  it('renders navigation buttons in left rail', async () => {
     render(<App />);
     await waitFor(() => {
-      const preflightTab = screen.getByRole('tab', { name: /preflight/i });
-      expect(preflightTab).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByTestId('nav-cockpit')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-preflight')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-results')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-review')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-interactive')).toBeInTheDocument();
+      expect(screen.getByTestId('nav-settings')).toBeInTheDocument();
+    });
+  });
+
+  it('defaults to cockpit view with race config', async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('race-config-panel')).toBeInTheDocument();
     });
   });
 });
 
 describe('Smoke Test 2: Preflight refresh triggers IPC and updates state', () => {
-  it('loads preflight data on mount and shows diagnostic checks', async () => {
+  it('loads preflight data when navigating to preflight view', async () => {
+    const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-preflight'));
     await waitFor(() => {
       expect(ipc.runPreflight).toHaveBeenCalledTimes(1);
     });
   });
 
   it('re-runs diagnostics action triggers a new preflight call', async () => {
+    const user = userEvent.setup();
     render(<App />);
+    await user.click(screen.getByTestId('nav-preflight'));
     await waitFor(() => {
       expect(ipc.runPreflight).toHaveBeenCalledTimes(1);
     });
@@ -312,15 +328,13 @@ describe('Smoke Test 2: Preflight refresh triggers IPC and updates state', () =>
 });
 
 describe('Smoke Test 3: Experimental adapter modal blocks confirm until acknowledgment', () => {
-  it('opens modal when selecting an experimental adapter', async () => {
+  it('opens modal when selecting an experimental adapter in cockpit config', async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await waitFor(() => {
       expect(screen.getByText('cursor-agent')).toBeInTheDocument();
     });
-
-    await user.click(screen.getByRole('tab', { name: /race/i }));
 
     const cursorBtn = screen.getByText('cursor-agent').closest('button');
     expect(cursorBtn).toBeTruthy();
@@ -341,13 +355,11 @@ describe('Smoke Test 3: Experimental adapter modal blocks confirm until acknowle
   });
 });
 
-describe('Smoke Test 4: Race flow transitions', () => {
-  it('starts race, shows running status, transitions to completed with results', async () => {
+describe('Smoke Test 4: Race flow transitions from cockpit', () => {
+  it('starts race from cockpit, shows running status, transitions to completed with results', async () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
-
-    await user.click(screen.getByRole('tab', { name: /race/i }));
 
     await waitFor(() => {
       expect(screen.getByText('claude')).toBeInTheDocument();
@@ -356,7 +368,7 @@ describe('Smoke Test 4: Race flow transitions', () => {
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix the bug in main.rs');
 
-    const startBtn = screen.getByRole('button', { name: /start race/i });
+    const startBtn = screen.getByTestId('cockpit-start-race');
     await user.click(startBtn);
 
     await waitFor(() => {
@@ -368,35 +380,31 @@ describe('Smoke Test 4: Race flow transitions', () => {
     }, { timeout: 5000 });
 
     await waitFor(() => {
-      expect(screen.getByText('View Scoreboard')).toBeInTheDocument();
+      expect(screen.getByTestId('completion-summary')).toBeInTheDocument();
     });
   });
 });
 
 describe('Smoke Test 5: Winner selection is explicit and does not auto-merge', () => {
-  it('allows explicit winner selection without triggering merge', async () => {
+  it('allows explicit winner selection from completion summary without triggering merge', async () => {
     mockRaceFlow();
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
-    await user.click(screen.getByRole('button', { name: /start race/i }));
+    await user.click(screen.getByTestId('cockpit-start-race'));
 
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
-    await user.click(screen.getByText('View Scoreboard'));
-
     await waitFor(() => {
-      const winnerBtns = screen.getAllByText('Select as Winner');
-      expect(winnerBtns.length).toBeGreaterThan(0);
+      expect(screen.getByTestId('completion-summary')).toBeInTheDocument();
     });
 
-    const selectBtns = screen.getAllByText('Select as Winner');
-    await user.click(selectBtns[0]);
+    const selectBtn = screen.getByTestId('completion-select-winner');
+    await user.click(selectBtn);
 
     expect(ipc.executeMerge).not.toHaveBeenCalled();
   });
@@ -408,28 +416,15 @@ describe('Smoke Test 6: Diff candidate switching updates diff and file list', ()
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
-    await user.click(screen.getByRole('button', { name: /start race/i }));
+    await user.click(screen.getByTestId('cockpit-start-race'));
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
-    await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
-    await user.click(screen.getByText('View Scoreboard'));
-
-    await waitFor(() => {
-      const selectBtns = screen.getAllByText('Select as Winner');
-      expect(selectBtns.length).toBeGreaterThan(0);
-    });
-
-    const selectBtns = screen.getAllByText('Select as Winner');
-    await user.click(selectBtns[0]);
-
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { name: /review/i })).toHaveAttribute('aria-selected', 'true');
-    });
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+    await user.click(screen.getByTestId('completion-open-review'));
 
     await waitFor(() => {
       expect(screen.getByText('Original')).toBeInTheDocument();
@@ -455,23 +450,15 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
-    await user.click(screen.getByRole('button', { name: /start race/i }));
+    await user.click(screen.getByTestId('cockpit-start-race'));
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
-    await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
-    await user.click(screen.getByText('View Scoreboard'));
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
-    });
-
-    const selectBtns = screen.getAllByText('Select as Winner');
-    await user.click(selectBtns[0]);
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+    await user.click(screen.getByTestId('completion-open-review'));
 
     await waitFor(() => {
       expect(screen.getByTestId('preview-merge-btn')).toBeInTheDocument();
@@ -499,26 +486,17 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
-    await user.click(screen.getByRole('button', { name: /start race/i }));
+    await user.click(screen.getByTestId('cockpit-start-race'));
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
-    await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
-    await user.click(screen.getByText('View Scoreboard'));
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
-    });
-
-    const selectBtns = screen.getAllByText('Select as Winner');
-    await user.click(selectBtns[0]);
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+    await user.click(screen.getByTestId('completion-open-review'));
 
     await waitFor(() => expect(screen.getByTestId('preview-merge-btn')).toBeInTheDocument());
-
     await user.click(screen.getByTestId('preview-merge-btn'));
 
     await waitFor(() => {
@@ -544,23 +522,15 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
-    await user.click(screen.getByRole('button', { name: /start race/i }));
+    await user.click(screen.getByTestId('cockpit-start-race'));
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
-    await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
-    await user.click(screen.getByText('View Scoreboard'));
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
-    });
-
-    const selectBtns = screen.getAllByText('Select as Winner');
-    await user.click(selectBtns[0]);
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+    await user.click(screen.getByTestId('completion-open-review'));
 
     await waitFor(() => expect(screen.getByTestId('preview-merge-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('preview-merge-btn'));
@@ -583,23 +553,15 @@ describe('Smoke Test 7: Merge dry-run gating behavior', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('tab', { name: /race/i }));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Fix bug');
-    await user.click(screen.getByRole('button', { name: /start race/i }));
+    await user.click(screen.getByTestId('cockpit-start-race'));
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
 
-    await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
-    await user.click(screen.getByText('View Scoreboard'));
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
-    });
-
-    const selectBtns = screen.getAllByText('Select as Winner');
-    await user.click(selectBtns[0]);
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+    await user.click(screen.getByTestId('completion-open-review'));
 
     await waitFor(() => expect(screen.getByTestId('preview-merge-btn')).toBeInTheDocument());
     await waitFor(() => {
@@ -621,14 +583,14 @@ describe('Smoke Test 8: Interactive tab renders and shows empty state', () => {
   it('renders the Interactive tab in navigation', async () => {
     render(<App />);
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: /interactive/i })).toBeInTheDocument();
+      expect(screen.getByTestId('nav-interactive')).toBeInTheDocument();
     });
   });
 
   it('shows empty session state when no sessions exist', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
     await waitFor(() => {
       expect(screen.getByTestId('empty-session-state')).toBeInTheDocument();
     });
@@ -640,7 +602,7 @@ describe('Smoke Test 9: Create and select interactive session', () => {
   it('opens new session form and creates session with IPC', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => {
       expect(screen.getByTestId('create-session-btn')).toBeInTheDocument();
@@ -674,7 +636,7 @@ describe('Smoke Test 10: Output polling renders in terminal panel', () => {
   it('polls events and displays output text', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -697,7 +659,7 @@ describe('Smoke Test 11: Send input success and failure paths', () => {
   it('sends input successfully when session is running', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -730,7 +692,7 @@ describe('Smoke Test 11: Send input success and failure paths', () => {
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -786,7 +748,7 @@ describe('Smoke Test 12: Stop session and lifecycle transition', () => {
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -815,7 +777,7 @@ describe('Smoke Test 13: Interactive terminal handles stream errors and ANSI out
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -848,7 +810,7 @@ describe('Smoke Test 13: Interactive terminal handles stream errors and ANSI out
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -871,7 +833,7 @@ describe('Smoke Test 14: Experimental adapter shows warning and requires acknowl
   it('shows experimental warning when selecting cursor-agent', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -891,7 +853,7 @@ describe('Smoke Test 14: Experimental adapter shows warning and requires acknowl
   it('enables start after acknowledging experimental risk', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -914,7 +876,7 @@ describe('Smoke Test 15: Experimental adapter denied without confirmation shows 
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -946,7 +908,7 @@ describe('Smoke Test 16: Dirty working tree policy block shows clear feedback', 
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -971,7 +933,7 @@ describe('Smoke Test 17: Unsupported adapter blocked with actionable reason', ()
 
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('tab', { name: /interactive/i }));
+    await user.click(screen.getByTestId('nav-interactive'));
 
     await waitFor(() => expect(screen.getByTestId('create-session-btn')).toBeInTheDocument());
     await user.click(screen.getByTestId('create-session-btn'));
@@ -994,19 +956,19 @@ describe('Smoke Test 18: Workspace path is propagated to backend IPC', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('tab', { name: /settings/i }));
+    await user.click(screen.getByTestId('nav-settings'));
     await waitFor(() => expect(screen.getByTestId('settings-workspace-input')).toBeInTheDocument());
 
     const settingsInput = screen.getByTestId('settings-workspace-input');
     await user.type(settingsInput, '/tmp/custom-hydra-workspace');
     await user.click(screen.getByTestId('settings-save-workspace'));
 
-    await user.click(screen.getByRole('tab', { name: /race/i }));
+    await user.click(screen.getByTestId('nav-cockpit'));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Run race with custom workspace');
-    await user.click(screen.getByRole('button', { name: /start race/i }));
+    await user.click(screen.getByTestId('cockpit-start-race'));
 
     await waitFor(() => {
       expect(ipc.startRace).toHaveBeenCalledWith(
@@ -1017,13 +979,8 @@ describe('Smoke Test 18: Workspace path is propagated to backend IPC', () => {
     });
 
     await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
-    await waitFor(() => expect(screen.getByText('View Scoreboard')).toBeInTheDocument());
-    await user.click(screen.getByText('View Scoreboard'));
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Select as Winner').length).toBeGreaterThan(0);
-    });
-    await user.click(screen.getAllByText('Select as Winner')[0]);
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+    await user.click(screen.getByTestId('completion-open-review'));
 
     await waitFor(() => {
       expect(ipc.getCandidateDiff).toHaveBeenCalledWith(
@@ -1031,6 +988,84 @@ describe('Smoke Test 18: Workspace path is propagated to backend IPC', () => {
         'claude',
         '/tmp/custom-hydra-workspace',
       );
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M4.7: Cockpit Convergence Smoke Tests
+// ---------------------------------------------------------------------------
+
+describe('Smoke Test 19: Cockpit leaderboard updates during race', () => {
+  it('shows leaderboard cards that update from live stream', async () => {
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'Test leaderboard');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('leaderboard-rail')).toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('leaderboard-card-claude')).toBeInTheDocument();
+      expect(screen.getByTestId('leaderboard-card-codex')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 20: Agent focus switch updates terminal', () => {
+  it('clicking leaderboard card switches terminal focus', async () => {
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'Test focus switch');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('leaderboard-card-codex')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('leaderboard-card-codex'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Output: codex/)).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 21: Completion summary and review transition', () => {
+  it('shows completion summary with review CTA after race completes', async () => {
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'Test completion');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('completion-summary')).toBeInTheDocument();
+      expect(screen.getByTestId('completion-open-review')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('completion-open-review'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Diff Review')).toBeInTheDocument();
     });
   });
 });

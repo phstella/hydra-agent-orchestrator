@@ -4,10 +4,10 @@ Last updated: 2026-02-25
 
 ## Current State
 
-- **Phase**: 4 **complete** (Interactive Session Mode)
-- **Milestone**: M4.1 + M4.2 + M4.3 + M4.4 + M4.5 + M4.6 complete (PTY supervisor, interactive session runtime/IPC, interactive UI shell + terminal panel, mid-flight intervention controls, interactive safety and capability gating, transcript artifacts and E2E tests). Phase 3 functionally complete (M3.1 partial — Linux packaging smoke pending).
-- **Sprint**: Pre-Phase-5 convergence planning and local execution setup. `M4.7` (Unified Race Cockpit UX Convergence) is defined as the gate before Phase 5 implementation.
-- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1–M4.6 are implemented. `M4.7` is planned as a desktop-first cockpit convergence milestone with local-only execution tracking (`planning/m4.7-local-execution-pack.md`) before Collaboration Workflows start. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean with 271 tests total (`hydra-core`: 240 unit + 12 integration, `hydra-cli`: 19 tests). `hydra-app` passes with 49 Rust tests. Frontend: 27 Vitest smoke tests. All lint and type checks pass.
+- **Phase**: 4 **complete** (Interactive Session Mode + Cockpit Convergence)
+- **Milestone**: M4.1–M4.7 complete. Phase 3 functionally complete (M3.1 partial — Linux packaging smoke pending).
+- **Sprint**: Ready for Phase 5 (Collaboration Workflows).
+- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1–M4.7 are implemented. `M4.7` cockpit convergence gate is satisfied: unified 3-column dashboard (left nav rail, top status strip, center workspace, right leaderboard rail) is the default operator surface. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean with 271 tests total (`hydra-core`: 240 unit + 12 integration, `hydra-cli`: 19 tests). `hydra-app` passes with 49 Rust tests. Frontend: 31 Vitest smoke tests (27 migrated + 4 new cockpit). All lint and type checks pass.
 
 ## Completed Milestones
 
@@ -56,10 +56,11 @@ Last updated: 2026-02-25
 | M4.4 | Mid-Flight Intervention Controls | 2026-02-24 | `InputComposer` component: textarea for sending mid-flight input (Enter to send, Shift+Enter for newline), send button with loading state, stop/interrupt button (danger variant), disabled state when session not running, error feedback for rejected writes via `data-testid="input-error"`. Stop action updates session lifecycle via `stopInteractiveSession` IPC and reflects in rail badge and input composer state. Session-ended indicator for terminal states. 3 new smoke tests: send input success path, send input failure with error feedback, stop session lifecycle transition. |
 | M4.5 | Interactive Safety and Capability Gating | 2026-02-24 | Backend gating in `start_interactive_session`: adapter tier/capability policy enforcement blocks unsupported adapters with actionable reason; experimental adapters require explicit `allowExperimental` or return `experimental_blocked` error; adapter detect status checked (blocked/missing rejected with `safety_gate` error); unsafe mode blocks adapters lacking dangerous flag (`unsafe_blocked` error); working tree cleanliness enforced pre-launch (`dirty_worktree` error). Frontend: all adapters shown in create-session form with tier badges; experimental selection shows risk warning with acknowledgment checkbox; start button disabled until acknowledged; gating errors parsed and styled by code. New IPC error variants: `safety_gate`, `experimental_blocked`, `dirty_worktree`, `unsafe_blocked`. `RegistryError` re-exported from adapter module. Card component updated to forward `data-testid`. Mock IPC simulates gating failures. 4 new Rust tests + 7 new Vitest smoke tests. |
 | M4.6 | Interactive Transcript Artifacts and E2E Tests | 2026-02-24 | `SessionLayout` for `.hydra/sessions/<session_id>/` artifact directory structure. `SessionArtifactWriter` manages full lifecycle: init creates `session.json` + `events.jsonl` + `transcript.ansi.log`; `record_output`/`record_user_input` append to JSONL and transcript; `finalize` writes `summary.json` and updates `session.json` with final status. `SessionMetadata` schema v1: `schema_version`, `session_id`, `agent_key`, `started_at`, `ended_at`, `status`, `cwd`, `unsafe_mode`, `experimental`. Secret redaction via `SecretRedactor` applied to all persisted events and transcript output. Artifact writer wired into interactive session lifecycle: initialized on `start_interactive_session`, output recorded in PTY event bridge, user input recorded on `write_input`, finalized on `stop_session`/`shutdown_all`/natural completion/failure. Graceful degradation: artifact init failure logs warning and session proceeds without persistence. 10 new hydra-core unit tests + 4 new hydra-app integration tests with explicit artifact content assertions. |
+| M4.7 | Unified Race Cockpit UX Convergence | 2026-02-25 | Desktop-first cockpit shell replaces tab-based IA as default operator surface. `CockpitShell.tsx`: 3-column layout (left nav rail 56px, top status strip 44px, center workspace flex, right leaderboard rail 320px). `CockpitCenter.tsx`: race config panel (adapters, workspace, prompt), live terminal bound to selected agent, inline intervention (InputComposer + stop), completion summary with review bridge. `LeaderboardRail.tsx`: per-agent cards with lifecycle badge, elapsed time, score snapshot, mergeability hint, failure messages, selection-driven terminal focus. `CompletionSummary.tsx`: winner card with score/mergeability, other candidates, Open Diff Review CTA. `TopStrip`: workspace, run status, adapter count, run/stop controls. Legacy views (Preflight, Results, Review, Interactive, Settings) accessible via left nav rail. Error display unified across leaderboard cards, terminal panel, and cockpit banner. 31 smoke tests (27 migrated + 4 new cockpit scenarios). All Rust tests (271 workspace + 49 hydra-app) and frontend checks (lint, typecheck, design tokens) pass. |
 
 ## In-Progress Work
 - Phase 3 closure: M3.1 acceptance criterion #3 (Linux packaging smoke evidence in published CI) still pending.
-- Phase 4 bridge planning: `M4.7` (Unified Race Cockpit UX Convergence) added as pre-Phase-5 gate with desktop-first viewport policy and local execution pack.
+- Phase 4 complete: M4.7 cockpit convergence gate satisfied. Ready for Phase 5.
 
 ## Phase 3 Reconciliation (M3.x -> P3)
 
@@ -147,6 +148,10 @@ Last updated: 2026-02-25
 | 2026-02-24 | Secret redaction applied to all three session artifact files (events.jsonl, transcript.ansi.log, session.json indirectly via event data) | Consistent with race-mode artifact scrubbing policy from M0.7 |
 | 2026-02-24 | Transcript log preserves raw ANSI sequences (after redaction) for future replay | Enables terminal replay tooling without re-parsing events |
 | 2026-02-24 | Session metadata schema version starts at 1 | Forward-compatibility per ADR 7; aligns with run manifest versioning pattern |
+| 2026-02-25 | Cockpit shell replaces tab-based IA as default surface | Tab bar replaced by left nav rail + top status strip; all legacy views remain accessible as nav destinations |
+| 2026-02-25 | Leaderboard rail uses card-based agent status model | Rich cards with lifecycle, elapsed time, score snapshot, mergeability hint replace minimal agent rail |
+| 2026-02-25 | Completion summary with review bridge replaces tab-switch flow | One-click CTA from cockpit completion summary to diff review; no auto-merge side effects |
+| 2026-02-25 | TopStrip consolidates workspace, run status, and adapter counts | Persistent status strip replaces fragmented header badges |
 
 ## Open Issues
 
@@ -162,7 +167,7 @@ Last updated: 2026-02-25
 |-------|--------|----------|-------|
 | hydra-core | Yes | Yes | 239 unit + 12 integration = 251 passing |
 | hydra-cli | Yes | Yes | 7 passing |
-| hydra-app | Yes | Requires system libs | 42 unit tests + 27 smoke tests (Vitest) |
+| hydra-app | Yes | Requires system libs | 49 unit tests + 31 smoke tests (Vitest) |
 
 ## Phase Progress
 
@@ -173,7 +178,7 @@ Last updated: 2026-02-25
 | 2 | Multi-Agent Race + Scoring | **Complete** | 12/12 |
 | 3 | GUI Alpha | **In Progress** | Original M3: 6/7 complete (M3.1 partial); Supplemental P3: 8/8 complete |
 | 4 | Interactive Session Mode (PTY) | **Complete** | 6/6 (M4.1, M4.2, M4.3, M4.4, M4.5, M4.6 complete) |
-| 4.7 | Cockpit Convergence Gate | Planned | 0/1 (`M4.7` defined as pre-Phase-5 UX gate) |
+| 4.7 | Cockpit Convergence Gate | **Complete** | 1/1 (M4.7 complete) |
 | 5 | Collaboration Workflows | Not started | 0/6 |
 | 6 | Windows Parity + Hardening | Not started | 0/6 |
 
@@ -181,17 +186,18 @@ Last updated: 2026-02-25
 
 1. Read `CLAUDE.md` for project overview and conventions.
 2. Phase 0–2 are **complete**. Phase 3 supplemental tickets are **complete** (M3.1 partial — Linux packaging smoke pending).
-3. Phase 4 M4.1–M4.6 are **complete** and `M4.7` (Unified Race Cockpit UX Convergence) is now planned as the gate before Phase 5.
-4. Current baseline: `hydra-core` 251 passing (239 unit + 12 integration), `hydra-cli` 19 passing (via workspace), `hydra-app` 42 Rust unit tests + 27 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean.
+3. Phase 4 M4.1–M4.7 are **complete**. `M4.7` cockpit convergence gate is satisfied.
+4. Current baseline: `hydra-core` 251 passing (239 unit + 12 integration), `hydra-cli` 19 passing (via workspace), `hydra-app` 49 Rust unit tests + 31 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean. Frontend lint and typecheck clean.
 5. **System package requirement**: `hydra-app` needs `webkit2gtk-4.1` (`pacman -S webkit2gtk-4.1` on Arch). Without them, `cargo check/test -p hydra-app` fails at build-script stage.
-6. **Next priority**: execute `M4.7` from `planning/m4.7-local-execution-pack.md` (desktop-first), then move to Phase 5 (Collaboration Workflows).
+6. **Next priority**: Phase 5 (Collaboration Workflows) starting with M5.1 Workflow Engine Core.
 7. GitHub issue creation is optional; implementation tracking is local-first for this cycle.
-8. For cockpit implementation details, use `planning/m4.7-desktop-ui-contract.md` and `planning/p4-race-cockpit-convergence-implementation-guide.md`.
-9. Key files added/modified for M4.6:
-   - `crates/hydra-core/src/artifact/session.rs` — New module: `SessionLayout`, `SessionMetadata`, `SessionEvent`, `SessionEventWriter`, `SessionEventReader`, `TranscriptWriter`, `SessionSummary`, `SessionArtifactWriter`. 10 unit tests.
-   - `crates/hydra-core/src/artifact/mod.rs` — Added `session` submodule and re-exports.
-   - `crates/hydra-app/src/state.rs` — `InteractiveSessionRuntime` gained `artifact_writer: Option<SessionArtifactWriter>` field. `register_session` takes optional artifact writer. PTY event bridge records output to artifact writer. `stop_session`/`shutdown_all` finalize artifacts. `write_input` records user input to artifacts. 4 new integration tests.
-   - `crates/hydra-app/src/commands.rs` — `start_interactive_session` initializes `SessionArtifactWriter` after PTY spawn. Graceful fallback on init failure.
-10. Interactive session artifacts are persisted under `.hydra/sessions/<session_id>/` with: `session.json` (metadata), `events.jsonl` (append-only event log), `transcript.ansi.log` (raw terminal output), `summary.json` (finalized session stats).
-11. Race-mode behavior is unchanged; all existing race/scoring/merge tests pass.
-12. Design system tokens are CSS custom properties in `tokens.css`. Feature components must NOT use hardcoded hex colors.
+8. Key files added/modified for M4.7:
+   - `crates/hydra-app/frontend/src/components/CockpitShell.tsx` — New: CockpitShell (3-column layout), NavRailButton, TopStrip components.
+   - `crates/hydra-app/frontend/src/components/CockpitCenter.tsx` — New: CockpitCenter (race config + terminal + intervention + completion), RaceConfigPanel.
+   - `crates/hydra-app/frontend/src/components/LeaderboardRail.tsx` — New: LeaderboardRail with rich agent cards (lifecycle, score, elapsed, mergeability).
+   - `crates/hydra-app/frontend/src/components/CompletionSummary.tsx` — New: Race completion summary with winner card and review bridge CTA.
+   - `crates/hydra-app/frontend/src/App.tsx` — Rewritten: cockpit shell as default surface, left rail navigation, legacy views preserved as nav destinations.
+   - `crates/hydra-app/frontend/src/__tests__/smoke.test.tsx` — Updated: 27 tests migrated to cockpit nav + 4 new cockpit-specific tests (shell render, leaderboard, focus switch, completion summary).
+9. The cockpit is the default landing surface. Preflight, Results, Review, Interactive, and Settings are accessible via the left nav rail.
+10. Race-mode behavior is unchanged; all existing race/scoring/merge tests pass.
+11. Design system tokens are CSS custom properties in `tokens.css`. Feature components must NOT use hardcoded hex colors.

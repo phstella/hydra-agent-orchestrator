@@ -1,25 +1,19 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
+import { CockpitShell, NavRailButton, TopStrip } from './components/CockpitShell';
+import { CockpitCenter } from './components/CockpitCenter';
+import { LeaderboardRail } from './components/LeaderboardRail';
 import { PreflightDashboard } from './components/PreflightDashboard';
 import { ExperimentalAdapterModal } from './components/ExperimentalAdapterModal';
-import { AgentRail } from './components/AgentRail';
-import { LiveOutputPanel } from './components/LiveOutputPanel';
 import { ResultsScoreboard } from './components/ResultsScoreboard';
 import { CandidateDiffReview } from './components/CandidateDiffReview';
 import { InteractiveWorkspace } from './components/InteractiveWorkspace';
-import { Tabs, Badge, Button, Card } from './components/design-system';
+import { Card, Button, Badge } from './components/design-system';
 import { getRaceResult, listAdapters, pollRaceEvents, startRace } from './ipc';
 import type { AdapterInfo, RaceResult } from './types';
 import { isExperimental, isTier1 } from './types';
 import { useEventBuffer, useAgentStatuses } from './hooks';
 
-const NAV_TABS = [
-  { id: 'preflight', label: 'Preflight' },
-  { id: 'race', label: 'Race' },
-  { id: 'results', label: 'Results' },
-  { id: 'review', label: 'Review' },
-  { id: 'interactive', label: 'Interactive' },
-  { id: 'settings', label: 'Settings' },
-];
+type CockpitView = 'cockpit' | 'preflight' | 'results' | 'review' | 'interactive' | 'settings';
 
 const WORKSPACE_STORAGE_KEY = 'hydra.workspace.path';
 
@@ -57,7 +51,7 @@ function writeWorkspaceToStorage(path: string): void {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('preflight');
+  const [activeView, setActiveView] = useState<CockpitView>('cockpit');
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [adapterLoadError, setAdapterLoadError] = useState<string | null>(null);
   const [selectedAdapters, setSelectedAdapters] = useState<string[]>([]);
@@ -75,6 +69,7 @@ export default function App() {
   const [selectedWinner, setSelectedWinner] = useState<string | null>(null);
   const [workspacePath, setWorkspacePath] = useState('');
   const [workspaceDraft, setWorkspaceDraft] = useState('');
+  const [interventionError, setInterventionError] = useState<string | null>(null);
 
   const { events, push, clear, eventsByAgent } = useEventBuffer();
 
@@ -188,6 +183,7 @@ export default function App() {
     setActiveRunId(null);
     setRaceAgents([]);
     setSelectedAgent(null);
+    setInterventionError(null);
     clear();
 
     try {
@@ -201,7 +197,7 @@ export default function App() {
       setRaceAgents(started.agents);
       setSelectedAgent(started.agents[0] ?? null);
       setRunStatus('running');
-      setActiveTab('race');
+      setActiveView('cockpit');
     } catch (err) {
       setRunStatus('failed');
       setRaceError(err instanceof Error ? err.message : String(err));
@@ -210,7 +206,15 @@ export default function App() {
 
   const handleWinnerSelect = useCallback((agentKey: string) => {
     setSelectedWinner(agentKey);
-    setActiveTab('review');
+  }, []);
+
+  const handleWinnerSelectAndReview = useCallback((agentKey: string) => {
+    setSelectedWinner(agentKey);
+    setActiveView('review');
+  }, []);
+
+  const handleOpenReview = useCallback(() => {
+    setActiveView('review');
   }, []);
 
   const handleSaveWorkspaceSettings = useCallback(() => {
@@ -223,6 +227,18 @@ export default function App() {
     setWorkspacePath('');
     setWorkspaceDraft('');
     writeWorkspaceToStorage('');
+  }, []);
+
+  const handleSendInput = useCallback(
+    async (_input: string): Promise<{ success: boolean; error: string | null }> => {
+      setInterventionError(null);
+      return { success: false, error: 'Intervention during race mode is not supported yet' };
+    },
+    [],
+  );
+
+  const handleStopAgent = useCallback(() => {
+    setInterventionError('Stop during race not yet implemented. Use interrupt from CLI.');
   }, []);
 
   useEffect(() => {
@@ -268,346 +284,230 @@ export default function App() {
     };
   }, [activeRunId, push]);
 
-  return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <header
-        style={{
-          backgroundColor: 'var(--color-bg-900)',
-          borderBottom: '1px solid var(--color-border-700)',
-          padding: '0 var(--space-6)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          height: 52,
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
-          <span
+  const leftRail = (
+    <>
+      <NavRailButton
+        icon="⟁"
+        label="Race"
+        active={activeView === 'cockpit'}
+        onClick={() => setActiveView('cockpit')}
+        data-testid="nav-cockpit"
+      />
+      <NavRailButton
+        icon="◉"
+        label="Preflight"
+        active={activeView === 'preflight'}
+        onClick={() => setActiveView('preflight')}
+        data-testid="nav-preflight"
+      />
+      <NavRailButton
+        icon="≡"
+        label="Results"
+        active={activeView === 'results'}
+        onClick={() => setActiveView('results')}
+        data-testid="nav-results"
+      />
+      <NavRailButton
+        icon="⊟"
+        label="Review"
+        active={activeView === 'review'}
+        onClick={() => setActiveView('review')}
+        data-testid="nav-review"
+      />
+      <NavRailButton
+        icon="▸"
+        label="Terminal"
+        active={activeView === 'interactive'}
+        onClick={() => setActiveView('interactive')}
+        data-testid="nav-interactive"
+      />
+      <div style={{ flex: 1 }} />
+      <NavRailButton
+        icon="⚙"
+        label="Settings"
+        active={activeView === 'settings'}
+        onClick={() => setActiveView('settings')}
+        data-testid="nav-settings"
+      />
+    </>
+  );
+
+  const topStrip = (
+    <TopStrip
+      workspacePath={workspaceCwd}
+      runStatus={runStatus}
+      runId={activeRunId}
+      adapterCount={selectedAdapters.length}
+      experimentalCount={selectedExperimentalCount}
+      onRun={runStatus === 'idle' ? handleStartRace : undefined}
+      onStop={runStatus === 'running' ? handleStopAgent : undefined}
+    />
+  );
+
+  const rightRail = (
+    <LeaderboardRail
+      agents={agentStatuses}
+      raceResult={raceResult}
+      selectedAgent={selectedAgent}
+      onSelectAgent={setSelectedAgent}
+      raceError={raceError}
+    />
+  );
+
+  const renderCenter = () => {
+    switch (activeView) {
+      case 'cockpit':
+        return (
+          <CockpitCenter
+            adapters={adapters}
+            adapterLoadError={adapterLoadError}
+            selectedAdapters={selectedAdapters}
+            onToggleAdapter={toggleAdapter}
+            taskPrompt={taskPrompt}
+            onTaskPromptChange={setTaskPrompt}
+            workspaceCwd={workspaceCwd}
+            onOpenSettings={() => setActiveView('settings')}
+            onStartRace={handleStartRace}
+            runStatus={runStatus}
+            activeRunId={activeRunId}
+            raceError={raceError}
+            events={events}
+            eventsByAgent={eventsByAgent}
+            agentStatuses={agentStatuses}
+            selectedAgent={selectedAgent}
+            raceResult={raceResult}
+            selectedWinner={selectedWinner}
+            onSelectWinner={handleWinnerSelect}
+            onOpenReview={handleOpenReview}
+            onSendInput={handleSendInput}
+            onStopAgent={handleStopAgent}
+            interventionError={interventionError}
+          />
+        );
+
+      case 'preflight':
+        return <PreflightDashboard />;
+
+      case 'results':
+        return raceResult ? (
+          <ResultsScoreboard
+            result={raceResult}
+            selectedWinner={selectedWinner}
+            onSelectWinner={handleWinnerSelectAndReview}
+          />
+        ) : (
+          <div
             style={{
-              fontSize: 'var(--text-lg)',
-              fontWeight: 'var(--weight-bold)' as unknown as number,
-              color: 'var(--color-green-400)',
-              fontFamily: 'var(--font-mono)',
+              padding: 'var(--space-8)',
+              textAlign: 'center',
+              color: 'var(--color-text-muted)',
             }}
           >
-            ⟁ Hydra
-          </span>
-        </div>
+            No results yet. Complete a race to see the scoreboard.
+          </div>
+        );
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <Badge variant="neutral">{selectedAdapters.length} selected</Badge>
-          {selectedExperimentalCount > 0 && (
-            <Badge variant="experimental">{selectedExperimentalCount} experimental</Badge>
-          )}
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-            v0.1.0-alpha
-          </span>
-        </div>
-      </header>
+      case 'review':
+        return raceResult && activeRunId ? (
+          <CandidateDiffReview
+            runId={activeRunId}
+            agents={raceResult.agents}
+            selectedWinner={selectedWinner}
+            workspaceCwd={workspaceCwd}
+          />
+        ) : (
+          <div
+            style={{
+              padding: 'var(--space-8)',
+              textAlign: 'center',
+              color: 'var(--color-text-muted)',
+            }}
+          >
+            No results yet. Complete a race and select a winner to review diffs.
+          </div>
+        );
 
-      <Tabs tabs={NAV_TABS} activeTab={activeTab} onTabChange={setActiveTab}>
-        <main style={{ flex: 1 }}>
-          {activeTab === 'preflight' && <PreflightDashboard />}
+      case 'interactive':
+        return <InteractiveWorkspace workspaceCwd={workspaceCwd} />;
 
-          {activeTab === 'race' && (
-            <div style={{ maxWidth: 980, margin: '0 auto', padding: 'var(--space-8) var(--space-6)' }}>
-              <Card padding="lg" style={{ marginBottom: 'var(--space-6)' }}>
-                <h2
+      case 'settings':
+        return (
+          <div style={{ maxWidth: 920, margin: '0 auto', padding: 'var(--space-8) var(--space-6)' }}>
+            <Card padding="lg">
+              <h2
+                style={{
+                  fontSize: 'var(--text-xl)',
+                  fontWeight: 'var(--weight-bold)' as unknown as number,
+                  marginBottom: 'var(--space-2)',
+                }}
+              >
+                Settings
+              </h2>
+              <p style={{ marginBottom: 'var(--space-5)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
+                Configure default workspace and runtime behavior used by race, review/merge, and interactive sessions.
+              </p>
+
+              <div style={{ marginBottom: 'var(--space-4)' }}>
+                <div style={{ marginBottom: 'var(--space-2)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+                  Default Workspace Folder
+                </div>
+                <input
+                  value={workspaceDraft}
+                  onChange={(e) => setWorkspaceDraft(e.target.value)}
+                  placeholder="Leave empty to use current repository (or enter /absolute/path)"
+                  data-testid="settings-workspace-input"
                   style={{
-                    fontSize: 'var(--text-xl)',
-                    fontWeight: 'var(--weight-bold)' as unknown as number,
-                    marginBottom: 'var(--space-3)',
-                  }}
-                >
-                  Start Race
-                </h2>
-
-                {adapterLoadError && (
-                  <div style={{ marginBottom: 'var(--space-4)', color: 'var(--color-danger-400)' }}>
-                    Adapter load failed: {adapterLoadError}
-                  </div>
-                )}
-
-                <div
-                  style={{
-                    marginBottom: 'var(--space-4)',
-                    padding: 'var(--space-3)',
-                    border: '1px solid var(--color-border-700)',
+                    width: '100%',
                     borderRadius: 'var(--radius-md)',
-                    backgroundColor: 'var(--color-surface-800)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 'var(--space-3)',
-                  }}
-                >
-                  <div>
-                    <div style={{ marginBottom: 'var(--space-1)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-                      Workspace Folder
-                    </div>
-                    <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }} data-testid="workspace-current-value">
-                      {workspaceCwd ?? '(current repository)'}
-                    </div>
-                  </div>
-                  <Button variant="secondary" size="sm" onClick={() => setActiveTab('settings')}>
-                    Configure
-                  </Button>
-                </div>
-
-                <div style={{ marginBottom: 'var(--space-4)' }}>
-                  <div style={{ marginBottom: 'var(--space-2)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-                    Adapters
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-                    {adapters.map((adapter) => {
-                      const selected = selectedAdapters.includes(adapter.key);
-                      const experimental = isExperimental(adapter);
-
-                      return (
-                        <button
-                          key={adapter.key}
-                          type="button"
-                          onClick={() => toggleAdapter(adapter.key)}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 'var(--space-2)',
-                            borderRadius: 'var(--radius-md)',
-                            border: selected
-                              ? '1px solid var(--color-marine-500)'
-                              : '1px solid var(--color-border-700)',
-                            backgroundColor: selected
-                              ? 'color-mix(in srgb, var(--color-marine-500) 12%, transparent)'
-                              : 'var(--color-surface-800)',
-                            color: 'var(--color-text-primary)',
-                            padding: 'var(--space-2) var(--space-3)',
-                            cursor: 'pointer',
-                            fontFamily: 'var(--font-family)',
-                            fontSize: 'var(--text-sm)',
-                          }}
-                        >
-                          <span>{adapter.key}</span>
-                          {experimental ? (
-                            <Badge variant="experimental">Experimental</Badge>
-                          ) : (
-                            <Badge variant="success">Tier-1</Badge>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: 'var(--space-4)' }}>
-                  <div style={{ marginBottom: 'var(--space-2)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-                    Prompt
-                  </div>
-                  <textarea
-                    value={taskPrompt}
-                    onChange={(e) => setTaskPrompt(e.target.value)}
-                    placeholder="Describe the task for this race..."
-                    rows={5}
-                    style={{
-                      width: '100%',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--color-border-700)',
-                      backgroundColor: 'var(--color-bg-900)',
-                      color: 'var(--color-text-primary)',
-                      padding: 'var(--space-3)',
-                      resize: 'vertical',
-                      fontFamily: 'var(--font-family)',
-                      fontSize: 'var(--text-sm)',
-                    }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                  <Button variant="primary" onClick={handleStartRace}>
-                    Start Race
-                  </Button>
-                  <Badge variant={runStatus === 'failed' ? 'danger' : runStatus === 'completed' ? 'success' : 'info'}>
-                    {runStatus}
-                  </Badge>
-                  {activeRunId && <Badge variant="neutral">run {activeRunId.slice(0, 8)}</Badge>}
-                </div>
-
-                {raceError && (
-                  <div style={{ marginTop: 'var(--space-3)', color: 'var(--color-danger-400)', fontSize: 'var(--text-sm)' }}>
-                    {raceError}
-                  </div>
-                )}
-              </Card>
-
-              {(runStatus !== 'idle' && runStatus !== 'starting') && (
-                <div
-                  style={{
-                    display: 'flex',
                     border: '1px solid var(--color-border-700)',
-                    borderRadius: 'var(--radius-lg)',
-                    backgroundColor: 'var(--color-surface-800)',
-                    overflow: 'hidden',
-                    height: 420,
+                    backgroundColor: 'var(--color-bg-900)',
+                    color: 'var(--color-text-primary)',
+                    padding: 'var(--space-3)',
+                    fontFamily: 'var(--font-family)',
+                    fontSize: 'var(--text-sm)',
                   }}
-                >
-                  <div
-                    style={{
-                      borderRight: '1px solid var(--color-border-700)',
-                      padding: 'var(--space-3)',
-                      overflowY: 'auto',
-                      flexShrink: 0,
-                    }}
-                  >
-                    <AgentRail
-                      agents={agentStatuses}
-                      selectedAgent={selectedAgent}
-                      onSelectAgent={setSelectedAgent}
-                    />
-                  </div>
-                  <LiveOutputPanel
-                    agentKey={selectedAgent}
-                    lifecycle={agentStatuses.find((a) => a.agentKey === selectedAgent)?.lifecycle ?? null}
-                    events={events}
-                    eventsByAgent={eventsByAgent}
-                  />
+                />
+                <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                  Current effective workspace: {workspaceCwd ?? '(current repository)'}
                 </div>
-              )}
-
-              {raceResult && (
-                <Card padding="lg" style={{ marginTop: 'var(--space-6)' }}>
-                  <h4 style={{ marginBottom: 'var(--space-2)' }}>Race Result</h4>
-                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-                    Status: {raceResult.status}
-                  </div>
-                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-                    Agents: {raceResult.agents.length}
-                    {selectedWinner && <> · Winner: <strong style={{ color: 'var(--color-green-400)' }}>{selectedWinner}</strong></>}
-                  </div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    style={{ marginTop: 'var(--space-3)' }}
-                    onClick={() => setActiveTab('results')}
-                  >
-                    View Scoreboard
-                  </Button>
-                </Card>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'results' && (
-            raceResult ? (
-              <ResultsScoreboard
-                result={raceResult}
-                selectedWinner={selectedWinner}
-                onSelectWinner={handleWinnerSelect}
-              />
-            ) : (
-              <div
-                style={{
-                  padding: 'var(--space-8)',
-                  textAlign: 'center',
-                  color: 'var(--color-text-muted)',
-                }}
-              >
-                No results yet. Complete a race to see the scoreboard.
               </div>
-            )
-          )}
 
-          {activeTab === 'review' && (
-            raceResult && activeRunId ? (
-              <CandidateDiffReview
-                runId={activeRunId}
-                agents={raceResult.agents}
-                selectedWinner={selectedWinner}
-                workspaceCwd={workspaceCwd}
-              />
-            ) : (
-              <div
-                style={{
-                  padding: 'var(--space-8)',
-                  textAlign: 'center',
-                  color: 'var(--color-text-muted)',
-                }}
-              >
-                No results yet. Complete a race and select a winner to review diffs.
-              </div>
-            )
-          )}
-
-          {activeTab === 'interactive' && <InteractiveWorkspace workspaceCwd={workspaceCwd} />}
-
-          {activeTab === 'settings' && (
-            <div style={{ maxWidth: 920, margin: '0 auto', padding: 'var(--space-8) var(--space-6)' }}>
-              <Card padding="lg">
-                <h2
-                  style={{
-                    fontSize: 'var(--text-xl)',
-                    fontWeight: 'var(--weight-bold)' as unknown as number,
-                    marginBottom: 'var(--space-2)',
-                  }}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                <Button
+                  variant="primary"
+                  onClick={handleSaveWorkspaceSettings}
+                  disabled={!workspaceDirty}
+                  data-testid="settings-save-workspace"
                 >
-                  Settings
-                </h2>
-                <p style={{ marginBottom: 'var(--space-5)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
-                  Configure default workspace and runtime behavior used by race, review/merge, and interactive sessions.
-                </p>
+                  Save Workspace
+                </Button>
+                <Button variant="ghost" onClick={handleResetWorkspaceSettings} data-testid="settings-reset-workspace">
+                  Reset to Current Repository
+                </Button>
+                <Badge variant={workspaceDraftCwd ? 'info' : 'neutral'}>
+                  {workspaceDraftCwd ?? '(current repository)'}
+                </Badge>
+              </div>
+            </Card>
+          </div>
+        );
+    }
+  };
 
-                <div style={{ marginBottom: 'var(--space-4)' }}>
-                  <div style={{ marginBottom: 'var(--space-2)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-                    Default Workspace Folder
-                  </div>
-                  <input
-                    value={workspaceDraft}
-                    onChange={(e) => setWorkspaceDraft(e.target.value)}
-                    placeholder="Leave empty to use current repository (or enter /absolute/path)"
-                    data-testid="settings-workspace-input"
-                    style={{
-                      width: '100%',
-                      borderRadius: 'var(--radius-md)',
-                      border: '1px solid var(--color-border-700)',
-                      backgroundColor: 'var(--color-bg-900)',
-                      color: 'var(--color-text-primary)',
-                      padding: 'var(--space-3)',
-                      fontFamily: 'var(--font-family)',
-                      fontSize: 'var(--text-sm)',
-                    }}
-                  />
-                  <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-                    Current effective workspace: {workspaceCwd ?? '(current repository)'}
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                  <Button
-                    variant="primary"
-                    onClick={handleSaveWorkspaceSettings}
-                    disabled={!workspaceDirty}
-                    data-testid="settings-save-workspace"
-                  >
-                    Save Workspace
-                  </Button>
-                  <Button variant="ghost" onClick={handleResetWorkspaceSettings} data-testid="settings-reset-workspace">
-                    Reset to Current Repository
-                  </Button>
-                  <Badge variant={workspaceDraftCwd ? 'info' : 'neutral'}>
-                    {workspaceDraftCwd ?? '(current repository)'}
-                  </Badge>
-                </div>
-              </Card>
-            </div>
-          )}
-        </main>
-      </Tabs>
-
+  return (
+    <>
+      <CockpitShell
+        leftRail={leftRail}
+        topStrip={topStrip}
+        center={renderCenter()}
+        rightRail={rightRail}
+      />
       <ExperimentalAdapterModal
         open={experimentalModal.open}
         onClose={closeExperimentalModal}
         onConfirm={handleExperimentalConfirm}
         adapter={experimentalModal.adapter}
       />
-    </div>
+    </>
   );
 }
