@@ -609,13 +609,36 @@ Local-first note:
 - Out of Scope: Phase 5 workflow DAG/presets, multi-user collaboration, websocket transport migration, visual workflow editor.
 - Execution Note: Use `planning/m4.7-local-execution-pack.md` as the primary task tracker for M4.7; `planning/issues/phase-4.md` is optional sync output only.
 
+### M4.8 Interactive Orchestration Console (Multi-Instance, Race-Separated)
+
+- Labels: `phase-4`, `area-ui`, `area-core`, `type-feature`
+- Estimate: `L`
+- Dependencies: `M4.2`, `M4.6`, `M4.7`
+- Problem: The current interactive flow supports multiple sessions, but the operator experience is still session-tab oriented and identity is effectively adapter-key centric in key surfaces. The target mock requires an orchestration-console experience where operators can spawn and monitor multiple concurrent interactive agents, including multiple instances of the same adapter type, without conflating this flow with race mode.
+- Scope: Implement a dedicated interactive orchestration-console flow aligned with the mockup:
+  - orchestration-centric layout (create panel + focused terminal + running-agents rail)
+  - explicit session-lane identity (`session_id`/lane label) decoupled from `agent_key`
+  - support spawning N concurrent interactive sessions for the same adapter type
+  - per-lane lifecycle, status, and intervention controls
+  - preserve existing race/scoring contracts unchanged
+- Acceptance Criteria:
+1. Interactive console can spawn and run multiple concurrent sessions from one surface.
+2. Operators can launch multiple sessions using the same adapter type (`claude`, `codex`, etc.) with unique lane/session identity.
+3. Session selection and terminal focus are lane-based (session_id), not adapter-key-based.
+4. Per-session stop/input actions are isolated and do not affect sibling sessions.
+5. Interactive session artifacts remain per-session and replayable.
+6. Race mode behavior, IPC, scoring, and merge semantics remain unchanged.
+7. Frontend and backend tests cover duplicate-adapter interactive sessions and lane isolation.
+- Out of Scope: workflow DAG/presets, cross-agent artifact handoff, auto-merge, multi-user collaboration.
+- Execution Note: This milestone explicitly treats interactive orchestration and race orchestration as separate feature tracks. Use `planning/m4.8-interactive-orchestration-pack.md` as the primary task tracker; `planning/issues/phase-4.md` remains optional sync output.
+
 ## 8. Phase 5 Tickets (Collaboration Workflows)
 
 ### M5.1 Workflow Engine Core
 
 - Labels: `phase-5`, `area-workflow`, `type-feature`
 - Estimate: `M`
-- Dependencies: `M2.10`, `M4.7`
+- Dependencies: `M2.10`, `M4.8`
 - Problem: Race mode only supports independent parallel execution. Structured cooperation patterns (builder/reviewer, specialization, iterative refinement) require a DAG-based workflow engine that manages step execution, artifact passing, and conditional branching.
 - Scope: Implement a DAG step executor that runs workflow nodes sequentially or in parallel based on graph structure. Support artifact passing between nodes via immutable artifact IDs. Honor per-node timeout and retry policies. Persist workflow run summary.
 - Acceptance Criteria:

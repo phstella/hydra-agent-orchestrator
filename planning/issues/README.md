@@ -15,11 +15,11 @@ Local execution should be tracked in `planning/*-local-*.md` packs.
 | `phase-1.md` | Core Orchestrator + Single Agent | M1.1-M1.8 | 8 |
 | `phase-2.md` | Multi-Agent Race + Scoring | M2.1-M2.12 | 12 |
 | `phase-3.md` | GUI Alpha | M3.1-M3.7 | 7 |
-| `phase-4.md` | Interactive Session Mode | M4.1-M4.7 | 7 |
+| `phase-4.md` | Interactive Session Mode | M4.1-M4.8 | 8 |
 | `phase-5.md` | Collaboration Workflows | M5.1-M5.6 | 6 |
 | `phase-6.md` | Windows Parity and Release Hardening | M6.1-M6.6 | 6 |
 
-**Total: 54 milestones**
+**Total: 55 milestones**
 
 ## Notes
 

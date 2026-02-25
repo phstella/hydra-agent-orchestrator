@@ -5,9 +5,9 @@ Last updated: 2026-02-25
 ## Current State
 
 - **Phase**: 4 **complete** (Interactive Session Mode + Cockpit Convergence)
-- **Milestone**: M4.1–M4.7 complete. Phase 3 functionally complete (M3.1 partial — Linux packaging smoke pending).
-- **Sprint**: Ready for Phase 5 (Collaboration Workflows).
-- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1–M4.7 are implemented. `M4.7` cockpit convergence gate is satisfied: unified 3-column dashboard (left nav rail, top status strip, center workspace, right leaderboard rail) is the default operator surface. Default workspace (`hydra-core`, `hydra-cli`) passes `cargo check/test/clippy` clean with 271 tests total (`hydra-core`: 240 unit + 12 integration, `hydra-cli`: 19 tests). `hydra-app` passes with 49 Rust tests. Frontend: 31 Vitest smoke tests (27 migrated + 4 new cockpit). All lint and type checks pass.
+- **Milestone**: M4.1–M4.7 complete. M4.8 defined as next milestone (Interactive Orchestration Console, race-separated).
+- **Sprint**: M4.8 planning/alignment before Phase 5 (Collaboration Workflows).
+- **Status**: All Phase 0–2 milestones remain clean. Phase 3 GUI is functionally complete. Phase 4 M4.1–M4.7 are implemented. `M4.7` cockpit convergence gate is satisfied: unified 3-column dashboard (left nav rail, top status strip, center workspace, right leaderboard rail) is the default operator surface. Next planned milestone is `M4.8`: interactive orchestration flow aligned with the mockup, including multiple concurrent sessions of the same adapter type, while keeping race/scoring semantics unchanged.
 
 ## Completed Milestones
 
@@ -179,6 +179,7 @@ Last updated: 2026-02-25
 | 3 | GUI Alpha | **In Progress** | Original M3: 6/7 complete (M3.1 partial); Supplemental P3: 8/8 complete |
 | 4 | Interactive Session Mode (PTY) | **Complete** | 6/6 (M4.1, M4.2, M4.3, M4.4, M4.5, M4.6 complete) |
 | 4.7 | Cockpit Convergence Gate | **Complete** | 1/1 (M4.7 complete) |
+| 4.8 | Interactive Orchestration Console (Race-Separated) | Planned | 0/1 |
 | 5 | Collaboration Workflows | Not started | 0/6 |
 | 6 | Windows Parity + Hardening | Not started | 0/6 |
 
@@ -189,7 +190,7 @@ Last updated: 2026-02-25
 3. Phase 4 M4.1–M4.7 are **complete**. `M4.7` cockpit convergence gate is satisfied.
 4. Current baseline: `hydra-core` 251 passing (239 unit + 12 integration), `hydra-cli` 19 passing (via workspace), `hydra-app` 49 Rust unit tests + 31 Vitest smoke tests. Default workspace `cargo check/test/clippy` clean. `hydra-app` `cargo check/test/clippy` clean. Frontend lint and typecheck clean.
 5. **System package requirement**: `hydra-app` needs `webkit2gtk-4.1` (`pacman -S webkit2gtk-4.1` on Arch). Without them, `cargo check/test -p hydra-app` fails at build-script stage.
-6. **Next priority**: Phase 5 (Collaboration Workflows) starting with M5.1 Workflow Engine Core.
+6. **Next priority**: M4.8 Interactive Orchestration Console (mockup-aligned, duplicate-adapter interactive lanes, race-separated semantics).
 7. GitHub issue creation is optional; implementation tracking is local-first for this cycle.
 8. Key files added/modified for M4.7:
    - `crates/hydra-app/frontend/src/components/CockpitShell.tsx` — New: CockpitShell (3-column layout), NavRailButton, TopStrip components.

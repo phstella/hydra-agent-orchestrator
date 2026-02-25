@@ -283,8 +283,55 @@ Phase 5 workflow DAG/presets, multi-user collaboration, websocket transport migr
 - `planning/m4.7-desktop-ui-contract.md` (`M4.7` desktop behavior)
 ```
 
+## [M4.8] Interactive Orchestration Console (Multi-Instance, Race-Separated)
+
+- Phase: Phase 4 Tickets (Interactive Session Mode)
+- Labels: hydra, phase-4, area-ui, area-core, type-feature
+- Estimate: L
+- Dependencies: M4.2, M4.6, M4.7
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Interactive mode supports session control primitives, but the operator experience is still session-tab oriented and does not fully match orchestration-console behavior. We need a dedicated interactive orchestration flow where users can run multiple concurrent sessions, including multiple sessions of the same adapter type, without conflating this path with race mode.
+
+## Scope
+Implement an interactive orchestration console aligned with the mockup:
+
+- create-session panel + focused terminal + running-agents rail
+- lane identity based on `session_id` (not adapter key)
+- support multiple concurrent sessions for the same adapter type
+- per-lane lifecycle and intervention controls
+- explicit separation from race/scoring semantics
+
+## Acceptance Criteria
+- [ ] Interactive console can spawn/manage multiple concurrent sessions from one surface.
+- [ ] Duplicate adapter sessions are supported (same adapter key, unique session lanes).
+- [ ] Focus, polling, and intervention actions are lane/session scoped.
+- [ ] Per-session artifacts persist and remain replayable.
+- [ ] Race IPC/scoring/merge behavior remains unchanged.
+- [ ] Tests cover duplicate-adapter sessions and lane isolation.
+
+## Out of Scope
+Workflow DAG/presets, cross-agent artifact handoff, auto-merge, multi-user collaboration.
+
+## Dependencies
+- M4.2, M4.6, M4.7
+
+## Notes
+- Tier-1 launch adapters are claude and codex.
+- Experimental adapters require explicit opt-in.
+- Race mode remains a distinct feature and should not be repurposed to implement this milestone.
+
+## Implementation Reference
+- `planning/m4.8-interactive-orchestration-pack.md` (`M4.8` local execution tracker)
+- `planning/p4-interactive-session-implementation-guide.md` (`M4.1-M4.6` baseline contracts)
+- `planning/p4-race-cockpit-convergence-implementation-guide.md` (`M4.7` shell context)
+```
+
 
 ## Coverage Check
 
-- Total issues generated: 7
-- Expected range: `M4.1` through `M4.7`
+- Total issues generated: 8
+- Expected range: `M4.1` through `M4.8`

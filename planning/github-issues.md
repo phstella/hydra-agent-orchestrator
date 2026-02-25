@@ -25,14 +25,14 @@ Primary implementation tracking is local-first via files under `planning/`
   - `planning/issues/phase-1.md` (M1.1-M1.8)
   - `planning/issues/phase-2.md` (M2.1-M2.12)
   - `planning/issues/phase-3.md` (M3.1-M3.7)
-  - `planning/issues/phase-4.md` (M4.1-M4.7)
+  - `planning/issues/phase-4.md` (M4.1-M4.8)
   - `planning/issues/phase-5.md` (M5.1-M5.6)
   - `planning/issues/phase-6.md` (M6.1-M6.6)
 
 ## Milestone Range
 
 - Current range: `M0.1` through `M6.6`
-- Total milestones: 54
+- Total milestones: 55
 
 ## Usage
 

@@ -118,6 +118,11 @@ Deliverables:
   - execution mode: local-first tracking
   - viewport policy: desktop-first (`>=1280px` primary, `>=1024px` minimum)
   - implementation references: `planning/m4.7-local-execution-pack.md`, `planning/m4.7-desktop-ui-contract.md`
+- **next milestone (M4.8)**: interactive orchestration console aligned to the mockup
+  - spawn and manage multiple concurrent interactive sessions from one orchestration surface
+  - allow multiple instances of the same adapter type in interactive mode
+  - preserve explicit separation from race/scoring flow (interactive is a distinct execution path)
+  - implementation reference: `planning/m4.8-interactive-orchestration-pack.md`
 
 Exit criteria:
 - user can start interactive session and send input to a running agent
@@ -125,6 +130,8 @@ Exit criteria:
 - interactive session artifacts persist and replay is available
 - race/scoring mode behavior remains unchanged and deterministic
 - cockpit UI removes mandatory cross-tab switching for the primary operator loop (launch -> monitor -> intervene -> select winner -> review)
+- interactive orchestration console supports multi-session control with duplicate adapter instances (same type, different session IDs)
+- interactive orchestration identity is session-based, not adapter-key-based
 
 ## 9. Phase 5 (2-3 weeks): Collaboration Workflows
 
@@ -132,7 +139,7 @@ Goal:
 - move beyond race mode into structured cooperation
 
 Entry gate:
-- `M4.7` cockpit convergence must be complete before Phase 5 implementation begins.
+- `M4.8` interactive orchestration console must be complete before Phase 5 implementation begins.
 
 Deliverables:
 - builder/reviewer/refiner preset
@@ -224,8 +231,8 @@ Pre-release checklist:
 
 1. ~~Should cost tracking move earlier (Phase 2) since it affects run-policy decisions?~~ **Decided: Yes.** Cost and budget engine added to Phase 2 as M2.11. Race mode multiplies API cost; users need visibility before workflows add further complexity.
 2. ~~Should interactive user-in-the-loop mode wait until after Windows parity?~~ **Decided: No.** Interactive mode is now Phase 4 to establish the control plane before collaboration workflows and cross-platform hardening.
+3. ~~Should interactive mode support multiple concurrent terminals by default, or ship single-session first?~~ **Decided: Multiple by default.** Interactive orchestration milestone `M4.8` requires concurrent sessions and allows multiple instances of the same adapter type.
 
 ## 17. Open Roadmap Questions
 
-1. Should interactive mode support multiple concurrent terminals by default, or ship single-session first?
-2. Should we publish plugin API in v1 or keep adapters internal until stabilized?
+1. Should we publish plugin API in v1 or keep adapters internal until stabilized?
