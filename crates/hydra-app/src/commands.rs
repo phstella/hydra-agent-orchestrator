@@ -1861,6 +1861,239 @@ fn unsafe_mode_requirement_hint(adapter_key: &str) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// File Explorer (P4.9.2)
+// ---------------------------------------------------------------------------
+
+const MAX_FILE_WATCH_EVENTS_PER_POLL: usize = 512;
+
+#[tauri::command]
+pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Ok(DirectoryListing {
+            path: path.clone(),
+            entries: Vec::new(),
+            error: Some(format!("Path is not a directory: {path}")),
+        });
+    }
+
+    let mut entries = Vec::new();
+    let mut read_dir = tokio::fs::read_dir(&dir)
+        .await
+        .map_err(|e| format!("Failed to read directory {path}: {e}"))?;
+
+    while let Ok(Some(entry)) = read_dir.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_path = entry.path();
+        let metadata = entry.metadata().await.ok();
+
+        let entry_type = if let Some(ref md) = metadata {
+            if md.is_dir() {
+                "directory"
+            } else if md.is_symlink() {
+                "symlink"
+            } else {
+                "file"
+            }
+        } else {
+            "file"
+        };
+
+        let size = metadata
+            .as_ref()
+            .filter(|md| md.is_file())
+            .map(|md| md.len());
+
+        let modified_at = metadata
+            .as_ref()
+            .and_then(|md| md.modified().ok())
+            .and_then(|mt| {
+                mt.duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| {
+                        chrono::DateTime::from_timestamp(d.as_secs() as i64, d.subsec_nanos())
+                            .map(|dt| dt.to_rfc3339())
+                    })
+            })
+            .flatten();
+
+        entries.push(FileTreeEntry {
+            name,
+            path: entry_path.to_string_lossy().to_string(),
+            entry_type: entry_type.to_string(),
+            size,
+            modified_at,
+        });
+    }
+
+    // Sort: directories first, then alphabetically
+    entries.sort_by(|a, b| {
+        let a_is_dir = a.entry_type == "directory";
+        let b_is_dir = b.entry_type == "directory";
+        b_is_dir
+            .cmp(&a_is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    Ok(DirectoryListing {
+        path,
+        entries,
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn start_file_watcher(
+    state: State<'_, AppState>,
+    root: String,
+) -> Result<FileWatcherStarted, String> {
+    let root_path = PathBuf::from(&root);
+    if !root_path.is_dir() {
+        return Err(IpcError::validation(format!("Path is not a directory: {root}")).to_string());
+    }
+
+    let watcher_id = uuid::Uuid::new_v4().to_string();
+    let stop_flag = Arc::new(AtomicBool::new(false));
+
+    state
+        .file_watcher
+        .register_watcher(&watcher_id, &root, Arc::clone(&stop_flag))
+        .await;
+
+    let handle = state.file_watcher.clone();
+    let wid = watcher_id.clone();
+    let stop = Arc::clone(&stop_flag);
+
+    // Spawn watcher on a dedicated OS thread (notify requires it on some platforms)
+    std::thread::spawn(move || {
+        use notify::{Config, RecursiveMode, Watcher};
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = match notify::RecommendedWatcher::new(tx, Config::default()) {
+            Ok(w) => w,
+            Err(e) => {
+                let handle_clone = handle.clone();
+                let wid_clone = wid.clone();
+                // Use a one-shot runtime to report the error
+                if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                    rt.block_on(async {
+                        handle_clone
+                            .mark_error(&wid_clone, format!("Failed to create watcher: {e}"))
+                            .await;
+                        handle_clone.mark_inactive(&wid_clone).await;
+                    });
+                }
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(&root_path, RecursiveMode::Recursive) {
+            let handle_clone = handle.clone();
+            let wid_clone = wid.clone();
+            if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                rt.block_on(async {
+                    handle_clone
+                        .mark_error(&wid_clone, format!("Failed to watch path: {e}"))
+                        .await;
+                    handle_clone.mark_inactive(&wid_clone).await;
+                });
+            }
+            return;
+        }
+
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(Ok(event)) => {
+                    let event_type = match event.kind {
+                        notify::EventKind::Create(_) => "create",
+                        notify::EventKind::Modify(_) => "modify",
+                        notify::EventKind::Remove(_) => "delete",
+                        _ => continue,
+                    };
+                    let timestamp = chrono::Utc::now().to_rfc3339();
+
+                    for path in &event.paths {
+                        let watch_event = FileWatchEvent {
+                            event_type: event_type.to_string(),
+                            path: path.to_string_lossy().to_string(),
+                            timestamp: timestamp.clone(),
+                        };
+                        let handle_clone = handle.clone();
+                        let wid_clone = wid.clone();
+                        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                            rt.block_on(async {
+                                handle_clone
+                                    .append_watch_event(&wid_clone, watch_event)
+                                    .await;
+                            });
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    let handle_clone = handle.clone();
+                    let wid_clone = wid.clone();
+                    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+                        rt.block_on(async {
+                            handle_clone
+                                .mark_error(&wid_clone, format!("Watcher error: {e}"))
+                                .await;
+                        });
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    });
+
+    Ok(FileWatcherStarted {
+        watcher_id,
+        root,
+    })
+}
+
+#[tauri::command]
+pub async fn poll_file_watch_events(
+    state: State<'_, AppState>,
+    watcher_id: String,
+    cursor: u64,
+) -> Result<FileWatchEventBatch, String> {
+    let result = state
+        .file_watcher
+        .poll_events(&watcher_id, cursor, MAX_FILE_WATCH_EVENTS_PER_POLL)
+        .await;
+
+    match result {
+        Some((events, next_cursor, active, error)) => Ok(FileWatchEventBatch {
+            watcher_id,
+            events,
+            next_cursor,
+            active,
+            error,
+        }),
+        None => Err(IpcError::not_found(format!("Watcher not found: {watcher_id}")).to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn stop_file_watcher(
+    state: State<'_, AppState>,
+    watcher_id: String,
+) -> Result<FileWatcherStopped, String> {
+    match state.file_watcher.stop_watcher(&watcher_id).await {
+        Some(was_active) => Ok(FileWatcherStopped {
+            watcher_id,
+            was_active,
+        }),
+        None => Err(IpcError::not_found(format!("Watcher not found: {watcher_id}")).to_string()),
+    }
+}
+
 fn interactive_dirty_worktree_message(detail: &str) -> String {
     let normalized = detail.replace(
         "before running Preview Merge",

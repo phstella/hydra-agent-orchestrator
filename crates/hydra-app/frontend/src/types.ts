@@ -245,6 +245,48 @@ export interface InteractiveSessionSummary {
 }
 
 // ---------------------------------------------------------------------------
+// File Explorer (P4.9.2)
+// ---------------------------------------------------------------------------
+
+export interface FileTreeEntry {
+  name: string;
+  path: string;
+  entryType: string; // "file" | "directory" | "symlink"
+  size: number | null;
+  modifiedAt: string | null;
+}
+
+export interface DirectoryListing {
+  path: string;
+  entries: FileTreeEntry[];
+  error: string | null;
+}
+
+export interface FileWatchEvent {
+  eventType: string; // "create" | "modify" | "delete"
+  path: string;
+  timestamp: string;
+}
+
+export interface FileWatchEventBatch {
+  watcherId: string;
+  events: FileWatchEvent[];
+  nextCursor: number;
+  active: boolean;
+  error: string | null;
+}
+
+export interface FileWatcherStarted {
+  watcherId: string;
+  root: string;
+}
+
+export interface FileWatcherStopped {
+  watcherId: string;
+  wasActive: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

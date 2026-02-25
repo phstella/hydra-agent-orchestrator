@@ -7,13 +7,14 @@ import { ExperimentalAdapterModal } from './components/ExperimentalAdapterModal'
 import { ResultsScoreboard } from './components/ResultsScoreboard';
 import { CandidateDiffReview } from './components/CandidateDiffReview';
 import { InteractiveWorkspace } from './components/InteractiveWorkspace';
+import { FileExplorer } from './components/FileExplorer';
 import { Card, Button, Badge } from './components/design-system';
 import { getRaceResult, listAdapters, pollRaceEvents, startRace } from './ipc';
 import type { AdapterInfo, RaceResult } from './types';
 import { isExperimental, isTier1 } from './types';
 import { useEventBuffer, useAgentStatuses } from './hooks';
 
-type CockpitView = 'cockpit' | 'preflight' | 'results' | 'review' | 'orchestration' | 'settings';
+type CockpitView = 'cockpit' | 'preflight' | 'results' | 'review' | 'orchestration' | 'files' | 'settings';
 
 const WORKSPACE_STORAGE_KEY = 'hydra.workspace.path';
 
@@ -324,6 +325,13 @@ export default function App() {
         onClick={() => setActiveView('orchestration')}
         data-testid="nav-orchestration"
       />
+      <NavRailButton
+        icon="⊞"
+        label="Files"
+        active={activeView === 'files'}
+        onClick={() => setActiveView('files')}
+        data-testid="nav-files"
+      />
       <div style={{ flex: 1 }} />
       <NavRailButton
         icon="⚙"
@@ -431,6 +439,9 @@ export default function App() {
 
       case 'orchestration':
         return <InteractiveWorkspace workspaceCwd={workspaceCwd} />;
+
+      case 'files':
+        return <FileExplorer workspaceCwd={workspaceCwd} />;
 
       case 'settings':
         return (

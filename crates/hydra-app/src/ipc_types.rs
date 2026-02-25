@@ -309,6 +309,60 @@ impl std::fmt::Display for IpcError {
 }
 
 // ---------------------------------------------------------------------------
+// File Explorer types (P4.9.2)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTreeEntry {
+    pub name: String,
+    pub path: String,
+    pub entry_type: String, // "file" | "directory" | "symlink"
+    pub size: Option<u64>,
+    pub modified_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryListing {
+    pub path: String,
+    pub entries: Vec<FileTreeEntry>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileWatchEvent {
+    pub event_type: String, // "create" | "modify" | "delete" | "rename"
+    pub path: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileWatchEventBatch {
+    pub watcher_id: String,
+    pub events: Vec<FileWatchEvent>,
+    pub next_cursor: u64,
+    pub active: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileWatcherStarted {
+    pub watcher_id: String,
+    pub root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileWatcherStopped {
+    pub watcher_id: String,
+    pub was_active: bool,
+}
+
+// ---------------------------------------------------------------------------
 // Diff / Merge types (P3-UI-05)
 // ---------------------------------------------------------------------------
 

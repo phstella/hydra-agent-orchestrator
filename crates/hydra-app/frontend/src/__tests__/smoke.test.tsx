@@ -5,7 +5,8 @@
  * race flow from cockpit, winner selection, diff candidate switching, merge dry-run gating,
  * orchestration tab, session creation, output polling, send input, stop session,
  * leaderboard updates, agent focus switch, completion summary, restart/retry flows,
- * default landing on orchestration, navigation transitions.
+ * default landing on orchestration, navigation transitions,
+ * file explorer tab, tree rendering, live filesystem watch, manual refresh.
  */
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -216,6 +217,27 @@ function setupDefaultMocks() {
     status: 'stopped',
     wasRunning: true,
   } as InteractiveStopResult);
+  // File Explorer defaults (P4.9.2)
+  vi.mocked(ipc.listDirectory).mockResolvedValue({
+    path: '.',
+    entries: [],
+    error: null,
+  });
+  vi.mocked(ipc.startFileWatcher).mockResolvedValue({
+    watcherId: 'default-watcher',
+    root: '.',
+  });
+  vi.mocked(ipc.pollFileWatchEvents).mockResolvedValue({
+    watcherId: 'default-watcher',
+    events: [],
+    nextCursor: 0,
+    active: true,
+    error: null,
+  });
+  vi.mocked(ipc.stopFileWatcher).mockResolvedValue({
+    watcherId: 'default-watcher',
+    wasActive: true,
+  });
 }
 
 function mockRaceFlow() {
@@ -1832,6 +1854,141 @@ describe('Smoke Test 37: Lane-local polling error does not collapse sibling lane
     // Session 2 has a poll error indicator on its lane card
     await waitFor(() => {
       expect(screen.getByTestId('lane-error-err-session-2')).toBeInTheDocument();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P4.9.2: File Explorer Smoke Tests
+// ---------------------------------------------------------------------------
+
+describe('Smoke Test 39: File Explorer tab is visible and navigable', () => {
+  it('renders Files nav button and navigates to file explorer', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('nav-files')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('nav-files'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('file-explorer')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 40: File Explorer renders initial tree', () => {
+  it('loads and displays directory entries on mount', async () => {
+    vi.mocked(ipc.listDirectory).mockResolvedValue({
+      path: '/workspace',
+      entries: [
+        { name: 'src', path: '/workspace/src', entryType: 'directory', size: null, modifiedAt: '2026-02-25T00:00:00Z' },
+        { name: 'Cargo.toml', path: '/workspace/Cargo.toml', entryType: 'file', size: 512, modifiedAt: '2026-02-25T00:00:00Z' },
+        { name: 'README.md', path: '/workspace/README.md', entryType: 'file', size: 1024, modifiedAt: '2026-02-25T00:00:00Z' },
+      ],
+      error: null,
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-files'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('file-tree')).toBeInTheDocument();
+      expect(screen.getByTestId('tree-node-src')).toBeInTheDocument();
+      expect(screen.getByTestId('tree-node-Cargo.toml')).toBeInTheDocument();
+      expect(screen.getByTestId('tree-node-README.md')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 41: File Explorer starts watcher and polls for events', () => {
+  it('starts a file watcher when explorer mounts and polls for events', async () => {
+    vi.mocked(ipc.listDirectory).mockResolvedValue({
+      path: '.',
+      entries: [
+        { name: 'main.rs', path: './main.rs', entryType: 'file', size: 100, modifiedAt: '2026-02-25T00:00:00Z' },
+      ],
+      error: null,
+    });
+
+    vi.mocked(ipc.startFileWatcher).mockResolvedValue({
+      watcherId: 'test-watcher',
+      root: '.',
+    });
+
+    vi.mocked(ipc.pollFileWatchEvents).mockResolvedValue({
+      watcherId: 'test-watcher',
+      events: [],
+      nextCursor: 0,
+      active: true,
+      error: null,
+    });
+
+    vi.mocked(ipc.stopFileWatcher).mockResolvedValue({ watcherId: 'test-watcher', wasActive: true });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-files'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tree-node-main.rs')).toBeInTheDocument();
+    });
+
+    // Verify watcher was started
+    await waitFor(() => {
+      expect(ipc.startFileWatcher).toHaveBeenCalled();
+    });
+
+    // Verify polling started
+    await waitFor(() => {
+      expect(ipc.pollFileWatchEvents).toHaveBeenCalled();
+    });
+
+    // Watcher active indicator should be visible
+    await waitFor(() => {
+      expect(screen.getByTestId('watcher-active-indicator')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 42: File Explorer manual refresh reloads tree', () => {
+  it('reloads directory listing when Refresh button is clicked', async () => {
+    let listCallCount = 0;
+    vi.mocked(ipc.listDirectory).mockImplementation(async () => {
+      listCallCount++;
+      return {
+        path: '/workspace',
+        entries: listCallCount === 1
+          ? [{ name: 'before.txt', path: '/workspace/before.txt', entryType: 'file', size: 50, modifiedAt: '2026-02-25T00:00:00Z' }]
+          : [{ name: 'after.txt', path: '/workspace/after.txt', entryType: 'file', size: 75, modifiedAt: '2026-02-25T01:00:00Z' }],
+        error: null,
+      };
+    });
+
+    vi.mocked(ipc.startFileWatcher).mockResolvedValue({ watcherId: 'w1', root: '/workspace' });
+    vi.mocked(ipc.pollFileWatchEvents).mockResolvedValue({
+      watcherId: 'w1', events: [], nextCursor: 0, active: true, error: null,
+    });
+    vi.mocked(ipc.stopFileWatcher).mockResolvedValue({ watcherId: 'w1', wasActive: true });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-files'));
+
+    // Initial load
+    await waitFor(() => {
+      expect(screen.getByTestId('tree-node-before.txt')).toBeInTheDocument();
+    });
+
+    // Click refresh
+    await user.click(screen.getByTestId('file-explorer-refresh'));
+
+    // Should now show after.txt
+    await waitFor(() => {
+      expect(screen.getByTestId('tree-node-after.txt')).toBeInTheDocument();
     });
   });
 });

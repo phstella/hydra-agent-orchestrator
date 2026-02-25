@@ -6,6 +6,7 @@ fn main() {
     let config = HydraConfig::default();
     let app_state = hydra_app::AppState::new(config);
     let interactive_handle = app_state.interactive.clone();
+    let file_watcher_handle = app_state.file_watcher.clone();
 
     tauri::Builder::default()
         .manage(app_state)
@@ -26,9 +27,19 @@ fn main() {
             hydra_app::resize_interactive_terminal,
             hydra_app::stop_interactive_session,
             hydra_app::list_interactive_sessions,
+            hydra_app::list_directory,
+            hydra_app::start_file_watcher,
+            hydra_app::poll_file_watch_events,
+            hydra_app::stop_file_watcher,
         ])
         .on_window_event(move |_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
+                // Stop all file watchers
+                let fw_handle = file_watcher_handle.clone();
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(fw_handle.stop_all());
+                });
+
                 let handle = interactive_handle.clone();
                 let completed = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(

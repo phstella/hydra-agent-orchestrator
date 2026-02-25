@@ -9,13 +9,15 @@ use hydra_core::artifact::SessionArtifactWriter;
 use hydra_core::config::HydraConfig;
 use hydra_core::supervisor::pty::{PtyEvent, PtySession};
 
-use crate::ipc_types::{AgentStreamEvent, InteractiveStreamEvent, RaceResult};
+use crate::ipc_types::{AgentStreamEvent, FileWatchEvent, InteractiveStreamEvent, RaceResult};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const EVENT_CHANNEL_CAPACITY: usize = 4096;
 const MAX_STORED_EVENTS_PER_RUN: usize = 10_000;
 const MAX_INTERACTIVE_EVENTS: usize = 50_000;
 const MAX_INTERACTIVE_EVENT_TEXT_BYTES: usize = 64 * 1024;
 pub const INTERACTIVE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_FILE_WATCH_EVENTS: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct RaceRuntime {
@@ -502,12 +504,114 @@ impl AppStateHandle {
     }
 }
 
+// ---------------------------------------------------------------------------
+// File watcher runtime (P4.9.2)
+// ---------------------------------------------------------------------------
+
+pub struct FileWatcherRuntime {
+    pub watcher_id: String,
+    pub root: String,
+    pub events: Vec<FileWatchEvent>,
+    pub active: bool,
+    pub error: Option<String>,
+    pub stop_flag: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+pub struct FileWatcherStateHandle {
+    pub watchers: Arc<Mutex<HashMap<String, FileWatcherRuntime>>>,
+}
+
+impl FileWatcherStateHandle {
+    pub async fn register_watcher(
+        &self,
+        watcher_id: &str,
+        root: &str,
+        stop_flag: Arc<AtomicBool>,
+    ) {
+        let mut watchers = self.watchers.lock().await;
+        watchers.insert(
+            watcher_id.to_string(),
+            FileWatcherRuntime {
+                watcher_id: watcher_id.to_string(),
+                root: root.to_string(),
+                events: Vec::new(),
+                active: true,
+                error: None,
+                stop_flag,
+            },
+        );
+    }
+
+    pub async fn append_watch_event(&self, watcher_id: &str, event: FileWatchEvent) {
+        let mut watchers = self.watchers.lock().await;
+        if let Some(w) = watchers.get_mut(watcher_id) {
+            w.events.push(event);
+            if w.events.len() > MAX_FILE_WATCH_EVENTS {
+                let overflow = w.events.len() - MAX_FILE_WATCH_EVENTS;
+                w.events.drain(0..overflow);
+            }
+        }
+    }
+
+    pub async fn poll_events(
+        &self,
+        watcher_id: &str,
+        cursor: u64,
+        batch_size: usize,
+    ) -> Option<(Vec<FileWatchEvent>, u64, bool, Option<String>)> {
+        let watchers = self.watchers.lock().await;
+        let w = watchers.get(watcher_id)?;
+        let start = cursor as usize;
+        let end = (start + batch_size).min(w.events.len());
+        let batch = if start < w.events.len() {
+            w.events[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let next = end as u64;
+        Some((batch, next, w.active, w.error.clone()))
+    }
+
+    pub async fn mark_error(&self, watcher_id: &str, error: String) {
+        let mut watchers = self.watchers.lock().await;
+        if let Some(w) = watchers.get_mut(watcher_id) {
+            w.error = Some(error);
+        }
+    }
+
+    pub async fn mark_inactive(&self, watcher_id: &str) {
+        let mut watchers = self.watchers.lock().await;
+        if let Some(w) = watchers.get_mut(watcher_id) {
+            w.active = false;
+        }
+    }
+
+    pub async fn stop_watcher(&self, watcher_id: &str) -> Option<bool> {
+        let mut watchers = self.watchers.lock().await;
+        let w = watchers.get_mut(watcher_id)?;
+        let was_active = w.active;
+        w.stop_flag.store(true, Ordering::Relaxed);
+        w.active = false;
+        Some(was_active)
+    }
+
+    pub async fn stop_all(&self) {
+        let mut watchers = self.watchers.lock().await;
+        for w in watchers.values_mut() {
+            w.stop_flag.store(true, Ordering::Relaxed);
+            w.active = false;
+        }
+    }
+}
+
 pub struct AppState {
     pub config: Arc<Mutex<HydraConfig>>,
     pub last_probe_report: Arc<Mutex<Option<ProbeReport>>>,
     pub races: Arc<Mutex<HashMap<String, RaceRuntime>>>,
     pub event_tx: broadcast::Sender<AgentStreamEvent>,
     pub interactive: InteractiveStateHandle,
+    pub file_watcher: FileWatcherStateHandle,
 }
 
 impl AppState {
@@ -520,6 +624,9 @@ impl AppState {
             event_tx,
             interactive: InteractiveStateHandle {
                 sessions: Arc::new(Mutex::new(HashMap::new())),
+            },
+            file_watcher: FileWatcherStateHandle {
+                watchers: Arc::new(Mutex::new(HashMap::new())),
             },
         }
     }

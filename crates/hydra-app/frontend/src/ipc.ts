@@ -24,6 +24,10 @@ import type {
   InteractiveResizeAck,
   InteractiveStopResult,
   InteractiveSessionSummary,
+  DirectoryListing,
+  FileWatcherStarted,
+  FileWatchEventBatch,
+  FileWatcherStopped,
 } from './types';
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -162,6 +166,33 @@ export async function stopInteractiveSession(
 export async function listInteractiveSessions(): Promise<InteractiveSessionSummary[]> {
   const invoke = await getInvoke();
   return invoke('list_interactive_sessions');
+}
+
+// ---------------------------------------------------------------------------
+// File Explorer API (P4.9.2)
+// ---------------------------------------------------------------------------
+
+export async function listDirectory(path: string): Promise<DirectoryListing> {
+  const invoke = await getInvoke();
+  return invoke('list_directory', { path });
+}
+
+export async function startFileWatcher(root: string): Promise<FileWatcherStarted> {
+  const invoke = await getInvoke();
+  return invoke('start_file_watcher', { root });
+}
+
+export async function pollFileWatchEvents(
+  watcherId: string,
+  cursor: number,
+): Promise<FileWatchEventBatch> {
+  const invoke = await getInvoke();
+  return invoke('poll_file_watch_events', { watcherId, cursor });
+}
+
+export async function stopFileWatcher(watcherId: string): Promise<FileWatcherStopped> {
+  const invoke = await getInvoke();
+  return invoke('stop_file_watcher', { watcherId });
 }
 
 // ---------------------------------------------------------------------------
@@ -646,6 +677,46 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
       }));
       return summaries as T;
     }
+
+    // File Explorer mock (P4.9.2)
+    case 'list_directory': {
+      const dirPath = (_args?.path as string) ?? '/workspace';
+      return {
+        path: dirPath,
+        entries: [
+          { name: 'src', path: `${dirPath}/src`, entryType: 'directory', size: null, modifiedAt: new Date().toISOString() },
+          { name: 'Cargo.toml', path: `${dirPath}/Cargo.toml`, entryType: 'file', size: 512, modifiedAt: new Date().toISOString() },
+          { name: 'README.md', path: `${dirPath}/README.md`, entryType: 'file', size: 1024, modifiedAt: new Date().toISOString() },
+          { name: '.gitignore', path: `${dirPath}/.gitignore`, entryType: 'file', size: 64, modifiedAt: new Date().toISOString() },
+        ],
+        error: null,
+      } as T;
+    }
+
+    case 'start_file_watcher': {
+      return {
+        watcherId: `mock-watcher-${Date.now()}`,
+        root: (_args?.root as string) ?? '/workspace',
+      } as T;
+    }
+
+    case 'poll_file_watch_events': {
+      return {
+        watcherId: (_args?.watcherId as string) ?? 'mock-watcher',
+        events: [],
+        nextCursor: (_args?.cursor as number) ?? 0,
+        active: true,
+        error: null,
+      } as T;
+    }
+
+    case 'stop_file_watcher': {
+      return {
+        watcherId: (_args?.watcherId as string) ?? 'mock-watcher',
+        wasActive: true,
+      } as T;
+    }
+
     default:
       throw new Error(`Unknown command: ${cmd}`);
   }
