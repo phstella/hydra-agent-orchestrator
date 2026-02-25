@@ -281,6 +281,25 @@ async fn idle_timeout_watch(timeout: Duration, reset_rx: &mut mpsc::Receiver<()>
     }
 }
 
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KillErrorKind {
+    NoSuchProcess,
+    PermissionDenied,
+    Other(i32),
+    Unknown,
+}
+
+#[cfg(unix)]
+fn classify_kill_error(errno: Option<i32>) -> KillErrorKind {
+    match errno {
+        Some(code) if code == libc::ESRCH => KillErrorKind::NoSuchProcess,
+        Some(code) if code == libc::EPERM => KillErrorKind::PermissionDenied,
+        Some(code) => KillErrorKind::Other(code),
+        None => KillErrorKind::Unknown,
+    }
+}
+
 async fn terminate_process(child: &mut tokio::process::Child) {
     #[cfg(unix)]
     {
@@ -294,8 +313,34 @@ async fn terminate_process(child: &mut tokio::process::Child) {
 
         let term_result = unsafe { libc::kill(pgid, libc::SIGTERM) };
         if term_result != 0 {
-            let _ = child.kill().await;
-            return;
+            match classify_kill_error(std::io::Error::last_os_error().raw_os_error()) {
+                KillErrorKind::NoSuchProcess => {
+                    tracing::debug!(pid, "process group already exited before SIGTERM");
+                    return;
+                }
+                KillErrorKind::PermissionDenied => {
+                    tracing::warn!(pid, "permission denied sending SIGTERM to process group");
+                    let _ = child.kill().await;
+                    return;
+                }
+                KillErrorKind::Other(errno) => {
+                    tracing::warn!(
+                        pid,
+                        errno,
+                        "failed sending SIGTERM to process group; falling back to child.kill"
+                    );
+                    let _ = child.kill().await;
+                    return;
+                }
+                KillErrorKind::Unknown => {
+                    tracing::warn!(
+                        pid,
+                        "failed sending SIGTERM to process group with unknown errno; falling back"
+                    );
+                    let _ = child.kill().await;
+                    return;
+                }
+            }
         }
 
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -304,7 +349,31 @@ async fn terminate_process(child: &mut tokio::process::Child) {
             return;
         }
 
-        let _ = unsafe { libc::kill(pgid, libc::SIGKILL) };
+        let kill_result = unsafe { libc::kill(pgid, libc::SIGKILL) };
+        if kill_result != 0 {
+            match classify_kill_error(std::io::Error::last_os_error().raw_os_error()) {
+                KillErrorKind::NoSuchProcess => {
+                    tracing::debug!(pid, "process group exited before SIGKILL escalation");
+                    return;
+                }
+                KillErrorKind::PermissionDenied => {
+                    tracing::warn!(pid, "permission denied sending SIGKILL to process group");
+                }
+                KillErrorKind::Other(errno) => {
+                    tracing::warn!(
+                        pid,
+                        errno,
+                        "failed sending SIGKILL to process group; falling back to child.kill"
+                    );
+                }
+                KillErrorKind::Unknown => {
+                    tracing::warn!(
+                        pid,
+                        "failed sending SIGKILL to process group with unknown errno; falling back"
+                    );
+                }
+            }
+        }
         let _ = child.kill().await;
     }
 
@@ -692,5 +761,23 @@ mod tests {
             !process_exists(pid),
             "background child process should be terminated with process group"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classify_kill_error_distinguishes_known_errno() {
+        assert_eq!(
+            classify_kill_error(Some(libc::ESRCH)),
+            KillErrorKind::NoSuchProcess
+        );
+        assert_eq!(
+            classify_kill_error(Some(libc::EPERM)),
+            KillErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            classify_kill_error(Some(libc::EINVAL)),
+            KillErrorKind::Other(libc::EINVAL)
+        );
+        assert_eq!(classify_kill_error(None), KillErrorKind::Unknown);
     }
 }

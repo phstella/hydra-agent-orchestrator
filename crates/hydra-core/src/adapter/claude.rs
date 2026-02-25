@@ -485,57 +485,80 @@ mod tests {
     fn parse_line_system_init() {
         let line =
             r#"{"type":"system","subtype":"init","session_id":"abc123","tools":["Read","Write"]}"#;
-        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        let evt = ClaudeAdapter::parse_stream_json_line(line)
+            .expect("system init fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Progress { message, .. } => {
                 assert!(message.contains("init"));
             }
-            other => panic!("expected Progress, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Progress { .. }),
+                "expected Progress, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_assistant_message() {
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":"I'll help with that task."},"session_id":"abc123"}"#;
-        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        let evt = ClaudeAdapter::parse_stream_json_line(line)
+            .expect("assistant fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Message { content } => {
                 assert_eq!(content, "I'll help with that task.");
             }
-            other => panic!("expected Message, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Message { .. }),
+                "expected Message, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_assistant_tool_use() {
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":"","tool_use":{"name":"Read","input":{"file_path":"src/main.rs"}}},"session_id":"abc123"}"#;
-        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        let evt = ClaudeAdapter::parse_stream_json_line(line)
+            .expect("assistant tool_use fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::ToolCall { tool, input } => {
                 assert_eq!(tool, "Read");
-                assert!(input["file_path"].as_str().unwrap().contains("main.rs"));
+                let file_path = input["file_path"]
+                    .as_str()
+                    .expect("tool_use input file_path should be a string");
+                assert!(file_path.contains("main.rs"));
             }
-            other => panic!("expected ToolCall, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::ToolCall { .. }),
+                "expected ToolCall, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_result_tool_result() {
         let line = r#"{"type":"result","subtype":"tool_result","tool_use_id":"t1","content":"fn main() {}","session_id":"abc123"}"#;
-        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        let evt = ClaudeAdapter::parse_stream_json_line(line)
+            .expect("result tool_result fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::ToolResult { tool, output } => {
                 assert_eq!(tool, "t1");
-                assert!(output.as_str().unwrap().contains("fn main"));
+                let text = output
+                    .as_str()
+                    .expect("tool_result output should be a string");
+                assert!(text.contains("fn main"));
             }
-            other => panic!("expected ToolResult, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::ToolResult { .. }),
+                "expected ToolResult, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_result_success_with_usage() {
         let line = r#"{"type":"result","subtype":"success","cost_usd":0.003,"duration_ms":2500,"session_id":"abc123","usage":{"input_tokens":1200,"output_tokens":450}}"#;
-        let evt = ClaudeAdapter::parse_stream_json_line(line).unwrap();
+        let evt = ClaudeAdapter::parse_stream_json_line(line)
+            .expect("result success fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Usage {
                 input_tokens,
@@ -547,7 +570,10 @@ mod tests {
                 assert!(extra.contains_key("cost_usd"));
                 assert!(extra.contains_key("duration_ms"));
             }
-            other => panic!("expected Usage, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Usage { .. }),
+                "expected Usage, got {other:?}"
+            ),
         }
     }
 

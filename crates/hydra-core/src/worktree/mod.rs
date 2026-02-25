@@ -4,6 +4,8 @@ use thiserror::Error;
 use tokio::process::Command;
 use uuid::Uuid;
 
+use crate::git_ref::{validate_agent_key, validate_branch_name};
+
 #[derive(Debug, Error)]
 pub enum WorktreeError {
     #[error("git command failed: {detail}")]
@@ -17,6 +19,12 @@ pub enum WorktreeError {
 
     #[error("not inside a git repository")]
     NotARepo,
+
+    #[error("invalid agent key '{key}': {reason}")]
+    InvalidAgentKey { key: String, reason: String },
+
+    #[error("invalid branch name '{branch}': {reason}")]
+    InvalidBranchName { branch: String, reason: String },
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -66,7 +74,16 @@ impl WorktreeService {
         agent_key: &str,
         base_ref: &str,
     ) -> Result<WorktreeInfo, WorktreeError> {
+        validate_agent_key(agent_key).map_err(|e| WorktreeError::InvalidAgentKey {
+            key: agent_key.to_string(),
+            reason: e.to_string(),
+        })?;
+
         let branch = format!("hydra/{run_id}/agent/{agent_key}");
+        validate_branch_name(&branch).map_err(|e| WorktreeError::InvalidBranchName {
+            branch: branch.clone(),
+            reason: e.to_string(),
+        })?;
         let wt_path = self.base_dir.join(run_id.to_string()).join(agent_key);
 
         if wt_path.exists() {
@@ -445,5 +462,20 @@ bare
         svc.force_cleanup(&info).await.unwrap();
         // Re-running cleanup should not fail if branch/path are already gone.
         svc.force_cleanup(&info).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_rejects_invalid_agent_key() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_test_repo(&repo);
+
+        let wt_base = tmp.path().join("worktrees");
+        let svc = WorktreeService::new(repo, wt_base);
+        let run_id = Uuid::new_v4();
+
+        let result = svc.create(run_id, "../bad", "HEAD").await;
+        assert!(matches!(result, Err(WorktreeError::InvalidAgentKey { .. })));
     }
 }

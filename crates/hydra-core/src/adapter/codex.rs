@@ -649,14 +649,18 @@ mod tests {
     #[test]
     fn parse_line_start_event() {
         let line = r#"{"type":"start","task":"Fix the bug in main.rs","model":"o4-mini"}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("start event fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Progress { message, percent } => {
                 assert!(message.contains("Fix the bug"));
                 assert!(message.contains("o4-mini"));
                 assert_eq!(percent, Some(0.0));
             }
-            other => panic!("expected Progress, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Progress { .. }),
+                "expected Progress, got {other:?}"
+            ),
         }
     }
 
@@ -664,45 +668,64 @@ mod tests {
     fn parse_line_message_event() {
         let line =
             r#"{"type":"message","role":"assistant","content":"I'll fix the bug in main.rs."}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("message event fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Message { content } => {
                 assert_eq!(content, "I'll fix the bug in main.rs.");
             }
-            other => panic!("expected Message, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Message { .. }),
+                "expected Message, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_tool_call_event() {
         let line = r#"{"type":"tool_call","tool":"shell","input":{"command":"cat src/main.rs"}}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("tool_call fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::ToolCall { tool, input } => {
                 assert_eq!(tool, "shell");
-                assert!(input["command"].as_str().unwrap().contains("main.rs"));
+                let command = input["command"]
+                    .as_str()
+                    .expect("tool_call command should be a string");
+                assert!(command.contains("main.rs"));
             }
-            other => panic!("expected ToolCall, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::ToolCall { .. }),
+                "expected ToolCall, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_tool_result_event() {
         let line = r#"{"type":"tool_result","tool":"shell","output":"fn main() {\n    println!(\"Hello\");\n}"}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("tool_result fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::ToolResult { tool, output } => {
                 assert_eq!(tool, "shell");
-                assert!(output.as_str().unwrap().contains("fn main"));
+                let output_text = output
+                    .as_str()
+                    .expect("tool_result output should be a string");
+                assert!(output_text.contains("fn main"));
             }
-            other => panic!("expected ToolResult, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::ToolResult { .. }),
+                "expected ToolResult, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_completed_with_usage() {
         let line = r#"{"type":"completed","usage":{"input_tokens":800,"output_tokens":320},"cost_usd":0.002}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("completed fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Usage {
                 input_tokens,
@@ -713,21 +736,26 @@ mod tests {
                 assert_eq!(output_tokens, 320);
                 assert!(extra.contains_key("cost_usd"));
             }
-            other => panic!("expected Usage, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Usage { .. }),
+                "expected Usage, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_completed_without_usage() {
         let line = r#"{"type":"completed"}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("completed fixture should parse into an AgentEvent");
         assert!(matches!(evt, AgentEvent::Completed { .. }));
     }
 
     #[test]
     fn parse_line_turn_completed_with_usage() {
         let line = r#"{"type":"turn.completed","usage":{"input_tokens":7645,"cached_input_tokens":6656,"output_tokens":42}}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("turn.completed fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Usage {
                 input_tokens,
@@ -740,23 +768,30 @@ mod tests {
                     extra
                         .get("cached_input_tokens")
                         .and_then(|v| v.as_u64())
-                        .unwrap(),
+                        .expect("cached_input_tokens should be present in usage payload"),
                     6656
                 );
             }
-            other => panic!("expected Usage, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Usage { .. }),
+                "expected Usage, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_item_completed_agent_message() {
         let line = r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"codex ok"}}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("item.completed fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Message { content } => {
                 assert_eq!(content, "codex ok");
             }
-            other => panic!("expected Message, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Message { .. }),
+                "expected Message, got {other:?}"
+            ),
         }
     }
 
@@ -764,24 +799,32 @@ mod tests {
     fn parse_line_turn_failed_event() {
         let line =
             r#"{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("turn.failed fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Failed { error } => {
                 assert!(error.contains("stream disconnected"));
             }
-            other => panic!("expected Failed, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Failed { .. }),
+                "expected Failed, got {other:?}"
+            ),
         }
     }
 
     #[test]
     fn parse_line_error_event() {
         let line = r#"{"type":"error","message":"reconnecting"}"#;
-        let evt = CodexAdapter::parse_json_line(line).unwrap();
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("error fixture should parse into an AgentEvent");
         match evt {
             AgentEvent::Failed { error } => {
                 assert_eq!(error, "reconnecting");
             }
-            other => panic!("expected Failed, got {other:?}"),
+            other => assert!(
+                matches!(other, AgentEvent::Failed { .. }),
+                "expected Failed, got {other:?}"
+            ),
         }
     }
 

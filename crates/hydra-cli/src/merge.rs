@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use uuid::Uuid;
 
 use hydra_core::artifact::{RunLayout, RunManifest, RunStatus};
+use hydra_core::git_ref::{validate_agent_key, validate_branch_name};
 use hydra_core::scoring::ranking::AgentScore;
 
 pub struct MergeOpts {
@@ -48,6 +49,7 @@ pub fn run_merge(opts: MergeOpts) -> Result<()> {
         Some(key) => key.clone(),
         None => pick_winner(&layout, &manifest)?,
     };
+    validate_merge_agent_key(&agent_key)?;
 
     let entry = manifest
         .agents
@@ -68,6 +70,7 @@ pub fn run_merge(opts: MergeOpts) -> Result<()> {
     }
 
     let branch = entry.branch.clone();
+    validate_merge_inputs(&agent_key, &branch)?;
 
     // Pre-flight safety checks
     check_not_in_merge_state(&repo_root)?;
@@ -90,6 +93,17 @@ pub fn run_merge(opts: MergeOpts) -> Result<()> {
         &agent_key,
         opts.json,
     )
+}
+
+fn validate_merge_agent_key(agent_key: &str) -> Result<()> {
+    validate_agent_key(agent_key)
+        .map_err(|e| anyhow::anyhow!("invalid agent key '{}': {}", agent_key, e))
+}
+
+fn validate_merge_inputs(agent_key: &str, branch: &str) -> Result<()> {
+    validate_merge_agent_key(agent_key)?;
+    validate_branch_name(branch)
+        .map_err(|e| anyhow::anyhow!("invalid branch name '{}': {}", branch, e))
 }
 
 fn resolve_merge_input(
@@ -620,7 +634,10 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{check_clean_working_tree, is_hydra_artifact_path, parse_porcelain_path};
+    use super::{
+        check_clean_working_tree, is_hydra_artifact_path, parse_porcelain_path,
+        validate_merge_inputs,
+    };
 
     #[test]
     fn parses_porcelain_paths_for_renames() {
@@ -664,5 +681,19 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("working tree has uncommitted changes in"));
         assert!(msg.contains("src"));
+    }
+
+    #[test]
+    fn validate_merge_inputs_rejects_invalid_agent_key() {
+        let err = validate_merge_inputs("../bad", "hydra/run/agent/claude")
+            .expect_err("invalid agent key should fail");
+        assert!(err.to_string().contains("invalid agent key"));
+    }
+
+    #[test]
+    fn validate_merge_inputs_rejects_invalid_branch() {
+        let err = validate_merge_inputs("claude", "hydra/run/agent/../claude")
+            .expect_err("invalid branch should fail");
+        assert!(err.to_string().contains("invalid branch name"));
     }
 }

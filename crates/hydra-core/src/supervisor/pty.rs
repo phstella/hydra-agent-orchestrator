@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use thiserror::Error;
 use tokio::sync::{mpsc, Mutex, Notify};
 
@@ -80,6 +80,9 @@ struct PtyInner {
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send>,
 }
+
+const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const CHILD_EXIT_POLL_ATTEMPTS: usize = 20;
 
 pub struct PtySession {
     inner: Arc<Mutex<Option<PtyInner>>>,
@@ -287,8 +290,7 @@ impl PtySession {
     async fn kill_child(inner: &Arc<Mutex<Option<PtyInner>>>) {
         let mut guard = inner.lock().await;
         if let Some(ref mut i) = *guard {
-            let _ = i.child.kill();
-            let _ = i.child.wait();
+            let _ = terminate_child_with_retry(i.child.as_mut());
         }
     }
 
@@ -307,10 +309,40 @@ impl PtySession {
     async fn cleanup(inner: &Arc<Mutex<Option<PtyInner>>>) {
         let mut guard = inner.lock().await;
         if let Some(mut i) = guard.take() {
-            let _ = i.child.kill();
-            let _ = i.child.wait();
+            let _ = terminate_child_with_retry(i.child.as_mut());
         }
     }
+}
+
+fn wait_for_child_exit_with_retry(child: &mut (dyn Child + Send), attempts: usize) -> Option<u32> {
+    for attempt in 0..attempts {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status.exit_code()),
+            Ok(None) => {
+                if attempt + 1 < attempts {
+                    std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+                }
+            }
+            Err(_) => return None,
+        }
+    }
+
+    None
+}
+
+fn terminate_child_with_retry(child: &mut (dyn Child + Send)) -> Option<u32> {
+    if let Some(exit_code) = wait_for_child_exit_with_retry(child, 1) {
+        return Some(exit_code);
+    }
+
+    let _ = child.kill();
+    if let Some(exit_code) = wait_for_child_exit_with_retry(child, CHILD_EXIT_POLL_ATTEMPTS) {
+        return Some(exit_code);
+    }
+
+    // Retry a second hard kill in case the first signal raced with process shutdown.
+    let _ = child.kill();
+    wait_for_child_exit_with_retry(child, CHILD_EXIT_POLL_ATTEMPTS)
 }
 
 #[cfg(test)]
