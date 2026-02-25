@@ -555,7 +555,7 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
 
       const adapter = MOCK_ADAPTERS.find((a) => a.key === agentKey);
       if (!adapter) {
-        throw new Error(`[adapter_error] unknown adapter '${agentKey}'`);
+        throw new Error(`[binary_missing] Adapter '${agentKey}' binary not found in PATH. Install it or configure the path in hydra.toml.`);
       }
       if (adapter.tier === 'experimental' && !allowExp) {
         throw new Error(

@@ -977,34 +977,58 @@ pub async fn start_interactive_session(
         );
     }
 
-    let spawn_req = hydra_core::adapter::SpawnRequest {
-        task_prompt: request.task_prompt.clone(),
-        worktree_path: cwd.clone(),
-        timeout_seconds: 0,
-        allow_network: true,
-        force_edit: request.unsafe_mode,
-        output_json_stream: false,
-        unsafe_mode: request.unsafe_mode,
-        supported_flags,
+    // P4.9.4: Direct external CLI invocation -- resolve binary and build
+    // minimal interactive args without race-mode flags.
+    let configured_path = {
+        let adapter_key = adapter.key();
+        match adapter_key {
+            "claude" => config.adapters.claude.clone(),
+            "codex" => config.adapters.codex.clone(),
+            "cursor-agent" => config.adapters.cursor.clone(),
+            _ => None,
+        }
     };
 
-    let built_cmd = adapter
-        .build_command(&spawn_req)
-        .map_err(|e| IpcError::adapter_error(e.to_string()).to_string())?;
+    let binary_candidates: &[&str] = match adapter.key() {
+        "claude" => &["claude"],
+        "codex" => &["codex"],
+        "cursor-agent" => &["cursor"],
+        _ => &[],
+    };
+
+    let binary_path = hydra_core::adapter::resolve_binary(
+        configured_path.as_deref(),
+        binary_candidates,
+    )
+    .ok_or_else(|| {
+        IpcError::binary_missing(format!(
+            "Adapter '{}' binary not found in PATH. Install it or configure the path in hydra.toml.",
+            request.agent_key
+        ))
+        .to_string()
+    })?;
+
+    let interactive_args = build_interactive_args(
+        adapter.key(),
+        &request.task_prompt,
+        request.unsafe_mode,
+        &supported_flags,
+    );
+
     drop(config);
 
     let pty_config = hydra_core::supervisor::pty::PtySessionConfig {
-        program: built_cmd.program,
-        args: built_cmd.args,
-        env: built_cmd.env,
-        cwd: built_cmd.cwd,
+        program: binary_path.to_string_lossy().to_string(),
+        args: interactive_args,
+        env: vec![],
+        cwd: cwd.clone(),
         initial_cols: cols,
         initial_rows: rows,
     };
 
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(1024);
     let pty_session = hydra_core::supervisor::pty::PtySession::spawn(pty_config, event_tx)
-        .map_err(|e| IpcError::internal(format!("PTY spawn failed: {e}")).to_string())?;
+        .map_err(|e| IpcError::launch_error(format!("PTY spawn failed: {e}")).to_string())?;
 
     // M4.6: Initialize session artifact writer
     let hydra_root = cwd.join(".hydra");
@@ -2121,6 +2145,42 @@ fn interactive_dirty_worktree_message(detail: &str) -> String {
     }
 }
 
+/// P4.9.4: Build minimal interactive CLI args for direct external tool invocation.
+/// No race-mode flags (--output-format json, --verbose, --stream-json, etc.).
+fn build_interactive_args(
+    adapter_key: &str,
+    task_prompt: &str,
+    unsafe_mode: bool,
+    supported_flags: &[String],
+) -> Vec<String> {
+    match adapter_key {
+        "claude" => {
+            let mut args = vec!["-p".to_string(), task_prompt.to_string()];
+            if unsafe_mode && supported_flags.iter().any(|f| f == "--permission-mode") {
+                args.extend(["--permission-mode".to_string(), "bypassPermissions".to_string()]);
+            }
+            args
+        }
+        "codex" => {
+            let mut args = vec![task_prompt.to_string()];
+            if unsafe_mode
+                && supported_flags
+                    .iter()
+                    .any(|f| f == "--dangerously-bypass-approvals-and-sandbox")
+            {
+                args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+            }
+            args
+        }
+        "cursor-agent" => {
+            vec!["--message".to_string(), task_prompt.to_string()]
+        }
+        _ => {
+            vec![task_prompt.to_string()]
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2643,6 +2703,71 @@ branch refs/heads/main
     fn dirty_worktree_message_adds_guidance_when_missing() {
         let msg = interactive_dirty_worktree_message("Working tree has uncommitted changes");
         assert!(msg.contains("Commit or stash changes"));
+    }
+
+    // P4.9.4: Direct CLI invocation tests
+    #[test]
+    fn build_interactive_args_claude_basic() {
+        let args = build_interactive_args("claude", "fix the bug", false, &[]);
+        assert_eq!(args, vec!["-p", "fix the bug"]);
+    }
+
+    #[test]
+    fn build_interactive_args_claude_unsafe_with_permission_mode() {
+        let flags = vec!["--permission-mode".to_string()];
+        let args = build_interactive_args("claude", "fix it", true, &flags);
+        assert_eq!(
+            args,
+            vec!["-p", "fix it", "--permission-mode", "bypassPermissions"]
+        );
+    }
+
+    #[test]
+    fn build_interactive_args_claude_unsafe_without_permission_mode() {
+        let args = build_interactive_args("claude", "fix it", true, &[]);
+        assert_eq!(args, vec!["-p", "fix it"]);
+    }
+
+    #[test]
+    fn build_interactive_args_codex_basic() {
+        let args = build_interactive_args("codex", "refactor the module", false, &[]);
+        assert_eq!(args, vec!["refactor the module"]);
+    }
+
+    #[test]
+    fn build_interactive_args_codex_unsafe_with_dangerous_flag() {
+        let flags = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
+        let args = build_interactive_args("codex", "fix", true, &flags);
+        assert_eq!(
+            args,
+            vec!["fix", "--dangerously-bypass-approvals-and-sandbox"]
+        );
+    }
+
+    #[test]
+    fn build_interactive_args_cursor_agent() {
+        let args = build_interactive_args("cursor-agent", "do it", false, &[]);
+        assert_eq!(args, vec!["--message", "do it"]);
+    }
+
+    #[test]
+    fn build_interactive_args_unknown_adapter() {
+        let args = build_interactive_args("unknown", "task", false, &[]);
+        assert_eq!(args, vec!["task"]);
+    }
+
+    #[test]
+    fn ipc_error_binary_missing_variant() {
+        let err = IpcError::binary_missing("claude not found");
+        assert_eq!(err.code, "binary_missing");
+        assert_eq!(err.to_string(), "[binary_missing] claude not found");
+    }
+
+    #[test]
+    fn ipc_error_launch_error_variant() {
+        let err = IpcError::launch_error("PTY spawn failed");
+        assert_eq!(err.code, "launch_error");
+        assert_eq!(err.to_string(), "[launch_error] PTY spawn failed");
     }
 
     #[test]

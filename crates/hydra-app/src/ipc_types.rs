@@ -300,6 +300,22 @@ impl IpcError {
             details: None,
         }
     }
+
+    pub fn binary_missing(msg: impl Into<String>) -> Self {
+        Self {
+            code: "binary_missing".to_string(),
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    pub fn launch_error(msg: impl Into<String>) -> Self {
+        Self {
+            code: "launch_error".to_string(),
+            message: msg.into(),
+            details: None,
+        }
+    }
 }
 
 impl std::fmt::Display for IpcError {
