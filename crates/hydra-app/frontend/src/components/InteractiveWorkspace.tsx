@@ -192,11 +192,16 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
             return next;
           });
 
-          if (batch.events.length > 0) {
+          // Avoid echo/duplication and render churn from terminal stdin writes.
+          // `user_input` events are kept in backend artifacts, but not rendered
+          // in the live terminal output stream.
+          const renderableEvents = batch.events.filter((event) => event.eventType !== 'user_input');
+
+          if (renderableEvents.length > 0) {
             setSessionEvents((prev) => {
               const next = new Map(prev);
               const existing = next.get(sessionId) ?? [];
-              next.set(sessionId, appendBoundedEvents(existing, batch.events));
+              next.set(sessionId, appendBoundedEvents(existing, renderableEvents));
               return next;
             });
           }

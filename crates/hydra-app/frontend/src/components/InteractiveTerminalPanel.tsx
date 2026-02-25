@@ -161,6 +161,8 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
  * so the xterm.js renderer can interpret them with full fidelity.
  */
 function extractRawText(event: InteractiveStreamEvent): string {
+  if (event.eventType === 'user_input') return '';
+
   if (!event.data || typeof event.data !== 'object') {
     if (typeof event.data === 'string') return event.data;
     return '';
@@ -168,7 +170,6 @@ function extractRawText(event: InteractiveStreamEvent): string {
   const data = event.data as Record<string, unknown>;
   if (typeof data.text === 'string') return data.text;
   if (typeof data.line === 'string') return data.line;
-  if (typeof data.input === 'string') return data.input;
   if (typeof data.message === 'string') return data.message;
   if (event.eventType === 'session_started') return '\r\n--- Session started ---\r\n';
   if (event.eventType === 'session_completed') return '\r\n--- Session completed ---\r\n';
