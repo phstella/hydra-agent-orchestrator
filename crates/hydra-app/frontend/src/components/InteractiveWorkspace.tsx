@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { InteractiveSessionRail } from './InteractiveSessionRail';
 import { InteractiveTerminalPanel } from './InteractiveTerminalPanel';
@@ -78,6 +78,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [sessionEvents, setSessionEvents] = useState<Map<string, InteractiveStreamEvent[]>>(new Map());
   const [pollErrors, setPollErrors] = useState<Map<string, string>>(new Map());
+  const [sessionErrors, setSessionErrors] = useState<Map<string, string>>(new Map());
 
   // ---------------------------------------------------------------------------
   // Create-form state
@@ -180,6 +181,16 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           });
 
           pollCursors.current.set(sessionId, batch.nextCursor);
+
+          setSessionErrors((prev) => {
+            const next = new Map(prev);
+            if (batch.error) {
+              next.set(sessionId, batch.error);
+            } else {
+              next.delete(sessionId);
+            }
+            return next;
+          });
 
           if (batch.events.length > 0) {
             setSessionEvents((prev) => {
@@ -330,6 +341,12 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
         next.delete(sessionId);
         return next;
       });
+      setSessionErrors((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
       setSessions((prev) =>
         prev.map((s) =>
           s.sessionId === sessionId ? { ...s, status: result.status } : s,
@@ -363,6 +380,19 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const selectedPollError = selectedSessionId
     ? (pollErrors.get(selectedSessionId) ?? null)
     : null;
+  const selectedSessionError = selectedSessionId
+    ? (sessionErrors.get(selectedSessionId) ?? null)
+    : null;
+
+  const laneErrors = useMemo(() => {
+    const merged = new Map(pollErrors);
+    sessionErrors.forEach((error, sessionId) => {
+      if (!merged.has(sessionId)) {
+        merged.set(sessionId, error);
+      }
+    });
+    return merged;
+  }, [pollErrors, sessionErrors]);
 
   // Count duplicate adapter instances for lane label disambiguation (M4.8.2)
   const runningInstanceCount = agentKey ? countAdapterInstances(sessions, agentKey) : 0;
@@ -644,6 +674,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           status={selectedSession?.status ?? null}
           events={selectedEvents}
           transportError={selectedPollError}
+          sessionError={selectedSessionError}
           onTerminalInput={selectedSession?.status === 'running' ? handleTerminalInput : undefined}
         />
 
@@ -694,7 +725,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
         <InteractiveSessionRail
           sessions={sessions}
           selectedSessionId={selectedSessionId}
-          pollErrors={pollErrors}
+          pollErrors={laneErrors}
           onSelectSession={(id) => {
             setSelectedSessionId(id);
             const session = sessions.find((entry) => entry.sessionId === id);

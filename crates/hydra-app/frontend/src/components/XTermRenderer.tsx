@@ -67,10 +67,9 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const dataListenerRef = useRef<{ dispose: () => void } | null>(null);
   const writtenRef = useRef(0);
   const resetKeyRef = useRef<string | null>(null);
-  const onDataRef = useRef(onData);
-  onDataRef.current = onData;
 
   useImperativeHandle(ref, () => ({
     focus: () => {
@@ -85,7 +84,7 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     const el = containerRef.current;
     if (!el) return;
 
-    const stdinEnabled = !!onDataRef.current;
+    const stdinEnabled = !!onData;
 
     const term = new Terminal({
       cursorBlink: stdinEnabled,
@@ -107,13 +106,6 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     // Initial fit after open
     try { fit.fit(); } catch { /* layout not ready */ }
 
-    // P4.9.5: Forward keyboard input to PTY via onData callback
-    if (stdinEnabled && typeof term.onData === 'function') {
-      term.onData((data) => {
-        onDataRef.current?.(data);
-      });
-    }
-
     termRef.current = term;
     fitRef.current = fit;
     writtenRef.current = 0;
@@ -127,6 +119,8 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
 
     return () => {
       ro.disconnect();
+      dataListenerRef.current?.dispose();
+      dataListenerRef.current = null;
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -134,6 +128,32 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     // Only re-create if the DOM element changes (never in practice)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep stdin + keyboard listener in sync with lane/status changes.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+
+    const stdinEnabled = typeof onData === 'function';
+    term.options.disableStdin = !stdinEnabled;
+    term.options.cursorBlink = stdinEnabled;
+    term.options.cursorStyle = stdinEnabled ? 'block' : 'bar';
+    term.options.cursorInactiveStyle = stdinEnabled ? 'outline' : 'none';
+
+    dataListenerRef.current?.dispose();
+    dataListenerRef.current = null;
+
+    if (stdinEnabled && typeof term.onData === 'function') {
+      dataListenerRef.current = term.onData((data) => {
+        onData(data);
+      });
+    }
+
+    return () => {
+      dataListenerRef.current?.dispose();
+      dataListenerRef.current = null;
+    };
+  }, [onData]);
 
   // ── Handle session reset ──────────────────────────────────────────────
   useEffect(() => {

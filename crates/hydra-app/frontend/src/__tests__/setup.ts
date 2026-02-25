@@ -151,6 +151,7 @@ export interface MockTerminalInstance {
   __rawWrites: string[];
   __element: HTMLDivElement | null;
   options: Record<string, unknown>;
+  __emitData?: (data: string) => void;
 }
 
 // Global list of all MockTerminal instances created during a test.
@@ -163,6 +164,7 @@ class MockTerminal implements MockTerminalInstance {
   __element: HTMLDivElement | null = null;
   options: Record<string, unknown> = {};
   __cursor = 0;
+  __dataHandler: ((data: string) => void) | null = null;
 
   constructor(opts?: Record<string, unknown>) {
     if (opts) this.options = { ...opts };
@@ -184,6 +186,21 @@ class MockTerminal implements MockTerminalInstance {
       this.__element.textContent = next.text;
     }
     if (callback) callback();
+  }
+
+  onData(handler: (data: string) => void) {
+    this.__dataHandler = handler;
+    return {
+      dispose: () => {
+        if (this.__dataHandler === handler) {
+          this.__dataHandler = null;
+        }
+      },
+    };
+  }
+
+  __emitData(data: string) {
+    this.__dataHandler?.(data);
   }
 
   loadAddon() {}

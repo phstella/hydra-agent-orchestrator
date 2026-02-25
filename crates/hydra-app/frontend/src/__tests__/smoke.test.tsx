@@ -30,6 +30,12 @@ import type {
 
 vi.mock('../ipc');
 
+type XTermMockInstance = {
+  __rawWrites: string[];
+  __element: HTMLDivElement | null;
+  __emitData?: (data: string) => void;
+};
+
 const MOCK_ADAPTERS: AdapterInfo[] = [
   {
     key: 'claude',
@@ -727,6 +733,31 @@ describe('Smoke Test 11: P4.9.5 terminal-only input model', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument();
+    });
+  });
+
+  it('routes terminal keyboard input to writeInteractiveInput', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'Input route test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument();
+    });
+
+    const instances = (globalThis as Record<string, unknown>).__xtermInstances as XTermMockInstance[];
+    const term = instances[instances.length - 1];
+    expect(term).toBeDefined();
+    expect(typeof term.__emitData).toBe('function');
+
+    term.__emitData?.('status\n');
+
+    await waitFor(() => {
+      expect(ipc.writeInteractiveInput).toHaveBeenCalledWith('test-session-1', 'status\n');
     });
   });
 });
@@ -1713,13 +1744,24 @@ describe('Smoke Test 35: Per-lane input isolation under duplicate adapters', () 
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-input-session-2')).toBeInTheDocument());
 
-    // Focus is on session 2 (most recent). Terminal-only input is active.
-    // In terminal-only model, input goes through xterm onData which isn't testable
-    // in jsdom. Verify stop button is available for the focused session instead.
+    // Focus is on session 2 (most recent). Terminal input should target session 2.
     await waitFor(() => expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument());
+    const instances = (globalThis as Record<string, unknown>).__xtermInstances as XTermMockInstance[];
+    const term = instances[instances.length - 1];
+    expect(term).toBeDefined();
+    expect(typeof term.__emitData).toBe('function');
 
-    // Verify writeInteractiveInput was NOT called for session 1 (no cross-lane leakage)
-    expect(ipc.writeInteractiveInput).not.toHaveBeenCalledWith('input-session-1', expect.anything());
+    await waitFor(() => {
+      term.__emitData?.('hello session 2\n');
+      expect(ipc.writeInteractiveInput).toHaveBeenCalledWith('input-session-2', 'hello session 2\n');
+    });
+
+    // Switch focus and verify input retargets to session 1.
+    await user.click(screen.getByTestId('session-item-input-session-1'));
+    await waitFor(() => {
+      term.__emitData?.('hello session 1\n');
+      expect(ipc.writeInteractiveInput).toHaveBeenCalledWith('input-session-1', 'hello session 1\n');
+    });
   });
 });
 
@@ -2029,8 +2071,6 @@ describe('Smoke Test 43: File Explorer watcher events trigger debounced refresh'
 // P4.9.3: High-Fidelity Terminal Rendering (ANSI Parity) Fixture Tests
 // ---------------------------------------------------------------------------
 
-type XTermMockInstance = { __rawWrites: string[]; __element: HTMLDivElement | null };
-
 /** Helper: create a session and pump one ANSI output event through polling. */
 async function setupTerminalWithAnsiOutput(
   ansiPayload: string,
@@ -2242,6 +2282,30 @@ describe('P4.9.4: Deploy launches selected external tool', () => {
     await waitFor(() => {
       expect(screen.getByTestId('create-session-error-hint')).toHaveTextContent(/auth\/session/);
     });
+  });
+
+  it('surfaces runtime CLI failure details in terminal context', async () => {
+    vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
+      sessionId: 'test-session-1',
+      events: [],
+      nextCursor: 1,
+      done: true,
+      status: 'failed',
+      error: 'process exited with status code 7. Check CLI auth/session and flag compatibility.',
+    } as InteractiveEventBatch);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'runtime failure test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-session-error')).toHaveTextContent(/status code 7/);
+    });
+    expect(screen.getByTestId('terminal-session-error')).toHaveTextContent(/auth\/session/);
   });
 });
 

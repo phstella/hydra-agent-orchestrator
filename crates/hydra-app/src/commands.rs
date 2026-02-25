@@ -992,7 +992,7 @@ pub async fn start_interactive_session(
     let binary_candidates: &[&str] = match adapter.key() {
         "claude" => &["claude"],
         "codex" => &["codex"],
-        "cursor-agent" => &["cursor"],
+        "cursor-agent" => &["cursor-agent", "cursor"],
         _ => &[],
     };
 
@@ -2155,14 +2155,21 @@ fn build_interactive_args(
 ) -> Vec<String> {
     match adapter_key {
         "claude" => {
-            let mut args = vec!["-p".to_string(), task_prompt.to_string()];
+            // Keep interactive launches tool-native: no print/headless flags.
+            let mut args = Vec::new();
             if unsafe_mode && supported_flags.iter().any(|f| f == "--permission-mode") {
-                args.extend(["--permission-mode".to_string(), "bypassPermissions".to_string()]);
+                args.extend([
+                    "--permission-mode".to_string(),
+                    "bypassPermissions".to_string(),
+                ]);
             }
+            args.push(task_prompt.to_string());
             args
         }
         "codex" => {
-            let mut args = vec![task_prompt.to_string()];
+            // Codex command surface is command-oriented; `exec` is the
+            // stable prompt entrypoint.
+            let mut args = vec!["exec".to_string(), task_prompt.to_string()];
             if unsafe_mode
                 && supported_flags
                     .iter()
@@ -2173,7 +2180,7 @@ fn build_interactive_args(
             args
         }
         "cursor-agent" => {
-            vec!["--message".to_string(), task_prompt.to_string()]
+            vec![task_prompt.to_string()]
         }
         _ => {
             vec![task_prompt.to_string()]
@@ -2709,7 +2716,7 @@ branch refs/heads/main
     #[test]
     fn build_interactive_args_claude_basic() {
         let args = build_interactive_args("claude", "fix the bug", false, &[]);
-        assert_eq!(args, vec!["-p", "fix the bug"]);
+        assert_eq!(args, vec!["fix the bug"]);
     }
 
     #[test]
@@ -2718,20 +2725,20 @@ branch refs/heads/main
         let args = build_interactive_args("claude", "fix it", true, &flags);
         assert_eq!(
             args,
-            vec!["-p", "fix it", "--permission-mode", "bypassPermissions"]
+            vec!["--permission-mode", "bypassPermissions", "fix it"]
         );
     }
 
     #[test]
     fn build_interactive_args_claude_unsafe_without_permission_mode() {
         let args = build_interactive_args("claude", "fix it", true, &[]);
-        assert_eq!(args, vec!["-p", "fix it"]);
+        assert_eq!(args, vec!["fix it"]);
     }
 
     #[test]
     fn build_interactive_args_codex_basic() {
         let args = build_interactive_args("codex", "refactor the module", false, &[]);
-        assert_eq!(args, vec!["refactor the module"]);
+        assert_eq!(args, vec!["exec", "refactor the module"]);
     }
 
     #[test]
@@ -2740,14 +2747,14 @@ branch refs/heads/main
         let args = build_interactive_args("codex", "fix", true, &flags);
         assert_eq!(
             args,
-            vec!["fix", "--dangerously-bypass-approvals-and-sandbox"]
+            vec!["exec", "fix", "--dangerously-bypass-approvals-and-sandbox"]
         );
     }
 
     #[test]
     fn build_interactive_args_cursor_agent() {
         let args = build_interactive_args("cursor-agent", "do it", false, &[]);
-        assert_eq!(args, vec!["--message", "do it"]);
+        assert_eq!(args, vec!["do it"]);
     }
 
     #[test]

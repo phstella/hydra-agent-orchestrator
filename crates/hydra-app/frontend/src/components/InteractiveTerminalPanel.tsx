@@ -13,6 +13,7 @@ interface InteractiveTerminalPanelProps {
   status: string | null;
   events: InteractiveStreamEvent[];
   transportError: string | null;
+  sessionError: string | null;
   /** P4.9.5: Callback for terminal keyboard input routed to PTY stdin. */
   onTerminalInput?: (data: string) => void;
 }
@@ -25,6 +26,7 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
   status,
   events,
   transportError,
+  sessionError,
   onTerminalInput,
 }, ref) {
   // Extract raw text from events, preserving ANSI escape sequences.
@@ -125,6 +127,22 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
           data-testid="terminal-transport-error"
         >
           Connection issue: {transportError}. Retrying...
+        </div>
+      )}
+
+      {sessionError && (
+        <div
+          style={{
+            padding: 'var(--space-2) var(--space-4)',
+            backgroundColor: 'color-mix(in srgb, var(--color-danger-500) 12%, transparent)',
+            borderBottom: '1px solid var(--color-danger-500)',
+            color: 'var(--color-danger-300)',
+            fontSize: 'var(--text-xs)',
+            flexShrink: 0,
+          }}
+          data-testid="terminal-session-error"
+        >
+          Session error: {sessionError}
         </div>
       )}
 

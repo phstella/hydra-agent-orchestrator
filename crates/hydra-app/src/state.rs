@@ -261,7 +261,7 @@ impl InteractiveStateHandle {
 
     pub async fn list_sessions(&self) -> Vec<(String, String, String, String, u64)> {
         let sessions = self.sessions.lock().await;
-        sessions
+        let mut entries: Vec<(String, String, String, String, u64)> = sessions
             .values()
             .map(|s| {
                 (
@@ -272,7 +272,19 @@ impl InteractiveStateHandle {
                     s.event_base_cursor + s.events.len() as u64,
                 )
             })
-            .collect()
+            .collect();
+
+        // Keep session ordering deterministic and ergonomic for focus defaults:
+        // running lanes first, then newest-first by started_at.
+        entries.sort_by(|a, b| {
+            let rank = |status: &str| if status == "running" { 0 } else { 1 };
+            rank(&a.2)
+                .cmp(&rank(&b.2))
+                .then_with(|| b.3.cmp(&a.3))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+
+        entries
     }
 
     /// Shutdown all running sessions. Called on app exit.
@@ -371,20 +383,48 @@ pub fn spawn_pty_event_bridge(
                             .get_mut(&session_id)
                             .and_then(|session| session.artifact_writer.clone())
                     };
-                    if let Some(writer) = writer {
-                        let ended_at = chrono::Utc::now().to_rfc3339();
-                        let mut writer = writer.lock().await;
-                        let _ =
-                            writer.finalize("completed", &ended_at, duration.as_millis() as u64);
+                    if exit_code.unwrap_or(0) == 0 {
+                        if let Some(writer) = writer {
+                            let ended_at = chrono::Utc::now().to_rfc3339();
+                            let mut writer = writer.lock().await;
+                            let _ = writer.finalize(
+                                "completed",
+                                &ended_at,
+                                duration.as_millis() as u64,
+                            );
+                        }
+                        state.mark_completed(&session_id).await;
+                        (
+                            "session_completed".to_string(),
+                            serde_json::json!({
+                                "exitCode": exit_code,
+                                "durationMs": duration.as_millis() as u64,
+                            }),
+                        )
+                    } else {
+                        let error = match exit_code {
+                            Some(code) => format!(
+                                "process exited with status code {code}. Check CLI auth/session and flag compatibility."
+                            ),
+                            None => "process exited with a failure status. Check CLI auth/session and flag compatibility."
+                                .to_string(),
+                        };
+                        if let Some(writer) = writer {
+                            let ended_at = chrono::Utc::now().to_rfc3339();
+                            let mut writer = writer.lock().await;
+                            let _ =
+                                writer.finalize("failed", &ended_at, duration.as_millis() as u64);
+                        }
+                        state.mark_failed(&session_id, &error).await;
+                        (
+                            "session_failed".to_string(),
+                            serde_json::json!({
+                                "error": error,
+                                "exitCode": exit_code,
+                                "durationMs": duration.as_millis() as u64,
+                            }),
+                        )
                     }
-                    state.mark_completed(&session_id).await;
-                    (
-                        "session_completed".to_string(),
-                        serde_json::json!({
-                            "exitCode": exit_code,
-                            "durationMs": duration.as_millis() as u64,
-                        }),
-                    )
                 }
                 PtyEvent::Failed { error, duration } => {
                     let writer = {
@@ -693,6 +733,20 @@ mod tests {
         }
     }
 
+    fn failing_pty_config() -> PtySessionConfig {
+        PtySessionConfig {
+            program: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "echo boot failure >&2; exit 7".to_string(),
+            ],
+            env: vec![],
+            cwd: std::env::temp_dir(),
+            initial_cols: 80,
+            initial_rows: 24,
+        }
+    }
+
     fn sleep_pty_config(secs: u64) -> PtySessionConfig {
         PtySessionConfig {
             program: "sleep".to_string(),
@@ -971,6 +1025,38 @@ mod tests {
 
         let has_output = events.iter().any(|e| e.event_type == "output");
         assert!(has_output, "should have output events from echo");
+    }
+
+    #[tokio::test]
+    async fn interactive_event_bridge_maps_non_zero_exit_to_failed() {
+        let state = new_interactive_state();
+
+        let (tx, rx) = mpsc::channel(256);
+        let session = PtySession::spawn(failing_pty_config(), tx).unwrap();
+        state
+            .register_session("fail-eb", "claude", "2026-02-24T00:00:00Z", session, None)
+            .await;
+
+        spawn_pty_event_bridge(
+            "fail-eb".to_string(),
+            "claude".to_string(),
+            rx,
+            state.clone(),
+        );
+
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+
+        let (events, _, _done, status, error) =
+            state.poll_events("fail-eb", 0, 1000).await.unwrap();
+        assert_eq!(status, "failed");
+        assert!(
+            error.unwrap_or_default().contains("status code 7"),
+            "expected actionable non-zero exit error"
+        );
+        assert!(
+            events.iter().any(|e| e.event_type == "session_failed"),
+            "bridge should emit session_failed for non-zero exit"
+        );
     }
 
     #[tokio::test]
