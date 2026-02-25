@@ -48,6 +48,7 @@ export function InteractiveTerminalPanel({
     display: 'flex',
     flexDirection: 'column',
     flex: 1,
+    minHeight: 0,
     minWidth: 0,
   };
 
@@ -70,6 +71,7 @@ export function InteractiveTerminalPanel({
 
   const scrollAreaStyle: CSSProperties = {
     flex: 1,
+    minHeight: 0,
     overflowY: 'auto',
     padding: 'var(--space-3)',
     backgroundColor: 'var(--color-bg-950)',
@@ -87,6 +89,13 @@ export function InteractiveTerminalPanel({
         paused: 'warning',
       } as Record<string, 'info' | 'success' | 'danger' | 'warning'>)[status] ?? 'neutral'
     : undefined;
+
+  useEffect(() => {
+    userScrolledUp.current = false;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [sessionId]);
 
   if (!sessionId) {
     return (

@@ -4,7 +4,7 @@ interface CockpitShellProps {
   leftRail: ReactNode;
   topStrip: ReactNode;
   center: ReactNode;
-  rightRail: ReactNode;
+  rightRail?: ReactNode;
 }
 
 export function CockpitShell({ leftRail, topStrip, center, rightRail }: CockpitShellProps) {
@@ -44,6 +44,7 @@ export function CockpitShell({ leftRail, topStrip, center, rightRail }: CockpitS
   const centerStyle: CSSProperties = {
     flex: 1,
     minWidth: 0,
+    minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -71,9 +72,11 @@ export function CockpitShell({ leftRail, topStrip, center, rightRail }: CockpitS
         <div style={centerStyle} data-testid="cockpit-center">
           {center}
         </div>
-        <div style={rightRailStyle} data-testid="cockpit-right-rail">
-          {rightRail}
-        </div>
+        {rightRail && (
+          <div style={rightRailStyle} data-testid="cockpit-right-rail">
+            {rightRail}
+          </div>
+        )}
       </div>
     </div>
   );

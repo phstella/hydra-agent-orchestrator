@@ -298,6 +298,22 @@ describe('Smoke Test 1: App startup renders cockpit shell with navigation', () =
       expect(screen.getByTestId('race-config-panel')).toBeInTheDocument();
     });
   });
+
+  it('hides leaderboard rail outside cockpit view', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('cockpit-right-rail')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('nav-interactive'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('cockpit-right-rail')).not.toBeInTheDocument();
+      expect(screen.getByTestId('orchestration-console')).toBeInTheDocument();
+    });
+  });
 });
 
 describe('Smoke Test 2: Preflight refresh triggers IPC and updates state', () => {

@@ -346,15 +346,17 @@ export default function App() {
     />
   );
 
-  const rightRail = (
-    <LeaderboardRail
-      agents={agentStatuses}
-      raceResult={raceResult}
-      selectedAgent={selectedAgent}
-      onSelectAgent={setSelectedAgent}
-      raceError={raceError}
-    />
-  );
+  const rightRail = activeView === 'cockpit'
+    ? (
+        <LeaderboardRail
+          agents={agentStatuses}
+          raceResult={raceResult}
+          selectedAgent={selectedAgent}
+          onSelectAgent={setSelectedAgent}
+          raceError={raceError}
+        />
+      )
+    : null;
 
   const renderCenter = () => {
     switch (activeView) {
