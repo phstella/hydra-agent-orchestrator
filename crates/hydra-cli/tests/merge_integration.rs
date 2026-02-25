@@ -161,6 +161,12 @@ fn write_run_artifacts(repo: &Path, run_id: Uuid, base_ref: &str, agents: &[Agen
     run_dir
 }
 
+fn write_agent_diff_artifact(run_dir: &Path, agent_key: &str, patch: &str) {
+    let agent_dir = run_dir.join("agents").join(agent_key);
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(agent_dir.join("diff.patch"), patch).unwrap();
+}
+
 #[test]
 fn dry_run_clean_merge_writes_report_and_cleans_merge_state() {
     let tmp = TempDir::new().unwrap();
@@ -328,7 +334,7 @@ fn non_mergeable_agent_is_blocked_without_force() {
 }
 
 #[test]
-fn missing_branch_fails_preflight() {
+fn missing_branch_without_diff_artifact_fails_preflight() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
@@ -376,6 +382,86 @@ fn missing_branch_fails_preflight() {
         "{}",
         output_text(&out)
     );
+}
+
+#[test]
+fn missing_branch_with_diff_artifact_can_preview_and_merge() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    init_test_repo(&repo);
+
+    let run_id = Uuid::new_v4();
+    let branch = create_agent_branch(
+        &repo,
+        "main",
+        run_id,
+        "claude",
+        "claude_output.txt",
+        "claude was here\n",
+    );
+
+    let diff_out = run_git_ok(&repo, &["diff", "--patch", &format!("main..{branch}")]);
+    let diff_patch = String::from_utf8_lossy(&diff_out.stdout).to_string();
+    assert!(
+        !diff_patch.trim().is_empty(),
+        "expected non-empty diff patch for branch"
+    );
+
+    let run_dir = write_run_artifacts(
+        &repo,
+        run_id,
+        "main",
+        &[AgentSpec {
+            key: "claude".to_string(),
+            branch: branch.clone(),
+            mergeable: true,
+            composite: 90.0,
+        }],
+    );
+    write_agent_diff_artifact(&run_dir, "claude", &diff_patch);
+
+    run_git_ok(&repo, &["branch", "-D", &branch]);
+
+    let run_id_arg = run_id.to_string();
+    let preview = run_hydra(
+        &repo,
+        &[
+            "merge",
+            "--run-id",
+            &run_id_arg,
+            "--agent",
+            "claude",
+            "--dry-run",
+            "--json",
+        ],
+    );
+    assert!(preview.status.success(), "{}", output_text(&preview));
+    let preview_json: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(preview_json["success"], true);
+    assert_eq!(preview_json["has_conflicts"], false);
+    assert_eq!(preview_json["source"], "patch");
+
+    let confirm = run_hydra(
+        &repo,
+        &[
+            "merge",
+            "--run-id",
+            &run_id_arg,
+            "--agent",
+            "claude",
+            "--confirm",
+            "--json",
+        ],
+    );
+    assert!(confirm.status.success(), "{}", output_text(&confirm));
+    let confirm_json: serde_json::Value = serde_json::from_slice(&confirm.stdout).unwrap();
+    assert_eq!(confirm_json["success"], true);
+    assert!(repo.join("claude_output.txt").exists());
+
+    let log_out = run_git_ok(&repo, &["log", "--oneline", "-1"]);
+    let log_line = String::from_utf8_lossy(&log_out.stdout);
+    assert!(log_line.contains("hydra: merge claude"));
 }
 
 #[test]
