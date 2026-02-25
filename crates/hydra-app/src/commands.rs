@@ -257,7 +257,7 @@ pub async fn get_race_result(
 }
 
 async fn execute_race(state: AppStateHandle, request: RaceRequest, run_id: String) {
-    let repo_root = match resolve_repo_root(
+    let repo_root = match resolve_repo_root_with_auto_init(
         request.cwd.as_deref(),
         "Not inside a git repository; cannot start race",
     ) {
@@ -498,7 +498,7 @@ fn build_race_command(repo_root: &Path, run_id: &str, request: &RaceRequest) -> 
         TokioCommand::new("hydra")
     } else {
         let mut cargo = TokioCommand::new("cargo");
-        cargo.args(["run", "-p", "hydra-cli", "--"]);
+        cargo.args(cargo_hydra_cli_parts_without_binary());
         cargo
     };
 
@@ -535,7 +535,40 @@ fn binary_available(program: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn cargo_hydra_cli_manifest_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("Cargo.toml")
+}
+
+fn cargo_hydra_cli_parts_without_binary() -> Vec<String> {
+    vec![
+        "run".to_string(),
+        "--manifest-path".to_string(),
+        cargo_hydra_cli_manifest_path().to_string_lossy().to_string(),
+        "-p".to_string(),
+        "hydra-cli".to_string(),
+        "--".to_string(),
+    ]
+}
+
 fn resolve_repo_root(cwd: Option<&str>, not_repo_message: &str) -> Result<PathBuf, IpcError> {
+    resolve_repo_root_internal(cwd, not_repo_message, false)
+}
+
+fn resolve_repo_root_with_auto_init(
+    cwd: Option<&str>,
+    not_repo_message: &str,
+) -> Result<PathBuf, IpcError> {
+    resolve_repo_root_internal(cwd, not_repo_message, true)
+}
+
+fn resolve_repo_root_internal(
+    cwd: Option<&str>,
+    not_repo_message: &str,
+    allow_auto_init: bool,
+) -> Result<PathBuf, IpcError> {
     let selected_cwd = cwd.and_then(|raw| {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -545,21 +578,61 @@ fn resolve_repo_root(cwd: Option<&str>, not_repo_message: &str) -> Result<PathBu
         }
     });
 
-    let mut cmd = std::process::Command::new("git");
-    cmd.args(["rev-parse", "--show-toplevel"]);
-    if let Some(path) = selected_cwd {
-        cmd.current_dir(path);
+    let detail = selected_cwd
+        .map(|path| format!(" (path: {path})"))
+        .unwrap_or_default();
+
+    let target_dir = if let Some(path) = selected_cwd {
+        PathBuf::from(path)
+    } else {
+        std::env::current_dir()
+            .map_err(|e| IpcError::internal(format!("failed to resolve current directory: {e}")))?    
+    };
+
+    if !target_dir.exists() {
+        return Err(IpcError::validation(format!(
+            "{not_repo_message}{detail}. Path does not exist."
+        )));
+    }
+    if !target_dir.is_dir() {
+        return Err(IpcError::validation(format!(
+            "{not_repo_message}{detail}. Path is not a directory."
+        )));
     }
 
-    let output = cmd
+    if let Ok(root) = try_repo_root_from_dir(&target_dir) {
+        return Ok(root);
+    }
+
+    // Only auto-init when the user explicitly selected a workspace path.
+    if allow_auto_init && selected_cwd.is_some() {
+        initialize_git_repository(&target_dir).map_err(|init_err| {
+            IpcError::validation(format!(
+                "{not_repo_message}{detail}. Auto-initialize failed: {init_err}"
+            ))
+        })?;
+
+        if let Ok(root) = try_repo_root_from_dir(&target_dir) {
+            return Ok(root);
+        }
+
+        return Err(IpcError::validation(format!(
+            "{not_repo_message}{detail}. Repository was initialized but root discovery still failed."
+        )));
+    }
+
+    Err(IpcError::validation(format!("{not_repo_message}{detail}")))
+}
+
+fn try_repo_root_from_dir(target_dir: &Path) -> Result<PathBuf, IpcError> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(target_dir)
         .output()
         .map_err(|e| IpcError::internal(format!("failed to execute git: {e}")))?;
 
     if !output.status.success() {
-        let detail = selected_cwd
-            .map(|path| format!(" (path: {path})"))
-            .unwrap_or_default();
-        return Err(IpcError::validation(format!("{not_repo_message}{detail}")));
+        return Err(IpcError::validation("not inside a git repository"));
     }
 
     let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -568,6 +641,112 @@ fn resolve_repo_root(cwd: Option<&str>, not_repo_message: &str) -> Result<PathBu
     }
 
     Ok(PathBuf::from(root))
+}
+
+fn initialize_git_repository(target_dir: &Path) -> Result<(), String> {
+    let init_output = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(target_dir)
+        .output()
+        .map_err(|e| format!("failed to run git init: {e}"))?;
+
+    if !init_output.status.success() {
+        let stderr = String::from_utf8_lossy(&init_output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "git init failed".to_string()
+        } else {
+            stderr
+        });
+    }
+
+    ensure_hydra_gitignore(target_dir)?;
+
+    let head_exists = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(target_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("failed to verify git HEAD: {e}"))?
+        .success();
+
+    if head_exists {
+        return Ok(());
+    }
+
+    let add_gitignore = std::process::Command::new("git")
+        .args(["add", ".gitignore"])
+        .current_dir(target_dir)
+        .output()
+        .map_err(|e| format!("failed to stage .gitignore: {e}"))?;
+    if !add_gitignore.status.success() {
+        let stderr = String::from_utf8_lossy(&add_gitignore.stderr)
+            .trim()
+            .to_string();
+        return Err(if stderr.is_empty() {
+            "failed to stage .gitignore".to_string()
+        } else {
+            format!("failed to stage .gitignore: {stderr}")
+        });
+    }
+
+    let commit_output = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Hydra Auto Init",
+            "-c",
+            "user.email=hydra@local",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "chore: initialize hydra workspace",
+        ])
+        .env("GIT_AUTHOR_NAME", "Hydra Auto Init")
+        .env("GIT_AUTHOR_EMAIL", "hydra@local")
+        .env("GIT_COMMITTER_NAME", "Hydra Auto Init")
+        .env("GIT_COMMITTER_EMAIL", "hydra@local")
+        .current_dir(target_dir)
+        .output()
+        .map_err(|e| format!("failed to create initial commit: {e}"))?;
+
+    if !commit_output.status.success() {
+        let stderr = String::from_utf8_lossy(&commit_output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&commit_output.stdout).trim().to_string();
+        return Err(if !stderr.is_empty() {
+            format!("initial commit failed: {stderr}")
+        } else if !stdout.is_empty() {
+            format!("initial commit failed: {stdout}")
+        } else {
+            "initial commit failed".to_string()
+        });
+    }
+
+    Ok(())
+}
+
+fn ensure_hydra_gitignore(target_dir: &Path) -> Result<(), String> {
+    let gitignore_path = target_dir.join(".gitignore");
+    let mut content = if gitignore_path.exists() {
+        std::fs::read_to_string(&gitignore_path)
+            .map_err(|e| format!("failed to read .gitignore: {e}"))?
+    } else {
+        String::new()
+    };
+
+    let has_hydra_line = content
+        .lines()
+        .map(str::trim)
+        .any(|line| line == ".hydra/" || line == ".hydra");
+    if has_hydra_line {
+        return Ok(());
+    }
+
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(".hydra/\n");
+
+    std::fs::write(&gitignore_path, content).map_err(|e| format!("failed to write .gitignore: {e}"))
 }
 
 async fn tail_run_events_file(
@@ -774,7 +953,7 @@ pub async fn start_interactive_session(
     }
 
     // M4.5: Working tree cleanliness check
-    let cwd = resolve_repo_root(
+    let cwd = resolve_repo_root_with_auto_init(
         request.cwd.as_deref(),
         "Not inside a git repository; cannot start interactive session",
     )
@@ -1173,6 +1352,7 @@ pub async fn execute_merge(
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stderr_clean = strip_cli_wrapper_noise(&stderr);
 
     if output.status.success() {
         let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
@@ -1192,31 +1372,58 @@ pub async fn execute_merge(
             success: true,
             message,
             stdout: Some(stdout),
-            stderr: if stderr.is_empty() {
+            stderr: if stderr_clean.trim().is_empty() {
                 None
             } else {
-                Some(stderr)
+                Some(stderr_clean)
             },
         })
     } else {
+        let payload_error = serde_json::from_str::<serde_json::Value>(&stdout)
+            .ok()
+            .and_then(|parsed| {
+                parsed
+                    .get("stderr")
+                    .and_then(|v| v.as_str())
+                    .filter(|v| !v.trim().is_empty())
+                    .map(|v| v.trim().to_string())
+                    .or_else(|| {
+                        parsed
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .filter(|v| !v.trim().is_empty())
+                            .map(|v| v.trim().to_string())
+                    })
+                    .or_else(|| {
+                        parsed
+                            .get("stdout")
+                            .and_then(|v| v.as_str())
+                            .filter(|v| !v.trim().is_empty())
+                            .map(|v| v.trim().to_string())
+                    })
+            });
+
         Ok(MergeExecutionPayload {
             agent_key,
             branch: String::new(),
             success: false,
-            message: if stderr.is_empty() {
-                format!("merge exited with status {}", output.status)
-            } else {
-                stderr.trim().to_string()
-            },
+            message: payload_error.unwrap_or_else(|| {
+                let err = stderr_clean.trim();
+                if err.is_empty() {
+                    format!("merge exited with status {}", output.status)
+                } else {
+                    err.to_string()
+                }
+            }),
             stdout: if stdout.is_empty() {
                 None
             } else {
                 Some(stdout)
             },
-            stderr: if stderr.is_empty() {
+            stderr: if stderr_clean.trim().is_empty() {
                 None
             } else {
-                Some(stderr)
+                Some(stderr_clean)
             },
         })
     }
@@ -1231,16 +1438,9 @@ fn resolve_cli_and_repo(cwd: Option<&str>) -> Result<(Vec<String>, PathBuf), Str
     } else if binary_available("hydra") {
         Ok((vec!["hydra".to_string()], repo_root))
     } else {
-        Ok((
-            vec![
-                "cargo".to_string(),
-                "run".to_string(),
-                "-p".to_string(),
-                "hydra-cli".to_string(),
-                "--".to_string(),
-            ],
-            repo_root,
-        ))
+        let mut parts = vec!["cargo".to_string()];
+        parts.extend(cargo_hydra_cli_parts_without_binary());
+        Ok((parts, repo_root))
     }
 }
 
@@ -1253,6 +1453,16 @@ fn parse_merge_preview_payload(
     if let Some(payload) = try_parse_merge_preview_payload(agent_key, stdout, stderr) {
         if status_success || payload.has_conflicts {
             return Ok(payload);
+        }
+
+        let payload_stderr = payload.stderr.trim();
+        if !payload_stderr.is_empty() {
+            return Err(format!("[validation_error] {payload_stderr}"));
+        }
+
+        let payload_stdout = payload.stdout.trim();
+        if !payload_stdout.is_empty() {
+            return Err(format!("[validation_error] {payload_stdout}"));
         }
 
         return Err(format!(
@@ -1282,7 +1492,11 @@ fn read_working_tree_status(repo_root: &Path) -> WorkingTreeStatus {
     match output {
         Ok(output) if output.status.success() => {
             let raw = String::from_utf8_lossy(&output.stdout);
-            let files: Vec<String> = raw.lines().filter_map(parse_porcelain_path).collect();
+            let files: Vec<String> = raw
+                .lines()
+                .filter_map(parse_porcelain_path)
+                .filter(|path| !is_hydra_artifact_path(path))
+                .collect();
             if files.is_empty() {
                 WorkingTreeStatus {
                     clean: true,
@@ -1325,6 +1539,11 @@ fn read_working_tree_status(repo_root: &Path) -> WorkingTreeStatus {
             )),
         },
     }
+}
+
+fn is_hydra_artifact_path(path: &str) -> bool {
+    let normalized = path.trim().trim_start_matches("./").replace('\\', "/");
+    normalized == ".hydra" || normalized.starts_with(".hydra/")
 }
 
 fn parse_porcelain_path(line: &str) -> Option<String> {
@@ -1385,6 +1604,7 @@ fn try_parse_merge_preview_payload(
 }
 
 fn best_merge_error_message(stderr: &str, stdout: &str) -> String {
+    let stderr = strip_cli_wrapper_noise(stderr);
     let stderr = stderr.trim();
     if !stderr.is_empty() {
         return stderr.to_string();
@@ -1396,6 +1616,25 @@ fn best_merge_error_message(stderr: &str, stdout: &str) -> String {
     }
 
     "merge preview command failed".to_string()
+}
+
+fn strip_cli_wrapper_noise(text: &str) -> String {
+    let mut cleaned: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("Finished `")
+            || trimmed.starts_with("Compiling ")
+            || trimmed.starts_with("Running `")
+            || trimmed.starts_with("Blocking waiting for file lock on ")
+        {
+            continue;
+        }
+        cleaned.push(line);
+    }
+    cleaned.join("\n")
 }
 
 fn load_agent_mergeability(
@@ -1735,6 +1974,104 @@ mod tests {
     }
 
     #[test]
+    fn resolve_repo_root_with_auto_init_initializes_selected_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace_str = workspace.to_string_lossy().to_string();
+
+        let resolved = resolve_repo_root_with_auto_init(
+            Some(&workspace_str),
+            "Not inside a git repository; cannot start race",
+        )
+        .unwrap();
+
+        assert_eq!(resolved, workspace);
+        assert!(workspace.join(".git").exists());
+
+        let head_status = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", "HEAD"])
+            .current_dir(&workspace)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(head_status.success(), "auto-init should create initial HEAD");
+        let gitignore = std::fs::read_to_string(workspace.join(".gitignore")).unwrap();
+        assert!(
+            gitignore.lines().any(|line| line.trim() == ".hydra/"),
+            "auto-init should ensure .hydra/ is ignored"
+        );
+    }
+
+    #[test]
+    fn resolve_repo_root_with_auto_init_rejects_missing_workspace_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing-workspace");
+        let missing_str = missing.to_string_lossy().to_string();
+
+        let err = resolve_repo_root_with_auto_init(
+            Some(&missing_str),
+            "Not inside a git repository; cannot start race",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("Path does not exist"));
+    }
+
+    #[test]
+    fn ensure_hydra_gitignore_appends_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join(".gitignore"), "node_modules/\n").unwrap();
+
+        ensure_hydra_gitignore(&workspace).unwrap();
+        ensure_hydra_gitignore(&workspace).unwrap();
+
+        let content = std::fs::read_to_string(workspace.join(".gitignore")).unwrap();
+        let hydra_lines = content
+            .lines()
+            .filter(|line| line.trim() == ".hydra/")
+            .count();
+        assert_eq!(hydra_lines, 1, ".hydra/ should only be added once");
+    }
+
+    #[test]
+    fn cargo_cli_parts_include_manifest_path_for_workspace_independent_execution() {
+        let parts = cargo_hydra_cli_parts_without_binary();
+
+        assert_eq!(
+            parts.first().map(String::as_str),
+            Some("run"),
+            "cargo fallback should start with `run` so command-specific flags are accepted"
+        );
+        assert_eq!(
+            parts.get(1).map(String::as_str),
+            Some("--manifest-path"),
+            "manifest-path must be passed to `cargo run`, not cargo top-level"
+        );
+        assert!(
+            parts.contains(&"--manifest-path".to_string()),
+            "cargo fallback must include --manifest-path so non-Rust workspaces can run hydra-cli"
+        );
+        assert!(
+            parts.contains(&"hydra-cli".to_string()),
+            "cargo fallback must target hydra-cli package"
+        );
+    }
+
+    #[test]
+    fn cargo_cli_manifest_path_exists() {
+        let manifest = cargo_hydra_cli_manifest_path();
+        assert!(
+            manifest.exists(),
+            "expected hydra workspace Cargo.toml to exist at {}",
+            manifest.display()
+        );
+    }
+
+    #[test]
     fn parse_cli_summary_extracts_agents() {
         let payload = serde_json::json!({
             "run_id": "abc",
@@ -1874,6 +2211,37 @@ index 3333333..4444444 100644
     }
 
     #[test]
+    fn parse_merge_preview_payload_prefers_payload_error_over_wrapper_noise() {
+        let payload_json = serde_json::json!({
+            "agent": "claude",
+            "branch": "hydra/test/agent/claude",
+            "success": false,
+            "has_conflicts": false,
+            "stdout": "",
+            "stderr": "branch missing for this run"
+        })
+        .to_string();
+
+        let err = parse_merge_preview_payload(
+            false,
+            "claude",
+            &payload_json,
+            "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s\nRunning `/repo/target/debug/hydra merge --dry-run --json`",
+        )
+        .unwrap_err();
+
+        assert!(err.contains("branch missing for this run"));
+        assert!(!err.contains("Finished `dev` profile"));
+    }
+
+    #[test]
+    fn strip_cli_wrapper_noise_removes_cargo_run_lines() {
+        let stderr = "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s\nRunning `/repo/target/debug/hydra merge --json`\nerror: patch failed at src/main.rs";
+        let cleaned = strip_cli_wrapper_noise(stderr);
+        assert_eq!(cleaned, "error: patch failed at src/main.rs");
+    }
+
+    #[test]
     fn parse_run_event_line_output_only_filters_lifecycle_events() {
         let lifecycle_line = serde_json::json!({
             "timestamp": "2026-02-23T20:40:59.440503361Z",
@@ -1920,6 +2288,17 @@ index 3333333..4444444 100644
             parse_porcelain_path("R  src/old.rs -> src/new.rs"),
             Some("src/new.rs".to_string())
         );
+    }
+
+    #[test]
+    fn hydra_artifact_paths_are_ignored_for_worktree_cleanliness_checks() {
+        assert!(is_hydra_artifact_path(".hydra"));
+        assert!(is_hydra_artifact_path(".hydra/runs/run-id/events.jsonl"));
+        assert!(is_hydra_artifact_path("./.hydra/worktrees/abc"));
+        assert!(is_hydra_artifact_path(".hydra\\runs\\run-id\\events.jsonl"));
+
+        assert!(!is_hydra_artifact_path("src/main.rs"));
+        assert!(!is_hydra_artifact_path("docs/.hydra-notes.md"));
     }
 
     #[test]

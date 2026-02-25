@@ -75,7 +75,7 @@ export default function App() {
   const [raceAgents, setRaceAgents] = useState<string[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
 
-  const agentStatuses = useAgentStatuses(events, raceAgents);
+  const agentStatuses = useAgentStatuses(events, raceAgents, runStatus);
 
   useEffect(() => {
     let cancelled = false;
@@ -255,6 +255,10 @@ export default function App() {
 
         for (const evt of batch.events) {
           push(evt);
+        }
+
+        if (batch.error) {
+          setRaceError(batch.error);
         }
 
         setRunStatus(batch.status);

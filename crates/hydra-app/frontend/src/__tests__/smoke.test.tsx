@@ -1151,3 +1151,295 @@ describe('Smoke Test 24: Open Diff Review follows top winner even when list orde
     });
   });
 });
+
+describe('Smoke Test 25: Early race failure marks agent cards as failed', () => {
+  it('shows failed lifecycle for known agents when run fails before agent events', async () => {
+    vi.mocked(ipc.startRace).mockResolvedValue({
+      runId: 'test-run-id',
+      agents: ['claude', 'codex'],
+    } as RaceStarted);
+
+    vi.mocked(ipc.pollRaceEvents).mockResolvedValue({
+      runId: 'test-run-id',
+      events: [],
+      nextCursor: 0,
+      done: true,
+      status: 'failed',
+      error: 'Not inside a git repository',
+    } as RaceEventBatch);
+
+    vi.mocked(ipc.getRaceResult).mockResolvedValue({
+      runId: 'test-run-id',
+      status: 'failed',
+      durationMs: null,
+      totalCost: null,
+      agents: [],
+    } as RaceResult);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'trigger early failure');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('leaderboard-card-claude')).toBeInTheDocument();
+      expect(screen.getByTestId('leaderboard-card-codex')).toBeInTheDocument();
+      expect(screen.getByTestId('leaderboard-failure-claude')).toBeInTheDocument();
+      expect(screen.getByTestId('leaderboard-failure-codex')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 26: Cockpit shows backend failure reason from race polling', () => {
+  it('renders explicit race error text when poll returns failed status with error detail', async () => {
+    vi.mocked(ipc.startRace).mockResolvedValue({
+      runId: 'test-run-id',
+      agents: ['claude', 'codex'],
+    } as RaceStarted);
+
+    vi.mocked(ipc.pollRaceEvents).mockResolvedValue({
+      runId: 'test-run-id',
+      events: [],
+      nextCursor: 0,
+      done: true,
+      status: 'failed',
+      error: 'race command failed: adapter \'claude\' is not ready',
+    } as RaceEventBatch);
+
+    vi.mocked(ipc.getRaceResult).mockResolvedValue({
+      runId: 'test-run-id',
+      status: 'failed',
+      durationMs: null,
+      totalCost: null,
+      agents: [],
+    } as RaceResult);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+
+    const textarea = screen.getByPlaceholderText(/describe the task/i);
+    await user.type(textarea, 'surface backend failure');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => {
+      const error = screen.getByTestId('cockpit-race-error');
+      expect(error).toBeInTheDocument();
+      expect(error).toHaveTextContent(/adapter 'claude' is not ready/i);
+    });
+  });
+});
+
+describe('Smoke Test 27: Live output supports human-readable and event views', () => {
+  it('toggles between human and structured event rendering', async () => {
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await user.type(screen.getByPlaceholderText(/describe the task/i), 'toggle output mode');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('output-view-human')).toBeInTheDocument();
+      expect(screen.getByText('Working...')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('agent_stdout')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('output-view-events'));
+
+    await waitFor(() => {
+      expect(screen.getByText('agent_stdout')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 28: Diff viewer supports unified fallback mode', () => {
+  it('can switch from side-by-side to unified mode in review', async () => {
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await user.type(screen.getByPlaceholderText(/describe the task/i), 'diff mode toggle');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+    await user.click(screen.getByTestId('completion-open-review'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('diff-viewer')).toBeInTheDocument();
+      expect(screen.getByTestId('diff-view-mode-side')).toBeInTheDocument();
+      expect(screen.getByTestId('diff-view-mode-unified')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('diff-view-mode-unified'));
+    await waitFor(() => {
+      expect(screen.getByTestId('unified-diff-view')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 29: Quality warning appears when only speed/diff scoring is available', () => {
+  it('shows low-confidence warning in completion and review surfaces', async () => {
+    mockRaceFlow();
+    vi.mocked(ipc.getRaceResult).mockResolvedValue({
+      ...MOCK_RACE_RESULT,
+      agents: MOCK_RACE_RESULT.agents.map((agent) => ({
+        ...agent,
+        dimensions: agent.dimensions.filter((d) => d.name === 'diff_scope' || d.name === 'speed'),
+      })),
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await user.type(screen.getByPlaceholderText(/describe the task/i), 'quality warning');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('completion-summary')).toBeInTheDocument();
+      expect(screen.getByText(/quality checks are not configured/i)).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('completion-open-review'));
+    await waitFor(() => {
+      expect(screen.getByTestId('review-quality-warning')).toBeInTheDocument();
+    });
+  });
+});
+
+describe('Smoke Test 30: Human output mode parses structured JSON lines', () => {
+  it('renders concise text instead of raw adapter JSON in Human mode', async () => {
+    const structuredLine = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'Created snake.py successfully' }],
+      },
+    });
+
+    vi.mocked(ipc.startRace).mockResolvedValue({
+      runId: 'test-run-id',
+      agents: ['claude', 'codex'],
+    } as RaceStarted);
+
+    let pollCount = 0;
+    vi.mocked(ipc.pollRaceEvents).mockImplementation(async () => {
+      pollCount += 1;
+      if (pollCount === 1) {
+        return {
+          runId: 'test-run-id',
+          events: [
+            {
+              runId: 'test-run-id',
+              agentKey: 'claude',
+              eventType: 'agent_stdout',
+              data: { line: structuredLine },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          nextCursor: 1,
+          done: false,
+          status: 'running',
+          error: null,
+        } as RaceEventBatch;
+      }
+      return {
+        runId: 'test-run-id',
+        events: [],
+        nextCursor: pollCount,
+        done: true,
+        status: 'completed',
+        error: null,
+      } as RaceEventBatch;
+    });
+
+    vi.mocked(ipc.getRaceResult).mockResolvedValue(MOCK_RACE_RESULT);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await user.type(screen.getByPlaceholderText(/describe the task/i), 'human output json parse');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('live-output-panel')).toBeInTheDocument();
+      expect(screen.getByText('Created snake.py successfully')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/"type":"assistant"/)).not.toBeInTheDocument();
+  });
+});
+
+describe('Smoke Test 31: Cockpit completion view does not overlap terminal', () => {
+  it('hides live output panel after race completion and shows completion summary only', async () => {
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await user.type(screen.getByPlaceholderText(/describe the task/i), 'completion layout');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => expect(ipc.getRaceResult).toHaveBeenCalled(), { timeout: 5000 });
+    await waitFor(() => {
+      expect(screen.getByTestId('completion-summary')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('live-output-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('Smoke Test 32: New-file diffs default to unified mode', () => {
+  it('switches to unified mode automatically for creation/binary-heavy patches', async () => {
+    vi.mocked(ipc.getCandidateDiff).mockImplementation(async (_runId: string, agentKey: string) => {
+      if (agentKey === 'codex') {
+        return {
+          ...MOCK_CODEX_DIFF,
+          diffText: [
+            'diff --git a/__pycache__/snake.pyc b/__pycache__/snake.pyc',
+            'new file mode 100644',
+            'index 0000000..13ef0f7',
+            'Binary files /dev/null and b/__pycache__/snake.pyc differ',
+            'diff --git a/snake.py b/snake.py',
+            'new file mode 100644',
+            'index 0000000..1ddb5cf',
+            '--- /dev/null',
+            '+++ b/snake.py',
+            '@@ -0,0 +1,2 @@',
+            '+print("snake")',
+            '+print("game")',
+          ].join('\n'),
+          files: [
+            { path: '__pycache__/snake.pyc', added: 0, removed: 0 },
+            { path: 'snake.py', added: 2, removed: 0 },
+          ],
+        };
+      }
+      return MOCK_DIFF;
+    });
+
+    mockRaceFlow();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await user.type(screen.getByPlaceholderText(/describe the task/i), 'new file diff mode');
+    await user.click(screen.getByTestId('cockpit-start-race'));
+
+    await waitFor(() => expect(screen.getByTestId('completion-summary')).toBeInTheDocument());
+    await user.click(screen.getByTestId('completion-open-review'));
+    await waitFor(() => expect(screen.getByTestId('candidate-tab-codex')).toBeInTheDocument());
+    await user.click(screen.getByTestId('candidate-tab-codex'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('unified-diff-view')).toBeInTheDocument();
+      expect(screen.getByText('New File')).toBeInTheDocument();
+    });
+  });
+});

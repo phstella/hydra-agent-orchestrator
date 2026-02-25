@@ -76,6 +76,14 @@ export function CandidateDiffReview({ runId, agents, selectedWinner, workspaceCw
 
   const isMergeable = diffPayload?.mergeable === true && (diffPayload?.gateFailures.length ?? 0) === 0;
   const canMerge = isMergeable || forceOverride;
+  const qualityWarning = useMemo(() => {
+    const quality = new Set(['build', 'tests', 'lint']);
+    const hasQuality = agents.some((agent) =>
+      agent.dimensions.some((dim) => quality.has(dim.name)),
+    );
+    if (hasQuality) return null;
+    return 'Quality checks are not configured for this run; score is based on diff scope and speed only.';
+  }, [agents]);
 
   const refreshWorkingTreeStatus = useCallback(async (): Promise<WorkingTreeStatus> => {
     try {
@@ -194,6 +202,22 @@ export function CandidateDiffReview({ runId, agents, selectedWinner, workspaceCw
         selectedWinner={selectedWinner}
         onSelect={setActiveCandidate}
       />
+
+      {qualityWarning && (
+        <div
+          style={{
+            padding: 'var(--space-2) var(--space-3)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-warning-500)',
+            backgroundColor: 'color-mix(in srgb, var(--color-warning-500) 10%, transparent)',
+            fontSize: 'var(--text-xs)',
+            color: 'var(--color-warning-400)',
+          }}
+          data-testid="review-quality-warning"
+        >
+          {qualityWarning} Configure `scoring.profile` or `scoring.commands` in `hydra.toml` for fuller ranking.
+        </div>
+      )}
 
       {diffLoading && (
         <Card padding="lg">
@@ -376,6 +400,7 @@ interface DiffRow {
 }
 
 const MAX_DIFF_LINES = 5000;
+type DiffViewMode = 'side-by-side' | 'unified';
 
 function DiffViewerPane({ diffText }: { diffText: string }) {
   const allLines = useMemo(() => diffText.split('\n'), [diffText]);
@@ -383,11 +408,48 @@ function DiffViewerPane({ diffText }: { diffText: string }) {
     () => (allLines.length > MAX_DIFF_LINES ? allLines.slice(0, MAX_DIFF_LINES) : allLines),
     [allLines],
   );
+  const hasBinaryPatchLines = useMemo(
+    () => allLines.some((line) => line.startsWith('Binary files ')),
+    [allLines],
+  );
+  const hasNewFilePatch = useMemo(
+    () => allLines.some((line) => line.startsWith('new file mode ') || line.startsWith('--- /dev/null')),
+    [allLines],
+  );
+  const [viewMode, setViewMode] = useState<DiffViewMode>('side-by-side');
+
+  useEffect(() => {
+    setViewMode(hasBinaryPatchLines || hasNewFilePatch ? 'unified' : 'side-by-side');
+  }, [hasBinaryPatchLines, hasNewFilePatch, diffText]);
+
   const rows = useMemo(() => buildDiffRows(lines), [lines]);
   const truncated = allLines.length > MAX_DIFF_LINES;
 
   return (
-    <Panel title="Diff" headerRight={<Badge variant="neutral">{allLines.length} lines</Badge>}>
+    <Panel
+      title="Diff"
+      headerRight={(
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <Badge variant="neutral">{allLines.length} lines</Badge>
+          {hasBinaryPatchLines && <Badge variant="warning">Binary Patch</Badge>}
+          {hasNewFilePatch && <Badge variant="info">New File</Badge>}
+          <DiffModeButton
+            active={viewMode === 'side-by-side'}
+            onClick={() => setViewMode('side-by-side')}
+            testId="diff-view-mode-side"
+          >
+            Side
+          </DiffModeButton>
+          <DiffModeButton
+            active={viewMode === 'unified'}
+            onClick={() => setViewMode('unified')}
+            testId="diff-view-mode-unified"
+          >
+            Unified
+          </DiffModeButton>
+        </div>
+      )}
+    >
       <div
         data-testid="diff-viewer"
         style={{
@@ -409,46 +471,103 @@ function DiffViewerPane({ diffText }: { diffText: string }) {
             Showing first {MAX_DIFF_LINES} of {allLines.length} lines
           </div>
         )}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            borderBottom: '1px solid var(--color-border-700)',
-            backgroundColor: 'var(--color-surface-800)',
-            position: 'sticky',
-            top: 0,
-            zIndex: 1,
-          }}
-        >
+        {viewMode === 'side-by-side' ? (
           <div
             style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              borderBottom: '1px solid var(--color-border-700)',
+              backgroundColor: 'var(--color-surface-800)',
+              position: 'sticky',
+              top: 0,
+              zIndex: 1,
+            }}
+          >
+            <div
+              style={{
+                padding: 'var(--space-2)',
+                borderRight: '1px solid var(--color-border-700)',
+                fontSize: 'var(--text-xs)',
+                color: 'var(--color-text-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Original
+            </div>
+            <div
+              style={{
+                padding: 'var(--space-2)',
+                fontSize: 'var(--text-xs)',
+                color: 'var(--color-text-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+              }}
+            >
+              Candidate
+            </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              borderBottom: '1px solid var(--color-border-700)',
+              backgroundColor: 'var(--color-surface-800)',
+              position: 'sticky',
+              top: 0,
+              zIndex: 1,
               padding: 'var(--space-2)',
-              borderRight: '1px solid var(--color-border-700)',
               fontSize: 'var(--text-xs)',
               color: 'var(--color-text-muted)',
               textTransform: 'uppercase',
               letterSpacing: '0.05em',
             }}
           >
-            Original
+            Patch
           </div>
-          <div
-            style={{
-              padding: 'var(--space-2)',
-              fontSize: 'var(--text-xs)',
-              color: 'var(--color-text-muted)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-            }}
-          >
-            Candidate
-          </div>
-        </div>
-        {rows.map((row, i) => (
-          <SideBySideRow key={i} row={row} />
-        ))}
+        )}
+        {viewMode === 'side-by-side' ? (
+          rows.map((row, i) => (
+            <SideBySideRow key={i} row={row} />
+          ))
+        ) : (
+          <UnifiedDiffView lines={lines} />
+        )}
       </div>
     </Panel>
+  );
+}
+
+function DiffModeButton({
+  active,
+  onClick,
+  testId,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  testId: string;
+  children: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid={testId}
+      style={{
+        border: active ? '1px solid var(--color-marine-500)' : '1px solid var(--color-border-700)',
+        backgroundColor: active
+          ? 'color-mix(in srgb, var(--color-marine-500) 12%, transparent)'
+          : 'var(--color-surface-800)',
+        color: active ? 'var(--color-marine-400)' : 'var(--color-text-secondary)',
+        fontSize: 'var(--text-xs)',
+        borderRadius: 'var(--radius-sm)',
+        padding: '2px var(--space-2)',
+        cursor: 'pointer',
+        fontFamily: 'var(--font-family)',
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -479,15 +598,66 @@ function SideBySideRow({ row }: { row: DiffRow }) {
       style={{
         display: 'grid',
         gridTemplateColumns: '1fr 1fr',
-        minWidth: 900,
+        minWidth: 680,
       }}
     >
       <div style={placeholderCellStyle(leftStyle, leftPlaceholder)}>
-        {leftPlaceholder ? '<empty>' : (row.left || ' ')}
+        {leftPlaceholder ? '' : (row.left || ' ')}
       </div>
       <div style={placeholderCellStyle(rightStyle, rightPlaceholder)}>
-        {rightPlaceholder ? '<empty>' : (row.right || ' ')}
+        {rightPlaceholder ? '' : (row.right || ' ')}
       </div>
+    </div>
+  );
+}
+
+function UnifiedDiffView({ lines }: { lines: string[] }) {
+  return (
+    <div data-testid="unified-diff-view">
+      {lines.map((line, idx) => {
+        const kind =
+          line.startsWith('+') && !line.startsWith('+++')
+            ? 'add'
+            : line.startsWith('-') && !line.startsWith('---')
+              ? 'remove'
+              : line.startsWith('@@')
+                ? 'hunk'
+                : line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')
+                  ? 'meta'
+                  : 'context';
+
+        let color = 'var(--color-text-secondary)';
+        let background = 'transparent';
+        if (kind === 'add') {
+          color = 'var(--color-green-400)';
+          background = 'color-mix(in srgb, var(--color-green-500) 8%, transparent)';
+        } else if (kind === 'remove') {
+          color = 'var(--color-danger-400)';
+          background = 'color-mix(in srgb, var(--color-danger-500) 8%, transparent)';
+        } else if (kind === 'meta' || kind === 'hunk') {
+          color = 'var(--color-marine-400)';
+          background = 'color-mix(in srgb, var(--color-marine-500) 8%, transparent)';
+        }
+
+        return (
+          <div
+            key={`${idx}-${line.length}`}
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--text-xs)',
+              lineHeight: 'var(--leading-relaxed)',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              padding: '0 var(--space-2)',
+              color,
+              backgroundColor: background,
+              minHeight: '1.5em',
+            }}
+          >
+            {line || ' '}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -497,7 +667,8 @@ function sideCellStyle(side: 'left' | 'right', kind: DiffRowType): CSSProperties
     fontFamily: 'var(--font-mono)',
     fontSize: 'var(--text-xs)',
     lineHeight: 'var(--leading-relaxed)',
-    whiteSpace: 'pre',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
     tabSize: 4,
     padding: '0 var(--space-2)',
     minHeight: '1.5em',

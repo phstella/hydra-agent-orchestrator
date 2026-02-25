@@ -47,14 +47,16 @@ function looksLikeTimeoutFailure(evt: AgentStreamEvent): boolean {
 export function useAgentStatuses(
   events: AgentStreamEvent[],
   knownAgents: string[],
+  runStatus: string,
 ): AgentStatus[] {
   return useMemo(() => {
     const statusMap = new Map<string, AgentStatus>();
+    const defaultLifecycle: AgentLifecycle = runStatus === 'failed' ? 'failed' : 'running';
 
     for (const key of knownAgents) {
       statusMap.set(key, {
         agentKey: key,
-        lifecycle: 'running',
+        lifecycle: defaultLifecycle,
         eventCount: 0,
         lastEventTime: null,
       });
@@ -67,7 +69,7 @@ export function useAgentStatuses(
       if (!entry) {
         entry = {
           agentKey: evt.agentKey,
-          lifecycle: 'running',
+          lifecycle: defaultLifecycle,
           eventCount: 0,
           lastEventTime: null,
         };
@@ -84,5 +86,5 @@ export function useAgentStatuses(
     }
 
     return Array.from(statusMap.values());
-  }, [events, knownAgents]);
+  }, [events, knownAgents, runStatus]);
 }

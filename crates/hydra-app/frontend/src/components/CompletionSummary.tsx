@@ -23,6 +23,21 @@ function formatDuration(ms: number | null): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function qualityCoverageWarning(agents: AgentResult[]): string | null {
+  const qualityDims = new Set(['build', 'tests', 'lint']);
+  const presentQuality = new Set<string>();
+  for (const agent of agents) {
+    for (const dim of agent.dimensions) {
+      if (qualityDims.has(dim.name)) {
+        presentQuality.add(dim.name);
+      }
+    }
+  }
+
+  if (presentQuality.size > 0) return null;
+  return 'Quality checks are not configured; this score is based on diff scope and speed only.';
+}
+
 export function CompletionSummary({
   raceResult,
   selectedWinner,
@@ -44,6 +59,7 @@ export function CompletionSummary({
   const isMergeable = winner
     ? winner.mergeable === true && winner.gateFailures.length === 0
     : false;
+  const qualityWarning = useMemo(() => qualityCoverageWarning(raceResult.agents), [raceResult.agents]);
 
   const containerStyle: CSSProperties = {
     display: 'flex',
@@ -88,6 +104,21 @@ export function CompletionSummary({
             </Badge>
           )}
         </div>
+        {qualityWarning && (
+          <div
+            style={{
+              marginBottom: 'var(--space-3)',
+              padding: 'var(--space-2) var(--space-3)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-warning-500)',
+              backgroundColor: 'color-mix(in srgb, var(--color-warning-500) 10%, transparent)',
+              color: 'var(--color-warning-400)',
+              fontSize: 'var(--text-xs)',
+            }}
+          >
+            {qualityWarning}
+          </div>
+        )}
       </div>
 
       {winner && (

@@ -89,12 +89,28 @@ function progressVariant(score: number): 'green' | 'warning' | 'gradient' {
   return 'gradient';
 }
 
+function qualityCoverageWarning(agents: AgentResult[]): string | null {
+  const qualityDims = new Set(['build', 'tests', 'lint']);
+  const presentQuality = new Set<string>();
+  for (const agent of agents) {
+    for (const dim of agent.dimensions) {
+      if (qualityDims.has(dim.name)) {
+        presentQuality.add(dim.name);
+      }
+    }
+  }
+
+  if (presentQuality.size > 0) return null;
+  return 'Quality checks are not configured for this workspace; ranking is based on diff scope and speed only.';
+}
+
 export function ResultsScoreboard({ result, selectedWinner, onSelectWinner }: ResultsScoreboardProps) {
   const sortedAgents = useMemo(
     () =>
       [...result.agents].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)),
     [result.agents],
   );
+  const qualityWarning = useMemo(() => qualityCoverageWarning(sortedAgents), [sortedAgents]);
 
   const allDimensionNames = useMemo(() => {
     const seen = new Set<string>();
@@ -170,6 +186,21 @@ export function ResultsScoreboard({ result, selectedWinner, onSelectWinner }: Re
             <Badge variant="neutral">Cost {formatCost(result.totalCost)}</Badge>
           )}
         </div>
+        {qualityWarning && (
+          <div
+            style={{
+              marginTop: 'var(--space-3)',
+              padding: 'var(--space-2) var(--space-3)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-warning-500)',
+              backgroundColor: 'color-mix(in srgb, var(--color-warning-500) 10%, transparent)',
+              color: 'var(--color-warning-400)',
+              fontSize: 'var(--text-xs)',
+            }}
+          >
+            {qualityWarning} Add `scoring.profile` or `scoring.commands` in `hydra.toml` for fuller evaluation.
+          </div>
+        )}
       </div>
 
       {/* Ranked candidate cards */}

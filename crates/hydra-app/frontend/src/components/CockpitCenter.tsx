@@ -63,7 +63,7 @@ export function CockpitCenter({
   const selectedAgentLifecycle = selectedAgentStatus?.lifecycle ?? null;
 
   const showConfig = isIdle || isFailed;
-  const showTerminal = isRunning || isStarting || isCompleted;
+  const showTerminal = isRunning || isStarting;
   const showCompletion = isCompleted && raceResult !== null;
 
   const containerStyle: CSSProperties = {
