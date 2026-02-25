@@ -326,6 +326,8 @@ Workflow DAG/presets, cross-agent artifact handoff, auto-merge, multi-user colla
 
 ## Implementation Reference
 - `planning/m4.8-interactive-orchestration-pack.md` (`M4.8` local execution tracker)
+- `planning/p4-interactive-orchestration-console-implementation-guide.md` (`M4.8` implementation contract)
+- `planning/m4.8-interactive-desktop-ui-contract.md` (`M4.8` desktop behavior contract)
 - `planning/p4-interactive-session-implementation-guide.md` (`M4.1-M4.6` baseline contracts)
 - `planning/p4-race-cockpit-convergence-implementation-guide.md` (`M4.7` shell context)
 ```

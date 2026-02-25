@@ -122,7 +122,9 @@ Deliverables:
   - spawn and manage multiple concurrent interactive sessions from one orchestration surface
   - allow multiple instances of the same adapter type in interactive mode
   - preserve explicit separation from race/scoring flow (interactive is a distinct execution path)
-  - implementation reference: `planning/m4.8-interactive-orchestration-pack.md`
+  - execution mode: local-first tracking
+  - viewport policy: desktop-first (`>=1280px` primary, `>=1024px` minimum)
+  - implementation references: `planning/m4.8-interactive-orchestration-pack.md`, `planning/p4-interactive-orchestration-console-implementation-guide.md`, `planning/m4.8-interactive-desktop-ui-contract.md`
 
 Exit criteria:
 - user can start interactive session and send input to a running agent

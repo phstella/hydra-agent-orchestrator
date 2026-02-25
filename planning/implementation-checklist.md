@@ -630,7 +630,7 @@ Local-first note:
 6. Race mode behavior, IPC, scoring, and merge semantics remain unchanged.
 7. Frontend and backend tests cover duplicate-adapter interactive sessions and lane isolation.
 - Out of Scope: workflow DAG/presets, cross-agent artifact handoff, auto-merge, multi-user collaboration.
-- Execution Note: This milestone explicitly treats interactive orchestration and race orchestration as separate feature tracks. Use `planning/m4.8-interactive-orchestration-pack.md` as the primary task tracker; `planning/issues/phase-4.md` remains optional sync output.
+- Execution Note: This milestone explicitly treats interactive orchestration and race orchestration as separate feature tracks. Use `planning/m4.8-interactive-orchestration-pack.md` as the primary tracker, `planning/p4-interactive-orchestration-console-implementation-guide.md` as the implementation contract, and `planning/m4.8-interactive-desktop-ui-contract.md` as the desktop behavior contract; `planning/issues/phase-4.md` remains optional sync output.
 
 ## 8. Phase 5 Tickets (Collaboration Workflows)
 
