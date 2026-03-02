@@ -1,6 +1,5 @@
-import { useMemo, forwardRef } from 'react';
+import { forwardRef } from 'react';
 import type { CSSProperties } from 'react';
-import type { InteractiveStreamEvent } from '../types';
 import { Badge } from './design-system';
 import { XTermRenderer } from './XTermRenderer';
 import type { XTermRendererHandle } from './XTermRenderer';
@@ -11,7 +10,7 @@ interface InteractiveTerminalPanelProps {
   /** Disambiguated lane label, e.g. "codex · a1b2c3d4" (M4.8.2). */
   laneLabel: string | null;
   status: string | null;
-  events: InteractiveStreamEvent[];
+  chunks: string[];
   transportError: string | null;
   sessionError: string | null;
   /** P4.9.5: Callback for terminal keyboard input routed to PTY stdin. */
@@ -26,18 +25,12 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
   agentKey,
   laneLabel,
   status,
-  events,
+  chunks,
   transportError,
   sessionError,
   onTerminalInput,
   onTerminalResize,
 }, ref) {
-  // Extract raw text from events, preserving ANSI escape sequences.
-  const chunks = useMemo(
-    () => events.map(extractRawText).filter((t) => t.length > 0),
-    [events],
-  );
-
   const containerStyle: CSSProperties = {
     display: 'flex',
     flexDirection: 'column',
@@ -159,27 +152,3 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
     </div>
   );
 });
-
-/**
- * Extract raw text from an event, preserving ANSI escape sequences
- * so the xterm.js renderer can interpret them with full fidelity.
- */
-function extractRawText(event: InteractiveStreamEvent): string {
-  if (event.eventType === 'user_input') return '';
-
-  if (!event.data || typeof event.data !== 'object') {
-    if (typeof event.data === 'string') return event.data;
-    return '';
-  }
-  const data = event.data as Record<string, unknown>;
-  if (typeof data.text === 'string') return data.text;
-  if (typeof data.line === 'string') return data.line;
-  if (typeof data.message === 'string') return data.message;
-  if (event.eventType === 'session_started') return '\r\n--- Session started ---\r\n';
-  if (event.eventType === 'session_completed') return '\r\n--- Session completed ---\r\n';
-  if (event.eventType === 'session_failed') return '\r\n--- Session failed ---\r\n';
-  if (event.eventType === 'session_stopped') return '\r\n--- Session stopped ---\r\n';
-  const keys = Object.keys(data);
-  if (keys.length === 0) return '';
-  return JSON.stringify(data);
-}

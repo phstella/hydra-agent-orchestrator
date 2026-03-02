@@ -19,17 +19,38 @@ import type {
   AdapterInfo,
 } from '../types';
 
-const MAX_CLIENT_EVENTS_PER_SESSION = 5_000;
+const MAX_CLIENT_CHUNKS_PER_SESSION = 2_000;
 const POLL_INTERVAL_MS = 250;
 const POLL_RETRY_MS = 1_000;
 
-function appendBoundedEvents(
-  existing: InteractiveStreamEvent[],
-  incoming: InteractiveStreamEvent[],
-): InteractiveStreamEvent[] {
-  const merged = [...existing, ...incoming];
-  if (merged.length <= MAX_CLIENT_EVENTS_PER_SESSION) return merged;
-  return merged.slice(merged.length - MAX_CLIENT_EVENTS_PER_SESSION);
+function appendBoundedChunk(existing: string[], incoming: string): string[] {
+  if (incoming.length === 0) return existing;
+  if (existing.length < MAX_CLIENT_CHUNKS_PER_SESSION) {
+    return [...existing, incoming];
+  }
+  const next = existing.slice(1);
+  next.push(incoming);
+  return next;
+}
+
+function extractTerminalText(event: InteractiveStreamEvent): string {
+  if (event.eventType === 'user_input') return '';
+
+  if (!event.data || typeof event.data !== 'object') {
+    if (typeof event.data === 'string') return event.data;
+    return '';
+  }
+  const data = event.data as Record<string, unknown>;
+  if (typeof data.text === 'string') return data.text;
+  if (typeof data.line === 'string') return data.line;
+  if (typeof data.message === 'string') return data.message;
+  if (event.eventType === 'session_started') return '\r\n--- Session started ---\r\n';
+  if (event.eventType === 'session_completed') return '\r\n--- Session completed ---\r\n';
+  if (event.eventType === 'session_failed') return '\r\n--- Session failed ---\r\n';
+  if (event.eventType === 'session_stopped') return '\r\n--- Session stopped ---\r\n';
+  const keys = Object.keys(data);
+  if (keys.length === 0) return '';
+  return JSON.stringify(data);
 }
 
 /**
@@ -92,7 +113,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   // ---------------------------------------------------------------------------
   const [sessions, setSessions] = useState<InteractiveSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [sessionEvents, setSessionEvents] = useState<Map<string, InteractiveStreamEvent[]>>(new Map());
+  const [sessionChunks, setSessionChunks] = useState<Map<string, string[]>>(new Map());
   const [pollErrors, setPollErrors] = useState<Map<string, string>>(new Map());
   const [sessionErrors, setSessionErrors] = useState<Map<string, string>>(new Map());
 
@@ -214,16 +235,17 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
 
           const freshEvents = freshBatchEvents(batch.events, cursor, nextCursor);
 
-          // Avoid echo/duplication and render churn from terminal stdin writes.
-          // `user_input` events are kept in backend artifacts, but not rendered
-          // in the live terminal output stream.
-          const renderableEvents = freshEvents.filter((event) => event.eventType !== 'user_input');
+          // Convert once during polling so the terminal panel can append
+          // preprocessed text chunks without remapping the whole history.
+          const renderText = freshEvents
+            .map(extractTerminalText)
+            .filter((text) => text.length > 0)
+            .join('');
 
-          if (renderableEvents.length > 0) {
-            setSessionEvents((prev) => {
+          if (renderText.length > 0) {
+            setSessionChunks((prev) => {
               const next = new Map(prev);
-              const existing = next.get(sessionId) ?? [];
-              next.set(sessionId, appendBoundedEvents(existing, renderableEvents));
+              next.set(sessionId, appendBoundedChunk(next.get(sessionId) ?? [], renderText));
               return next;
             });
           }
@@ -431,8 +453,8 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   // Derived state for focused lane
   // ---------------------------------------------------------------------------
   const selectedSession = sessions.find((s) => s.sessionId === selectedSessionId) ?? null;
-  const selectedEvents = selectedSessionId
-    ? (sessionEvents.get(selectedSessionId) ?? [])
+  const selectedChunks = selectedSessionId
+    ? (sessionChunks.get(selectedSessionId) ?? [])
     : [];
   const selectedPollError = selectedSessionId
     ? (pollErrors.get(selectedSessionId) ?? null)
@@ -755,7 +777,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           agentKey={selectedSession?.agentKey ?? null}
           laneLabel={selectedSession ? laneLabel(selectedSession) : null}
           status={selectedSession?.status ?? null}
-          events={selectedEvents}
+          chunks={selectedChunks}
           transportError={selectedPollError}
           sessionError={selectedSessionError}
           onTerminalInput={selectedSession?.status === 'running' ? handleTerminalInput : undefined}
