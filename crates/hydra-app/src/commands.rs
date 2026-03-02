@@ -906,9 +906,6 @@ pub async fn start_interactive_session(
     if request.agent_key.trim().is_empty() {
         return Err(IpcError::validation("agent_key cannot be empty").to_string());
     }
-    if request.task_prompt.trim().is_empty() {
-        return Err(IpcError::validation("task_prompt cannot be empty").to_string());
-    }
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now().to_rfc3339();
@@ -2163,13 +2160,19 @@ fn build_interactive_args(
                     "bypassPermissions".to_string(),
                 ]);
             }
-            args.push(task_prompt.to_string());
+            if !task_prompt.trim().is_empty() {
+                args.push(task_prompt.to_string());
+            }
             args
         }
         "codex" => {
-            // Codex command surface is command-oriented; `exec` is the
-            // stable prompt entrypoint.
-            let mut args = vec!["exec".to_string(), task_prompt.to_string()];
+            // Empty prompt launches native interactive mode; non-empty prompt
+            // keeps one-shot bootstrap behavior via `exec`.
+            let mut args = if task_prompt.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec!["exec".to_string(), task_prompt.to_string()]
+            };
             if unsafe_mode
                 && supported_flags
                     .iter()
@@ -2180,10 +2183,18 @@ fn build_interactive_args(
             args
         }
         "cursor-agent" => {
-            vec![task_prompt.to_string()]
+            if task_prompt.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![task_prompt.to_string()]
+            }
         }
         _ => {
-            vec![task_prompt.to_string()]
+            if task_prompt.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![task_prompt.to_string()]
+            }
         }
     }
 }
@@ -2761,6 +2772,23 @@ branch refs/heads/main
     fn build_interactive_args_unknown_adapter() {
         let args = build_interactive_args("unknown", "task", false, &[]);
         assert_eq!(args, vec!["task"]);
+    }
+
+    #[test]
+    fn build_interactive_args_empty_prompt_launches_interactive_shell() {
+        let claude = build_interactive_args("claude", "", false, &[]);
+        let codex = build_interactive_args("codex", "", false, &[]);
+        let cursor = build_interactive_args("cursor-agent", "", false, &[]);
+        assert!(claude.is_empty());
+        assert!(codex.is_empty());
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn build_interactive_args_codex_empty_prompt_with_unsafe_flag() {
+        let flags = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
+        let codex = build_interactive_args("codex", "", true, &flags);
+        assert_eq!(codex, vec!["--dangerously-bypass-approvals-and-sandbox"]);
     }
 
     #[test]

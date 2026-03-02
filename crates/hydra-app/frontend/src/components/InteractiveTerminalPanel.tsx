@@ -16,6 +16,8 @@ interface InteractiveTerminalPanelProps {
   sessionError: string | null;
   /** P4.9.5: Callback for terminal keyboard input routed to PTY stdin. */
   onTerminalInput?: (data: string) => void;
+  /** Keep backend PTY size aligned with xterm viewport. */
+  onTerminalResize?: (cols: number, rows: number) => void;
 }
 
 export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, InteractiveTerminalPanelProps>(
@@ -28,6 +30,7 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
   transportError,
   sessionError,
   onTerminalInput,
+  onTerminalResize,
 }, ref) {
   // Extract raw text from events, preserving ANSI escape sequences.
   const chunks = useMemo(
@@ -151,6 +154,7 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
         resetKey={sessionId}
         chunks={chunks}
         onData={status === 'running' ? onTerminalInput : undefined}
+        onResize={status === 'running' ? onTerminalResize : undefined}
       />
     </div>
   );

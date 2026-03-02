@@ -8,6 +8,7 @@ import {
   startInteractiveSession,
   pollInteractiveEvents,
   writeInteractiveInput,
+  resizeInteractiveTerminal,
   stopInteractiveSession,
   listInteractiveSessions,
   listAdapters,
@@ -29,6 +30,21 @@ function appendBoundedEvents(
   const merged = [...existing, ...incoming];
   if (merged.length <= MAX_CLIENT_EVENTS_PER_SESSION) return merged;
   return merged.slice(merged.length - MAX_CLIENT_EVENTS_PER_SESSION);
+}
+
+/**
+ * Drops overlapping/replayed prefix events using cursor math.
+ * If a poll batch replays older events, keep only the truly new suffix.
+ */
+function freshBatchEvents(
+  events: InteractiveStreamEvent[],
+  cursor: number,
+  nextCursor: number,
+): InteractiveStreamEvent[] {
+  const advanced = Math.max(0, nextCursor - cursor);
+  if (advanced >= events.length) return events;
+  const overlap = events.length - advanced;
+  return events.slice(overlap);
 }
 
 function isAdapterSelectable(adapter: AdapterInfo): boolean {
@@ -89,6 +105,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const [availableAgents, setAvailableAgents] = useState<string[]>([]);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
   const [taskPrompt, setTaskPrompt] = useState('');
+  const [showInitialPrompt, setShowInitialPrompt] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createErrorCode, setCreateErrorCode] = useState<string | null>(null);
   const [allowExperimental, setAllowExperimental] = useState(false);
@@ -101,6 +118,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pollCursors = useRef<Map<string, number>>(new Map());
   const pollingSessions = useRef<Set<string>>(new Set());
+  const terminalSizes = useRef<Map<string, string>>(new Map());
 
   // P4.9.5: Terminal ref for focus management
   const terminalRef = useRef<XTermRendererHandle>(null);
@@ -180,22 +198,26 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
             return next;
           });
 
-          pollCursors.current.set(sessionId, batch.nextCursor);
+          // Keep cursor monotonic client-side to avoid replay loops.
+          const nextCursor = Math.max(cursor, batch.nextCursor);
+          pollCursors.current.set(sessionId, nextCursor);
 
           setSessionErrors((prev) => {
+            const current = prev.get(sessionId) ?? null;
+            const incoming = batch.error ?? null;
+            if (current === incoming) return prev;
             const next = new Map(prev);
-            if (batch.error) {
-              next.set(sessionId, batch.error);
-            } else {
-              next.delete(sessionId);
-            }
+            if (incoming) next.set(sessionId, incoming);
+            else next.delete(sessionId);
             return next;
           });
+
+          const freshEvents = freshBatchEvents(batch.events, cursor, nextCursor);
 
           // Avoid echo/duplication and render churn from terminal stdin writes.
           // `user_input` events are kept in backend artifacts, but not rendered
           // in the live terminal output stream.
-          const renderableEvents = batch.events.filter((event) => event.eventType !== 'user_input');
+          const renderableEvents = freshEvents.filter((event) => event.eventType !== 'user_input');
 
           if (renderableEvents.length > 0) {
             setSessionEvents((prev) => {
@@ -206,13 +228,21 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
             });
           }
 
-          setSessions((prev) =>
-            prev.map((s) =>
-              s.sessionId === sessionId
-                ? { ...s, status: batch.status, eventCount: (s.eventCount ?? 0) + batch.events.length }
-                : s,
-            ),
-          );
+          setSessions((prev) => {
+            let changed = false;
+            const next = prev.map((s) => {
+              if (s.sessionId !== sessionId) return s;
+              const increment = freshEvents.length;
+              if (s.status === batch.status && increment === 0) return s;
+              changed = true;
+              return {
+                ...s,
+                status: batch.status,
+                eventCount: (s.eventCount ?? 0) + increment,
+              };
+            });
+            return changed ? next : prev;
+          });
 
           if (batch.done) {
             pollTimers.current.delete(sessionId);
@@ -271,15 +301,11 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const selectedAdapterInfo = allAdapters.find((a) => a.key === agentKey) ?? null;
   const selectedIsExperimental = selectedAdapterInfo?.tier === 'experimental';
   const needsExperimentalConfirmation = selectedIsExperimental && !experimentalAcknowledged;
+  const showPromptComposer = sessions.length === 0 || showInitialPrompt;
 
   const handleConfirmCreate = useCallback(async () => {
     if (!agentKey) {
       setCreateError('Select an available agent first.');
-      setCreateErrorCode(null);
-      return;
-    }
-    if (!taskPrompt.trim()) {
-      setCreateError('Enter a task prompt.');
       setCreateErrorCode(null);
       return;
     }
@@ -294,9 +320,10 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     setCreateErrorCode(null);
 
     try {
+      const initialPrompt = showPromptComposer ? taskPrompt.trim() : '';
       const result = await startInteractiveSession({
         agentKey,
-        taskPrompt: taskPrompt.trim(),
+        taskPrompt: initialPrompt,
         allowExperimental: allowExperimental && experimentalAcknowledged,
         unsafeMode,
         cwd: workspaceCwd,
@@ -315,6 +342,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       setSessions((prev) => [newSession, ...prev]);
       setSelectedSessionId(result.sessionId);
       setTaskPrompt('');
+      setShowInitialPrompt(false);
       setUnsafeMode(false);
       setAllowExperimental(false);
       setExperimentalAcknowledged(false);
@@ -326,7 +354,17 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     } finally {
       setCreating(false);
     }
-  }, [agentKey, taskPrompt, startPolling, allowExperimental, experimentalAcknowledged, unsafeMode, needsExperimentalConfirmation, workspaceCwd]);
+  }, [
+    agentKey,
+    taskPrompt,
+    showPromptComposer,
+    startPolling,
+    allowExperimental,
+    experimentalAcknowledged,
+    unsafeMode,
+    needsExperimentalConfirmation,
+    workspaceCwd,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Stop — per-lane isolated (M4.8.6)
@@ -357,6 +395,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           s.sessionId === sessionId ? { ...s, status: result.status } : s,
         ),
       );
+      terminalSizes.current.delete(sessionId);
     } catch {
       // best-effort
     }
@@ -370,6 +409,19 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       if (!selectedSessionId) return;
       writeInteractiveInput(selectedSessionId, data).catch(() => {
         // best-effort; PTY write failures are surfaced via poll errors
+      });
+    },
+    [selectedSessionId],
+  );
+
+  const handleTerminalResize = useCallback(
+    (cols: number, rows: number) => {
+      if (!selectedSessionId) return;
+      const dimsKey = `${cols}x${rows}`;
+      if (terminalSizes.current.get(selectedSessionId) === dimsKey) return;
+      terminalSizes.current.set(selectedSessionId, dimsKey);
+      resizeInteractiveTerminal(selectedSessionId, cols, rows).catch(() => {
+        // best-effort; resize failures are non-fatal
       });
     },
     [selectedSessionId],
@@ -411,6 +463,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       pollTimers.current.clear();
       pollCursors.current.clear();
       pollingSessions.current.clear();
+      terminalSizes.current.clear();
     };
   }, []);
 
@@ -587,35 +640,60 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           </div>
         )}
 
-        {/* Task prompt */}
+        {/* Workspace + initial prompt controls */}
         <div>
-          <div style={{ marginBottom: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-            Task Prompt
-          </div>
           <div
             style={{ marginBottom: 'var(--space-1)', fontSize: '10px', color: 'var(--color-text-muted)' }}
             data-testid="interactive-workspace-path"
           >
             Workspace: {workspaceCwd ?? '(current repository)'}
           </div>
-          <textarea
-            value={taskPrompt}
-            onChange={(e) => setTaskPrompt(e.target.value)}
-            placeholder="Describe what you want the agent to work on..."
-            rows={3}
-            data-testid="session-task-prompt"
-            style={{
-              width: '100%',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--color-border-700)',
-              backgroundColor: 'var(--color-bg-900)',
-              color: 'var(--color-text-primary)',
-              padding: 'var(--space-2)',
-              resize: 'vertical',
-              fontFamily: 'var(--font-family)',
-              fontSize: 'var(--text-xs)',
-            }}
-          />
+          <div style={{ marginBottom: 'var(--space-1)', fontSize: '10px', color: 'var(--color-text-muted)' }}>
+            Deploy creates the lane. Send normal prompts directly in the terminal.
+          </div>
+          {!showPromptComposer && (
+            <button
+              type="button"
+              onClick={() => setShowInitialPrompt(true)}
+              data-testid="show-initial-prompt-btn"
+              style={{
+                border: '1px solid var(--color-border-700)',
+                backgroundColor: 'var(--color-surface-800)',
+                color: 'var(--color-text-secondary)',
+                borderRadius: 'var(--radius-md)',
+                padding: 'var(--space-1) var(--space-2)',
+                cursor: 'pointer',
+                fontSize: 'var(--text-xs)',
+              }}
+            >
+              Add Initial Prompt (Optional)
+            </button>
+          )}
+          {showPromptComposer && (
+            <>
+              <div style={{ marginTop: 'var(--space-2)', marginBottom: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+                Initial Prompt (optional)
+              </div>
+              <textarea
+                value={taskPrompt}
+                onChange={(e) => setTaskPrompt(e.target.value)}
+                placeholder="Optional one-time bootstrap prompt..."
+                rows={3}
+                data-testid="session-task-prompt"
+                style={{
+                  width: '100%',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-border-700)',
+                  backgroundColor: 'var(--color-bg-900)',
+                  color: 'var(--color-text-primary)',
+                  padding: 'var(--space-2)',
+                  resize: 'vertical',
+                  fontFamily: 'var(--font-family)',
+                  fontSize: 'var(--text-xs)',
+                }}
+              />
+            </>
+          )}
         </div>
 
         {/* Launch button */}
@@ -681,6 +759,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           transportError={selectedPollError}
           sessionError={selectedSessionError}
           onTerminalInput={selectedSession?.status === 'running' ? handleTerminalInput : undefined}
+          onTerminalResize={selectedSession?.status === 'running' ? handleTerminalResize : undefined}
         />
 
         {/* P4.9.5: Terminal toolbar — stop + status (replaces InputComposer) */}

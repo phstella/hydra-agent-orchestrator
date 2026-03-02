@@ -25,6 +25,7 @@ import type {
   InteractiveSessionStarted,
   InteractiveEventBatch,
   InteractiveWriteAck,
+  InteractiveResizeAck,
   InteractiveStopResult,
 } from '../types';
 
@@ -219,6 +220,13 @@ function setupDefaultMocks() {
     success: true,
     error: null,
   } as InteractiveWriteAck);
+  vi.mocked(ipc.resizeInteractiveTerminal).mockResolvedValue({
+    sessionId: 'test-session-1',
+    success: true,
+    cols: 120,
+    rows: 30,
+    error: null,
+  } as InteractiveResizeAck);
   vi.mocked(ipc.stopInteractiveSession).mockResolvedValue({
     sessionId: 'test-session-1',
     status: 'stopped',
@@ -759,6 +767,153 @@ describe('Smoke Test 11: P4.9.5 terminal-only input model', () => {
     await waitFor(() => {
       expect(ipc.writeInteractiveInput).toHaveBeenCalledWith('test-session-1', 'status\n');
     });
+  });
+
+  it('hides initial prompt composer after deploy and keeps terminal as primary input', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'bootstrap prompt');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('session-task-prompt')).not.toBeInTheDocument();
+    expect(screen.getByTestId('show-initial-prompt-btn')).toBeInTheDocument();
+  });
+
+  it('deploys a lane without requiring an initial prompt', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(ipc.startInteractiveSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentKey: 'claude',
+          taskPrompt: '',
+        }),
+      );
+    });
+  });
+
+  it('does not render user_input events in terminal output (no duplicate echo)', async () => {
+    vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
+      sessionId: 'test-session-1',
+      events: [
+        {
+          sessionId: 'test-session-1',
+          agentKey: 'claude',
+          eventType: 'user_input',
+          data: { input: 'duplicate-me' },
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      nextCursor: 1,
+      done: false,
+      status: 'running',
+      error: null,
+    } as InteractiveEventBatch);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'test');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => expect(screen.getByTestId('terminal-panel')).toBeInTheDocument());
+    expect(screen.queryByText(/duplicate-me/)).not.toBeInTheDocument();
+  });
+
+  it('deduplicates overlapping interactive poll batches to avoid repeated terminal lines', async () => {
+    let pollCount = 0;
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async () => {
+      pollCount += 1;
+      if (pollCount === 1) {
+        return {
+          sessionId: 'test-session-1',
+          events: [
+            {
+              sessionId: 'test-session-1',
+              agentKey: 'claude',
+              eventType: 'output',
+              data: { text: 'line-a\n' },
+              timestamp: new Date().toISOString(),
+            },
+            {
+              sessionId: 'test-session-1',
+              agentKey: 'claude',
+              eventType: 'output',
+              data: { text: 'line-b\n' },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          nextCursor: 2,
+          done: false,
+          status: 'running',
+          error: null,
+        } as InteractiveEventBatch;
+      }
+
+      if (pollCount === 2) {
+        // Replays one already-seen event ("line-b") and appends one fresh line ("line-c")
+        return {
+          sessionId: 'test-session-1',
+          events: [
+            {
+              sessionId: 'test-session-1',
+              agentKey: 'claude',
+              eventType: 'output',
+              data: { text: 'line-b\n' },
+              timestamp: new Date().toISOString(),
+            },
+            {
+              sessionId: 'test-session-1',
+              agentKey: 'claude',
+              eventType: 'output',
+              data: { text: 'line-c\n' },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          nextCursor: 3,
+          done: false,
+          status: 'running',
+          error: null,
+        } as InteractiveEventBatch;
+      }
+
+      return {
+        sessionId: 'test-session-1',
+        events: [],
+        nextCursor: 3,
+        done: false,
+        status: 'running',
+        error: null,
+      } as InteractiveEventBatch;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'overlap');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => expect(screen.getByText(/line-c/)).toBeInTheDocument());
+
+    const instances = (globalThis as Record<string, unknown>).__xtermInstances as XTermMockInstance[];
+    const term = instances[instances.length - 1];
+    const text = term.__element?.textContent ?? '';
+    expect((text.match(/line-b/g) ?? []).length).toBe(1);
   });
 });
 
@@ -1611,7 +1766,6 @@ describe('Smoke Test 33: Duplicate adapter sessions can be created from orchestr
     });
 
     // Launch second codex session
-    await user.type(screen.getByTestId('session-task-prompt'), 'Task B');
     await user.click(screen.getByTestId('confirm-create-session'));
 
     await waitFor(() => {
@@ -1672,7 +1826,6 @@ describe('Smoke Test 34: Lane selection changes focused terminal source', () => 
 
     // Create second session (codex)
     await user.click(screen.getByTestId('agent-select-codex'));
-    await user.type(screen.getByTestId('session-task-prompt'), 'Task B');
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-focus-session-2')).toBeInTheDocument());
 
@@ -1740,7 +1893,6 @@ describe('Smoke Test 35: Per-lane input isolation under duplicate adapters', () 
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-input-session-1')).toBeInTheDocument());
 
-    await user.type(screen.getByTestId('session-task-prompt'), 'Task B');
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-input-session-2')).toBeInTheDocument());
 
@@ -1803,7 +1955,6 @@ describe('Smoke Test 36: Per-lane stop isolation under duplicate adapters', () =
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-stop-session-1')).toBeInTheDocument());
 
-    await user.type(screen.getByTestId('session-task-prompt'), 'Task B');
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-stop-session-2')).toBeInTheDocument());
 
@@ -1868,7 +2019,6 @@ describe('Smoke Test 37: Lane-local polling error does not collapse sibling lane
     await waitFor(() => expect(screen.getByTestId('session-item-err-session-1')).toBeInTheDocument());
 
     // Create session 2 (will fail polling)
-    await user.type(screen.getByTestId('session-task-prompt'), 'Failing task');
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-err-session-2')).toBeInTheDocument());
 
@@ -2415,7 +2565,6 @@ describe('P4.9.5: Terminal-only input model', () => {
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-concurrent-1')).toBeInTheDocument());
 
-    await user.type(screen.getByTestId('session-task-prompt'), 'Task 2');
     await user.click(screen.getByTestId('confirm-create-session'));
     await waitFor(() => expect(screen.getByTestId('session-item-concurrent-2')).toBeInTheDocument());
 

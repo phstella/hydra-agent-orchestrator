@@ -36,6 +36,21 @@ const HYDRA_THEME = {
 
 const SCROLLBACK_LINES = 10_000;
 
+function scheduleFrame(cb: () => void): number {
+  if (typeof globalThis.requestAnimationFrame === 'function') {
+    return globalThis.requestAnimationFrame(cb);
+  }
+  return globalThis.setTimeout(cb, 0);
+}
+
+function cancelFrame(id: number): void {
+  if (typeof globalThis.cancelAnimationFrame === 'function') {
+    globalThis.cancelAnimationFrame(id);
+    return;
+  }
+  globalThis.clearTimeout(id);
+}
+
 export interface XTermRendererProps {
   /**
    * Key that triggers a full terminal reset when it changes.
@@ -56,6 +71,12 @@ export interface XTermRendererProps {
    * enabled and keystrokes are forwarded to this handler.
    */
   onData?: (data: string) => void;
+
+  /**
+   * Reports fitted terminal dimensions so PTY rows/cols can be resized
+   * to match the visible xterm viewport.
+   */
+  onResize?: (cols: number, rows: number) => void;
 }
 
 export interface XTermRendererHandle {
@@ -63,13 +84,66 @@ export interface XTermRendererHandle {
 }
 
 export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>(
-  function XTermRenderer({ resetKey, chunks, onData }, ref) {
+  function XTermRenderer({ resetKey, chunks, onData, onResize }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const dataListenerRef = useRef<{ dispose: () => void } | null>(null);
+  const onResizeRef = useRef<typeof onResize>(onResize);
+  const pendingWritesRef = useRef<string[]>([]);
+  const flushFrameRef = useRef<number | null>(null);
   const writtenRef = useRef(0);
   const resetKeyRef = useRef<string | null>(null);
+  const firstChunkRef = useRef<string | null>(null);
+  const lastChunkRef = useRef<string | null>(null);
+  const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+
+  const resetTerminal = () => {
+    const term = termRef.current;
+    if (!term) return;
+    term.clear();
+    term.reset();
+    term.options.theme = HYDRA_THEME;
+    writtenRef.current = 0;
+    firstChunkRef.current = null;
+    lastChunkRef.current = null;
+    lastSizeRef.current = null;
+    pendingWritesRef.current = [];
+    if (flushFrameRef.current !== null) {
+      cancelFrame(flushFrameRef.current);
+      flushFrameRef.current = null;
+    }
+  };
+
+  const emitResize = () => {
+    const term = termRef.current as (Terminal & { cols?: number; rows?: number }) | null;
+    const cb = onResizeRef.current;
+    if (!term || typeof cb !== 'function') return;
+    if (typeof term.cols !== 'number' || typeof term.rows !== 'number') return;
+    if (term.cols <= 0 || term.rows <= 0) return;
+    const prev = lastSizeRef.current;
+    if (prev && prev.cols === term.cols && prev.rows === term.rows) return;
+    lastSizeRef.current = { cols: term.cols, rows: term.rows };
+    cb(term.cols, term.rows);
+  };
+
+  const flushPendingWrites = () => {
+    flushFrameRef.current = null;
+    const term = termRef.current;
+    if (!term) {
+      pendingWritesRef.current = [];
+      return;
+    }
+    if (pendingWritesRef.current.length === 0) return;
+    const payload = pendingWritesRef.current.join('');
+    pendingWritesRef.current = [];
+    term.write(payload);
+  };
+
+  const scheduleFlush = () => {
+    if (flushFrameRef.current !== null) return;
+    flushFrameRef.current = scheduleFrame(flushPendingWrites);
+  };
 
   useImperativeHandle(ref, () => ({
     focus: () => {
@@ -95,7 +169,7 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
       fontSize: 13,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
       theme: HYDRA_THEME,
-      convertEol: true,
+      convertEol: false,
       allowTransparency: false,
     });
 
@@ -103,17 +177,22 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     term.loadAddon(fit);
     term.open(el);
 
-    // Initial fit after open
-    try { fit.fit(); } catch { /* layout not ready */ }
-
     termRef.current = term;
     fitRef.current = fit;
     writtenRef.current = 0;
     resetKeyRef.current = resetKey;
+    firstChunkRef.current = null;
+    lastChunkRef.current = null;
+    lastSizeRef.current = null;
+
+    // Initial fit after open
+    try { fit.fit(); } catch { /* layout not ready */ }
+    emitResize();
 
     // Observe container resize
     const ro = new ResizeObserver(() => {
       try { fit.fit(); } catch { /* ignore during transitions */ }
+      emitResize();
     });
     ro.observe(el);
 
@@ -121,6 +200,11 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
       ro.disconnect();
       dataListenerRef.current?.dispose();
       dataListenerRef.current = null;
+      if (flushFrameRef.current !== null) {
+        cancelFrame(flushFrameRef.current);
+        flushFrameRef.current = null;
+      }
+      pendingWritesRef.current = [];
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -128,6 +212,12 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     // Only re-create if the DOM element changes (never in practice)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep resize callback current without re-creating terminal.
+  useEffect(() => {
+    onResizeRef.current = onResize;
+    emitResize();
+  }, [onResize]);
 
   // Keep stdin + keyboard listener in sync with lane/status changes.
   useEffect(() => {
@@ -159,35 +249,35 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
   useEffect(() => {
     if (resetKeyRef.current === resetKey) return;
     resetKeyRef.current = resetKey;
-    const term = termRef.current;
-    if (!term) return;
-    term.clear();
-    term.reset();
-    // Re-apply theme after reset
-    term.options.theme = HYDRA_THEME;
-    writtenRef.current = 0;
+    resetTerminal();
+    emitResize();
   }, [resetKey]);
 
   // ── Write new chunks ──────────────────────────────────────────────────
   useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
+    if (!termRef.current) return;
 
     // If chunks array shrank (bounded eviction), replay from scratch
-    if (chunks.length < writtenRef.current) {
-      term.clear();
-      term.reset();
-      term.options.theme = HYDRA_THEME;
-      writtenRef.current = 0;
+    const replacedWithoutLengthChange = chunks.length === writtenRef.current
+      && chunks.length > 0
+      && (chunks[0] !== firstChunkRef.current || chunks[chunks.length - 1] !== lastChunkRef.current);
+    if (chunks.length < writtenRef.current || replacedWithoutLengthChange) {
+      resetTerminal();
     }
 
     const start = writtenRef.current;
-    if (start >= chunks.length) return;
-
-    for (let i = start; i < chunks.length; i++) {
-      term.write(chunks[i]);
+    if (start < chunks.length) {
+      pendingWritesRef.current.push(chunks.slice(start).join(''));
+      writtenRef.current = chunks.length;
+      firstChunkRef.current = chunks[0] ?? null;
+      lastChunkRef.current = chunks[chunks.length - 1] ?? null;
+      scheduleFlush();
+      return;
     }
-    writtenRef.current = chunks.length;
+    if (chunks.length === 0) {
+      firstChunkRef.current = null;
+      lastChunkRef.current = null;
+    }
   }, [chunks]);
 
   const style: CSSProperties = {
