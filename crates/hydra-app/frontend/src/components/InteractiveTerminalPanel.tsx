@@ -10,6 +10,7 @@ interface InteractiveTerminalPanelProps {
   /** Disambiguated lane label, e.g. "codex · a1b2c3d4" (M4.8.2). */
   laneLabel: string | null;
   status: string | null;
+  streamTransport?: 'pending' | 'push' | 'poll';
   chunks: string[];
   transportError: string | null;
   sessionError: string | null;
@@ -25,6 +26,7 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
   agentKey,
   laneLabel,
   status,
+  streamTransport = 'pending',
   chunks,
   transportError,
   sessionError,
@@ -104,6 +106,20 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
           {laneLabel ? `Terminal: ${laneLabel}` : agentKey ? `Terminal: ${agentKey}` : 'Terminal Output'}
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <span
+            style={{
+              fontSize: '10px',
+              color: streamTransport === 'push'
+                ? 'var(--color-green-400)'
+                : streamTransport === 'poll'
+                  ? 'var(--color-warning-400)'
+                  : 'var(--color-text-muted)',
+              fontFamily: 'var(--font-mono)',
+            }}
+            data-testid="terminal-transport-mode"
+          >
+            {streamTransport}
+          </span>
           {status && statusVariant && (
             <Badge variant={statusVariant as 'info' | 'success' | 'danger' | 'warning'} dot>{status}</Badge>
           )}

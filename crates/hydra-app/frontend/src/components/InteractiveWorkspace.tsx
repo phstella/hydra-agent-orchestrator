@@ -21,8 +21,9 @@ import type {
 } from '../types';
 
 const MAX_CLIENT_CHUNKS_PER_SESSION = 2_000;
-const POLL_INTERVAL_MS = 250;
-const POLL_RETRY_MS = 1_000;
+const POLL_INTERVAL_ACTIVE_MS = 40;
+const POLL_INTERVAL_BACKGROUND_MS = 120;
+const POLL_RETRY_MS = 400;
 const STREAM_FLUSH_INTERVAL_MS = 12;
 const EMPTY_CHUNKS: string[] = [];
 
@@ -427,7 +428,10 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
             return;
           }
 
-          const timer = setTimeout(poll, POLL_INTERVAL_MS);
+          const pollDelay = selectedSessionIdRef.current === sessionId
+            ? POLL_INTERVAL_ACTIVE_MS
+            : POLL_INTERVAL_BACKGROUND_MS;
+          const timer = setTimeout(poll, pollDelay);
           pollTimers.current.set(sessionId, timer);
         })
         .catch((err) => {
@@ -967,6 +971,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           agentKey={selectedSession?.agentKey ?? null}
           laneLabel={selectedSession ? laneLabel(selectedSession) : null}
           status={selectedSession?.status ?? null}
+          streamTransport={streamTransport}
           chunks={EMPTY_CHUNKS}
           transportError={selectedPollError}
           sessionError={selectedSessionError}
