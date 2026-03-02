@@ -545,6 +545,7 @@ Remote terminal protocol support, terminal session recording UI, transport encry
 ## Notes
 - Responsiveness target: make orchestration terminal feel close to native Claude Code/Codex CLI usage under sustained output.
 - Implementation now includes push-stream transport, batched/coalesced ingestion, imperative selected-lane writes, and callback-paced xterm queue draining.
+- Selected-lane path now has low-latency direct append (when terminal is ready) with replay-safe fallback to avoid missing early stream chunks.
 - Remaining risk: full-screen/high-churn TUI workloads may still require additional tuning after manual release QA.
 
 ## Implementation Reference
