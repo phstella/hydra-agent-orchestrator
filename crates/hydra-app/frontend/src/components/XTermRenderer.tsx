@@ -35,6 +35,29 @@ const HYDRA_THEME = {
 } as const;
 
 const SCROLLBACK_LINES = 10_000;
+const WRITE_CHUNK_CHARS_BASE = 64 * 1024;
+const WRITE_CHUNK_CHARS_BURST = 256 * 1024;
+const FRAME_BUDGET_MS_BASE = 4;
+const FRAME_BUDGET_MS_BURST = 10;
+const BACKLOG_SOFT_LIMIT_CHARS = 500_000;
+const BACKLOG_HARD_LIMIT_CHARS = 2_000_000;
+const BACKLOG_RETAIN_CHARS = 1_000_000;
+
+type DisposableAddon = { dispose?: () => void };
+
+function nowMs(): number {
+  if (typeof globalThis.performance?.now === 'function') {
+    return globalThis.performance.now();
+  }
+  return Date.now();
+}
+
+function importOptionalWebglAddon(): Promise<{ WebglAddon?: new () => DisposableAddon }> {
+  const dynamicImport = new Function('specifier', 'return import(specifier)') as (
+    specifier: string,
+  ) => Promise<{ WebglAddon?: new () => DisposableAddon }>;
+  return dynamicImport('@xterm/addon-webgl');
+}
 
 function scheduleFrame(cb: () => void): number {
   if (typeof globalThis.requestAnimationFrame === 'function') {
@@ -88,9 +111,11 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const webglAddonRef = useRef<DisposableAddon | null>(null);
   const dataListenerRef = useRef<{ dispose: () => void } | null>(null);
   const onResizeRef = useRef<typeof onResize>(onResize);
-  const pendingWritesRef = useRef<string[]>([]);
+  const pendingBufferRef = useRef('');
+  const droppedCharsRef = useRef(0);
   const flushFrameRef = useRef<number | null>(null);
   const writtenRef = useRef(0);
   const resetKeyRef = useRef<string | null>(null);
@@ -108,7 +133,8 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     firstChunkRef.current = null;
     lastChunkRef.current = null;
     lastSizeRef.current = null;
-    pendingWritesRef.current = [];
+    pendingBufferRef.current = '';
+    droppedCharsRef.current = 0;
     if (flushFrameRef.current !== null) {
       cancelFrame(flushFrameRef.current);
       flushFrameRef.current = null;
@@ -127,23 +153,61 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     cb(term.cols, term.rows);
   };
 
-  const flushPendingWrites = () => {
+  function trimPendingBacklogIfNeeded() {
+    const currentSize = pendingBufferRef.current.length;
+    if (currentSize <= BACKLOG_HARD_LIMIT_CHARS) return;
+    const dropChars = currentSize - BACKLOG_RETAIN_CHARS;
+    pendingBufferRef.current = pendingBufferRef.current.slice(dropChars);
+    droppedCharsRef.current += dropChars;
+  }
+
+  function scheduleFlush() {
+    if (flushFrameRef.current !== null) return;
+    flushFrameRef.current = scheduleFrame(flushPendingWrites);
+  }
+
+  function flushPendingWrites() {
     flushFrameRef.current = null;
     const term = termRef.current;
     if (!term) {
-      pendingWritesRef.current = [];
+      pendingBufferRef.current = '';
+      droppedCharsRef.current = 0;
       return;
     }
-    if (pendingWritesRef.current.length === 0) return;
-    const payload = pendingWritesRef.current.join('');
-    pendingWritesRef.current = [];
-    term.write(payload);
-  };
 
-  const scheduleFlush = () => {
-    if (flushFrameRef.current !== null) return;
-    flushFrameRef.current = scheduleFrame(flushPendingWrites);
-  };
+    if (pendingBufferRef.current.length === 0) {
+      if (droppedCharsRef.current > 0) {
+        term.write(
+          `\r\n[hydra] dropped ${droppedCharsRef.current.toLocaleString()} chars to keep terminal responsive\r\n`,
+        );
+        droppedCharsRef.current = 0;
+      }
+      return;
+    }
+
+    const backlogChars = pendingBufferRef.current.length;
+    const burstMode = backlogChars > BACKLOG_SOFT_LIMIT_CHARS;
+    const maxChunk = burstMode ? WRITE_CHUNK_CHARS_BURST : WRITE_CHUNK_CHARS_BASE;
+    const deadline = nowMs() + (burstMode ? FRAME_BUDGET_MS_BURST : FRAME_BUDGET_MS_BASE);
+
+    while (pendingBufferRef.current.length > 0 && nowMs() < deadline) {
+      const chunk = pendingBufferRef.current.slice(0, maxChunk);
+      pendingBufferRef.current = pendingBufferRef.current.slice(chunk.length);
+      term.write(chunk);
+    }
+
+    if (pendingBufferRef.current.length > 0) {
+      scheduleFlush();
+      return;
+    }
+
+    if (droppedCharsRef.current > 0) {
+      term.write(
+        `\r\n[hydra] dropped ${droppedCharsRef.current.toLocaleString()} chars to keep terminal responsive\r\n`,
+      );
+      droppedCharsRef.current = 0;
+    }
+  }
 
   useImperativeHandle(ref, () => ({
     focus: () => {
@@ -189,6 +253,25 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     try { fit.fit(); } catch { /* layout not ready */ }
     emitResize();
 
+    // Optional GPU acceleration path. If unavailable, terminal keeps canvas renderer.
+    importOptionalWebglAddon()
+      .then((mod) => {
+        const currentTerm = termRef.current;
+        if (!currentTerm || currentTerm !== term || webglAddonRef.current) return;
+        const WebglAddonCtor = mod.WebglAddon;
+        if (typeof WebglAddonCtor !== 'function') return;
+        try {
+          const addon = new WebglAddonCtor();
+          currentTerm.loadAddon(addon as never);
+          webglAddonRef.current = addon;
+        } catch {
+          // Fallback is intentional; do not surface UI error for renderer fallback.
+        }
+      })
+      .catch(() => {
+        // Optional dependency may be absent in some runtimes.
+      });
+
     // Observe container resize
     const ro = new ResizeObserver(() => {
       try { fit.fit(); } catch { /* ignore during transitions */ }
@@ -204,7 +287,10 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
         cancelFrame(flushFrameRef.current);
         flushFrameRef.current = null;
       }
-      pendingWritesRef.current = [];
+      pendingBufferRef.current = '';
+      droppedCharsRef.current = 0;
+      webglAddonRef.current?.dispose?.();
+      webglAddonRef.current = null;
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -267,7 +353,8 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
 
     const start = writtenRef.current;
     if (start < chunks.length) {
-      pendingWritesRef.current.push(chunks.slice(start).join(''));
+      pendingBufferRef.current += chunks.slice(start).join('');
+      trimPendingBacklogIfNeeded();
       writtenRef.current = chunks.length;
       firstChunkRef.current = chunks[0] ?? null;
       lastChunkRef.current = chunks[chunks.length - 1] ?? null;
