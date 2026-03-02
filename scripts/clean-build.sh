@@ -10,7 +10,7 @@ TAG_NAME=""
 
 usage() {
   cat <<'EOF'
-Usage: scripts/clean-build.sh [--debug|--release] [--tag <name>] [--help]
+Usage: scripts/clean-build.sh [--debug|--release] [--tag <name> | <name>] [--help]
 
 Performs a clean rebuild for hydra-app:
 1) cargo clean (hydra-app crate target)
@@ -22,6 +22,7 @@ Options:
   --debug         Build with debug profile
   --release       Build with release profile (default)
   --tag <name>    Create a git tag at current HEAD after successful build
+  <name>          Shorthand for --tag <name>
   --help          Show this help text
 EOF
 }
@@ -49,9 +50,17 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "error: unknown option: $1" >&2
-      usage
-      exit 1
+      if [[ "${1}" == -* ]]; then
+        echo "error: unknown option: $1" >&2
+        usage
+        exit 1
+      fi
+      if [[ -n "${TAG_NAME}" ]]; then
+        echo "error: multiple tag values provided" >&2
+        exit 1
+      fi
+      TAG_NAME="$1"
+      shift
       ;;
   esac
 done
