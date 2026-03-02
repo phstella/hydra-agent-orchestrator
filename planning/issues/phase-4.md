@@ -528,12 +528,13 @@ Even with ANSI parity and terminal-only input, orchestration still feels laggy u
 Implement a low-latency interactive stream pipeline using push transport where available, keep polling as fallback, and reduce render-path churn through batched ingestion and coalesced terminal writes.
 
 ## Acceptance Criteria
-- [ ] Interactive PTY output can be consumed via push stream (event listener) in Tauri runtime.
-- [ ] Polling remains available as fallback when push transport is unavailable.
-- [ ] Terminal output ingestion is batched/coalesced to avoid per-event rerenders.
-- [ ] Lane switching still preserves bounded stream history and isolation semantics.
-- [ ] Duplicate/replayed lines are prevented under overlap/retry scenarios.
-- [ ] Existing interactive smoke coverage remains green and includes overlap/no-dup regression checks.
+- [x] Interactive PTY output can be consumed via push stream (event listener) in Tauri runtime.
+- [x] Polling remains available as fallback when push transport is unavailable.
+- [x] Terminal output ingestion is batched/coalesced to avoid per-event rerenders.
+- [x] Lane switching still preserves bounded stream history and isolation semantics.
+- [x] Duplicate/replayed lines are prevented under overlap/retry scenarios.
+- [x] Existing interactive smoke coverage remains green and includes overlap/no-dup regression checks.
+- [ ] Manual release-build stress QA confirms acceptable responsiveness under sustained real CLI/TUI sessions.
 
 ## Out of Scope
 Remote terminal protocol support, terminal session recording UI, transport encryption changes.
@@ -543,9 +544,12 @@ Remote terminal protocol support, terminal session recording UI, transport encry
 
 ## Notes
 - Responsiveness target: make orchestration terminal feel close to native Claude Code/Codex CLI usage under sustained output.
+- Implementation now includes push-stream transport, batched/coalesced ingestion, imperative selected-lane writes, and callback-paced xterm queue draining.
+- Remaining risk: full-screen/high-churn TUI workloads may still require additional tuning after manual release QA.
 
 ## Implementation Reference
 - `planning/roadmap.md` (Section 18, `P4.9.6`)
+- `planning/p4.9.6-streaming-performance-pack.md`
 ```
 
 

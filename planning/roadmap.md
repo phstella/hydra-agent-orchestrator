@@ -344,6 +344,12 @@ Acceptance targets:
 2. No duplicated lines when stream batches overlap or transport retries occur.
 3. Session/lane status and error surfaces remain correct with push transport enabled.
 
+Current implementation status:
+1. Push-stream + polling fallback + batched ingestion are implemented.
+2. Selected-lane output path is imperative (`appendChunk`/`replaceChunks`) to avoid React rerender hot paths.
+3. Xterm write pipeline now uses callback-paced queue draining with bounded backlog controls.
+4. Remaining validation: manual release-build stress QA for sustained real CLI/TUI workloads.
+
 ### 18.3 Integration Decisions (Locked)
 
 1. Tool invocation model: direct binary wrapping only (no normalization layer).
