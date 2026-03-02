@@ -20,6 +20,7 @@ import type {
   InteractiveSessionRequest,
   InteractiveSessionStarted,
   InteractiveEventBatch,
+  InteractiveStreamEvent,
   InteractiveWriteAck,
   InteractiveResizeAck,
   InteractiveStopResult,
@@ -31,6 +32,8 @@ import type {
 } from './types';
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+type UnlistenFn = () => void;
+const INTERACTIVE_STREAM_EVENT = 'hydra://interactive-event';
 
 let _invoke: InvokeFn | null = null;
 
@@ -166,6 +169,24 @@ export async function stopInteractiveSession(
 export async function listInteractiveSessions(): Promise<InteractiveSessionSummary[]> {
   const invoke = await getInvoke();
   return invoke('list_interactive_sessions');
+}
+
+/**
+ * Prefer push-stream interactive events when running inside Tauri.
+ * Returns `null` in mock/browser mode so callers can fallback to polling.
+ */
+export async function listenInteractiveEvents(
+  onEvent: (event: InteractiveStreamEvent) => void,
+): Promise<UnlistenFn | null> {
+  try {
+    const mod = await import('@tauri-apps/api/event');
+    const unlisten = await mod.listen<InteractiveStreamEvent>(INTERACTIVE_STREAM_EVENT, (event) => {
+      if (event.payload) onEvent(event.payload);
+    });
+    return unlisten;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

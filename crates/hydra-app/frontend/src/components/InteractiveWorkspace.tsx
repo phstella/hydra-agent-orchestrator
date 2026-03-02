@@ -7,6 +7,7 @@ import { Button, Badge } from './design-system';
 import {
   startInteractiveSession,
   pollInteractiveEvents,
+  listenInteractiveEvents,
   writeInteractiveInput,
   resizeInteractiveTerminal,
   stopInteractiveSession,
@@ -22,6 +23,7 @@ import type {
 const MAX_CLIENT_CHUNKS_PER_SESSION = 2_000;
 const POLL_INTERVAL_MS = 250;
 const POLL_RETRY_MS = 1_000;
+const STREAM_FLUSH_INTERVAL_MS = 16;
 
 function appendBoundedChunk(existing: string[], incoming: string): string[] {
   if (incoming.length === 0) return existing;
@@ -66,6 +68,31 @@ function freshBatchEvents(
   if (advanced >= events.length) return events;
   const overlap = events.length - advanced;
   return events.slice(overlap);
+}
+
+type SessionPatch = {
+  status: string;
+  error: string | null;
+};
+
+function sessionPatchFromEvent(event: InteractiveStreamEvent): SessionPatch | null {
+  switch (event.eventType) {
+    case 'session_started':
+      return { status: 'running', error: null };
+    case 'session_completed':
+      return { status: 'completed', error: null };
+    case 'session_stopped':
+      return { status: 'stopped', error: null };
+    case 'session_failed': {
+      const data = event.data && typeof event.data === 'object'
+        ? (event.data as Record<string, unknown>)
+        : null;
+      const error = data && typeof data.error === 'string' ? data.error : null;
+      return { status: 'failed', error };
+    }
+    default:
+      return null;
+  }
 }
 
 function isAdapterSelectable(adapter: AdapterInfo): boolean {
@@ -113,9 +140,10 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   // ---------------------------------------------------------------------------
   const [sessions, setSessions] = useState<InteractiveSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [sessionChunks, setSessionChunks] = useState<Map<string, string[]>>(new Map());
+  const [selectedChunks, setSelectedChunks] = useState<string[]>([]);
   const [pollErrors, setPollErrors] = useState<Map<string, string>>(new Map());
   const [sessionErrors, setSessionErrors] = useState<Map<string, string>>(new Map());
+  const [streamTransport, setStreamTransport] = useState<'pending' | 'push' | 'poll'>('pending');
 
   // ---------------------------------------------------------------------------
   // Create-form state
@@ -140,9 +168,136 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const pollCursors = useRef<Map<string, number>>(new Map());
   const pollingSessions = useRef<Set<string>>(new Set());
   const terminalSizes = useRef<Map<string, string>>(new Map());
+  const streamTransportRef = useRef<'pending' | 'push' | 'poll'>('pending');
+
+  const selectedSessionIdRef = useRef<string | null>(null);
+  const sessionChunkStoreRef = useRef<Map<string, string[]>>(new Map());
+  const pendingTextBySession = useRef<Map<string, string>>(new Map());
+  const pendingCountBySession = useRef<Map<string, number>>(new Map());
+  const pendingPatchBySession = useRef<Map<string, SessionPatch>>(new Map());
+  const pendingFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // P4.9.5: Terminal ref for focus management
   const terminalRef = useRef<XTermRendererHandle>(null);
+
+  const flushPendingStreamUpdates = useCallback(() => {
+    pendingFlushTimer.current = null;
+
+    const textEntries = [...pendingTextBySession.current.entries()];
+    pendingTextBySession.current.clear();
+
+    const countEntries = [...pendingCountBySession.current.entries()];
+    pendingCountBySession.current.clear();
+
+    const patchEntries = [...pendingPatchBySession.current.entries()];
+    pendingPatchBySession.current.clear();
+
+    if (textEntries.length > 0) {
+      let selectedChanged = false;
+      for (const [sessionId, chunk] of textEntries) {
+        const existing = sessionChunkStoreRef.current.get(sessionId) ?? [];
+        const next = appendBoundedChunk(existing, chunk);
+        sessionChunkStoreRef.current.set(sessionId, next);
+        if (sessionId === selectedSessionIdRef.current) {
+          selectedChanged = true;
+        }
+      }
+
+      if (selectedChanged) {
+        const selectedId = selectedSessionIdRef.current;
+        setSelectedChunks(selectedId ? (sessionChunkStoreRef.current.get(selectedId) ?? []) : []);
+      }
+    }
+
+    if (countEntries.length > 0 || patchEntries.length > 0) {
+      const countMap = new Map(countEntries);
+      const patchMap = new Map(patchEntries);
+      setSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const increment = countMap.get(session.sessionId) ?? 0;
+          const patch = patchMap.get(session.sessionId);
+          if (!patch && increment === 0) return session;
+          const nextStatus = patch?.status ?? session.status;
+          const nextCount = (session.eventCount ?? 0) + increment;
+          if (nextStatus === session.status && nextCount === (session.eventCount ?? 0)) {
+            return session;
+          }
+          changed = true;
+          return {
+            ...session,
+            status: nextStatus,
+            eventCount: nextCount,
+          };
+        });
+        return changed ? next : prev;
+      });
+    }
+
+    if (patchEntries.length > 0) {
+      const patchMap = new Map(patchEntries);
+      setSessionErrors((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const [sessionId, patch] of patchMap.entries()) {
+          const current = next.get(sessionId) ?? null;
+          if (patch.error) {
+            if (current !== patch.error) {
+              next.set(sessionId, patch.error);
+              changed = true;
+            }
+          } else if (next.has(sessionId)) {
+            next.delete(sessionId);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }
+  }, []);
+
+  const scheduleStreamFlush = useCallback(() => {
+    if (pendingFlushTimer.current) return;
+    pendingFlushTimer.current = setTimeout(flushPendingStreamUpdates, STREAM_FLUSH_INTERVAL_MS);
+  }, [flushPendingStreamUpdates]);
+
+  const enqueueStreamEvents = useCallback((
+    sessionId: string,
+    events: InteractiveStreamEvent[],
+    fallbackPatch?: SessionPatch,
+  ) => {
+    if (events.length === 0 && !fallbackPatch) return;
+
+    let appendText = '';
+    let eventCount = 0;
+    let latestPatch = fallbackPatch ?? null;
+
+    for (const event of events) {
+      const text = extractTerminalText(event);
+      if (text.length > 0) {
+        appendText += text;
+      }
+      eventCount += 1;
+      const patch = sessionPatchFromEvent(event);
+      if (patch) {
+        latestPatch = patch;
+      }
+    }
+
+    if (appendText.length > 0) {
+      const prev = pendingTextBySession.current.get(sessionId) ?? '';
+      pendingTextBySession.current.set(sessionId, prev + appendText);
+    }
+    if (eventCount > 0) {
+      const prev = pendingCountBySession.current.get(sessionId) ?? 0;
+      pendingCountBySession.current.set(sessionId, prev + eventCount);
+    }
+    if (latestPatch) {
+      pendingPatchBySession.current.set(sessionId, latestPatch);
+    }
+
+    scheduleStreamFlush();
+  }, [scheduleStreamFlush]);
 
   // ---------------------------------------------------------------------------
   // Initial load
@@ -198,9 +353,44 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   }, []);
 
   // ---------------------------------------------------------------------------
+  // Transport selection — prefer push stream in Tauri, fallback to polling.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    listenInteractiveEvents((event) => {
+      enqueueStreamEvents(event.sessionId, [event]);
+    })
+      .then((dispose) => {
+        if (cancelled) {
+          dispose?.();
+          return;
+        }
+        if (dispose) {
+          unlisten = dispose;
+          setStreamTransport('push');
+        } else {
+          setStreamTransport('poll');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStreamTransport('poll');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [enqueueStreamEvents]);
+
+  // ---------------------------------------------------------------------------
   // Polling — per-session isolated (M4.8.5)
   // ---------------------------------------------------------------------------
   const startPolling = useCallback((sessionId: string) => {
+    if (streamTransportRef.current === 'push') return;
     if (pollingSessions.current.has(sessionId)) return;
     pollingSessions.current.add(sessionId);
     if (!pollCursors.current.has(sessionId)) {
@@ -208,6 +398,14 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     }
 
     function poll() {
+      if (streamTransportRef.current === 'push') {
+        const timer = pollTimers.current.get(sessionId);
+        if (timer) clearTimeout(timer);
+        pollTimers.current.delete(sessionId);
+        pollingSessions.current.delete(sessionId);
+        return;
+      }
+
       const cursor = pollCursors.current.get(sessionId) ?? 0;
 
       pollInteractiveEvents(sessionId, cursor)
@@ -223,47 +421,10 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           const nextCursor = Math.max(cursor, batch.nextCursor);
           pollCursors.current.set(sessionId, nextCursor);
 
-          setSessionErrors((prev) => {
-            const current = prev.get(sessionId) ?? null;
-            const incoming = batch.error ?? null;
-            if (current === incoming) return prev;
-            const next = new Map(prev);
-            if (incoming) next.set(sessionId, incoming);
-            else next.delete(sessionId);
-            return next;
-          });
-
           const freshEvents = freshBatchEvents(batch.events, cursor, nextCursor);
-
-          // Convert once during polling so the terminal panel can append
-          // preprocessed text chunks without remapping the whole history.
-          const renderText = freshEvents
-            .map(extractTerminalText)
-            .filter((text) => text.length > 0)
-            .join('');
-
-          if (renderText.length > 0) {
-            setSessionChunks((prev) => {
-              const next = new Map(prev);
-              next.set(sessionId, appendBoundedChunk(next.get(sessionId) ?? [], renderText));
-              return next;
-            });
-          }
-
-          setSessions((prev) => {
-            let changed = false;
-            const next = prev.map((s) => {
-              if (s.sessionId !== sessionId) return s;
-              const increment = freshEvents.length;
-              if (s.status === batch.status && increment === 0) return s;
-              changed = true;
-              return {
-                ...s,
-                status: batch.status,
-                eventCount: (s.eventCount ?? 0) + increment,
-              };
-            });
-            return changed ? next : prev;
+          enqueueStreamEvents(sessionId, freshEvents, {
+            status: batch.status,
+            error: batch.error ?? null,
           });
 
           if (batch.done) {
@@ -303,6 +464,18 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   }, []);
 
   useEffect(() => {
+    streamTransportRef.current = streamTransport;
+    if (streamTransport === 'push') {
+      pollTimers.current.forEach((timer) => clearTimeout(timer));
+      pollTimers.current.clear();
+      pollingSessions.current.clear();
+      setPollErrors(new Map());
+    }
+  }, [streamTransport]);
+
+  useEffect(() => {
+    if (streamTransport !== 'poll') return;
+
     sessions.forEach((session) => {
       if (session.status === 'running') {
         startPolling(session.sessionId);
@@ -315,7 +488,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
         }
       }
     });
-  }, [sessions, startPolling]);
+  }, [sessions, startPolling, streamTransport]);
 
   // ---------------------------------------------------------------------------
   // Session creation — supports duplicate adapter instances (M4.8.3)
@@ -368,7 +541,9 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       setUnsafeMode(false);
       setAllowExperimental(false);
       setExperimentalAcknowledged(false);
-      startPolling(result.sessionId);
+      if (streamTransport === 'poll') {
+        startPolling(result.sessionId);
+      }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setCreateError(errorMessage);
@@ -384,6 +559,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     allowExperimental,
     experimentalAcknowledged,
     unsafeMode,
+    streamTransport,
     needsExperimentalConfirmation,
     workspaceCwd,
   ]);
@@ -418,6 +594,10 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
         ),
       );
       terminalSizes.current.delete(sessionId);
+      sessionChunkStoreRef.current.delete(sessionId);
+      if (selectedSessionIdRef.current === sessionId) {
+        setSelectedChunks([]);
+      }
     } catch {
       // best-effort
     }
@@ -449,13 +629,19 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     [selectedSessionId],
   );
 
+  useEffect(() => {
+    selectedSessionIdRef.current = selectedSessionId;
+    setSelectedChunks(
+      selectedSessionId
+        ? (sessionChunkStoreRef.current.get(selectedSessionId) ?? [])
+        : [],
+    );
+  }, [selectedSessionId]);
+
   // ---------------------------------------------------------------------------
   // Derived state for focused lane
   // ---------------------------------------------------------------------------
   const selectedSession = sessions.find((s) => s.sessionId === selectedSessionId) ?? null;
-  const selectedChunks = selectedSessionId
-    ? (sessionChunks.get(selectedSessionId) ?? [])
-    : [];
   const selectedPollError = selectedSessionId
     ? (pollErrors.get(selectedSessionId) ?? null)
     : null;
@@ -486,6 +672,14 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       pollCursors.current.clear();
       pollingSessions.current.clear();
       terminalSizes.current.clear();
+      sessionChunkStoreRef.current.clear();
+      pendingTextBySession.current.clear();
+      pendingCountBySession.current.clear();
+      pendingPatchBySession.current.clear();
+      if (pendingFlushTimer.current) {
+        clearTimeout(pendingFlushTimer.current);
+        pendingFlushTimer.current = null;
+      }
     };
   }, []);
 

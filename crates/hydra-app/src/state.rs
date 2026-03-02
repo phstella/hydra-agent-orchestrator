@@ -344,12 +344,26 @@ fn interactive_text_payload(field_name: &str, data: &[u8]) -> serde_json::Value 
     }
 }
 
+pub type InteractiveEventSink = Arc<dyn Fn(&InteractiveStreamEvent) + Send + Sync>;
+
 /// Spawn a background task that reads PTY events and forwards them to the session registry.
 pub fn spawn_pty_event_bridge(
     session_id: String,
     agent_key: String,
+    event_rx: mpsc::Receiver<PtyEvent>,
+    state: InteractiveStateHandle,
+) {
+    spawn_pty_event_bridge_with_sink(session_id, agent_key, event_rx, state, None);
+}
+
+/// Same as `spawn_pty_event_bridge`, but optionally mirrors each event into
+/// an external sink (for push-stream UI transports).
+pub fn spawn_pty_event_bridge_with_sink(
+    session_id: String,
+    agent_key: String,
     mut event_rx: mpsc::Receiver<PtyEvent>,
     state: InteractiveStateHandle,
+    event_sink: Option<InteractiveEventSink>,
 ) {
     tokio::spawn(async move {
         while let Some(evt) = event_rx.recv().await {
@@ -466,6 +480,9 @@ pub fn spawn_pty_event_bridge(
                 data,
                 timestamp: now,
             };
+            if let Some(ref sink) = event_sink {
+                sink(&stream_event);
+            }
             state.append_event(&session_id, stream_event).await;
         }
     });
@@ -720,6 +737,7 @@ impl hydra_core::adapter::AgentAdapter for ArcAdapterWrapper {
 mod tests {
     use super::*;
     use hydra_core::supervisor::pty::PtySessionConfig;
+    use std::sync::Mutex as StdMutex;
     use std::time::Duration;
 
     fn echo_pty_config(msg: &str) -> PtySessionConfig {
@@ -1025,6 +1043,44 @@ mod tests {
 
         let has_output = events.iter().any(|e| e.event_type == "output");
         assert!(has_output, "should have output events from echo");
+    }
+
+    #[tokio::test]
+    async fn interactive_event_bridge_sink_receives_stream_events() {
+        let state = new_interactive_state();
+
+        let (tx, rx) = mpsc::channel(256);
+        let session = PtySession::spawn(echo_pty_config("sink-test"), tx).unwrap();
+        state
+            .register_session("sink-eb", "claude", "2026-02-24T00:00:00Z", session, None)
+            .await;
+
+        let seen = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let seen_for_sink = seen.clone();
+        let sink: InteractiveEventSink = Arc::new(move |event: &InteractiveStreamEvent| {
+            let mut guard = seen_for_sink.lock().expect("sink lock poisoned");
+            guard.push(event.event_type.clone());
+        });
+
+        spawn_pty_event_bridge_with_sink(
+            "sink-eb".to_string(),
+            "claude".to_string(),
+            rx,
+            state.clone(),
+            Some(sink),
+        );
+
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+
+        let seen = seen.lock().expect("sink lock poisoned");
+        assert!(
+            seen.iter().any(|event_type| event_type == "output"),
+            "sink should receive output events"
+        );
+        assert!(
+            seen.iter().any(|event_type| event_type == "session_completed"),
+            "sink should receive lifecycle completion events"
+        );
     }
 
     #[tokio::test]

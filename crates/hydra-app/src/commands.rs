@@ -6,7 +6,7 @@ use std::sync::{
     Arc,
 };
 
-use tauri::State;
+use tauri::{Emitter, State};
 use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
 
@@ -16,6 +16,7 @@ use crate::ipc_types::*;
 use crate::state::{AppState, AppStateHandle};
 
 const MAX_EVENTS_PER_POLL: usize = 512;
+const INTERACTIVE_STREAM_EVENT: &str = "hydra://interactive-event";
 
 // ---------------------------------------------------------------------------
 // Health check
@@ -901,6 +902,7 @@ const MAX_INTERACTIVE_EVENTS_PER_POLL: usize = 512;
 #[tauri::command]
 pub async fn start_interactive_session(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
     request: InteractiveSessionRequest,
 ) -> Result<InteractiveSessionStarted, String> {
     if request.agent_key.trim().is_empty() {
@@ -1057,11 +1059,16 @@ pub async fn start_interactive_session(
         )
         .await;
 
-    crate::state::spawn_pty_event_bridge(
+    let app_sink = Arc::new(move |event: &InteractiveStreamEvent| {
+        let _ = app.emit(INTERACTIVE_STREAM_EVENT, event);
+    });
+
+    crate::state::spawn_pty_event_bridge_with_sink(
         session_id.clone(),
         request.agent_key.clone(),
         event_rx,
         interactive,
+        Some(app_sink),
     );
 
     Ok(InteractiveSessionStarted {

@@ -24,6 +24,7 @@ import type {
   MergeExecutionPayload,
   InteractiveSessionStarted,
   InteractiveEventBatch,
+  InteractiveStreamEvent,
   InteractiveWriteAck,
   InteractiveResizeAck,
   InteractiveStopResult,
@@ -193,6 +194,7 @@ function setupDefaultMocks() {
     stderr: null,
   } as MergeExecutionPayload);
   vi.mocked(ipc.listInteractiveSessions).mockResolvedValue([]);
+  vi.mocked(ipc.listenInteractiveEvents).mockResolvedValue(null);
   vi.mocked(ipc.startInteractiveSession).mockResolvedValue({
     sessionId: 'test-session-1',
     agentKey: 'claude',
@@ -766,6 +768,49 @@ describe('Smoke Test 11: P4.9.5 terminal-only input model', () => {
 
     await waitFor(() => {
       expect(ipc.writeInteractiveInput).toHaveBeenCalledWith('test-session-1', 'status\n');
+    });
+  });
+
+  it('uses push stream transport when listener is available', async () => {
+    let pushHandler: ((event: InteractiveStreamEvent) => void) | null = null;
+    vi.mocked(ipc.listenInteractiveEvents).mockImplementation(async (handler) => {
+      pushHandler = handler;
+      return () => {};
+    });
+    vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
+      sessionId: 'test-session-1',
+      events: [],
+      nextCursor: 0,
+      done: false,
+      status: 'running',
+      error: null,
+    } as InteractiveEventBatch);
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+    await waitFor(() => expect(ipc.listenInteractiveEvents).toHaveBeenCalled());
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'push');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => expect(screen.getByTestId('terminal-panel')).toBeInTheDocument());
+    if (!pushHandler) {
+      throw new Error('push listener handler was not registered');
+    }
+    const pushFn = pushHandler as (event: InteractiveStreamEvent) => void;
+
+    pushFn({
+      sessionId: 'test-session-1',
+      agentKey: 'claude',
+      eventType: 'output',
+      data: { text: 'push-stream-line\n' },
+      timestamp: new Date().toISOString(),
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/push-stream-line/)).toBeInTheDocument();
     });
   });
 

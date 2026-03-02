@@ -257,6 +257,7 @@ Execution sequence (P4.9):
 3. `P4.9.3` Terminal renderer parity upgrade for full ANSI handling.
 4. `P4.9.4` External CLI wrapper flow + simplified `Deploy Agent` trigger.
 5. `P4.9.5` Input architecture convergence: terminal-only interaction model.
+6. `P4.9.6` Streaming transport + render pipeline optimization for low-latency terminal responsiveness.
 
 ### 18.2 Technical Requirements Expansion
 
@@ -322,6 +323,26 @@ Acceptance targets:
 2. Advanced tool-native features are accessible via wrapper strategy.
 3. Input UX matches native terminal behavior for Claude Code/Codex sessions (terminal-only interaction model).
 4. No separate side input composer is required for normal orchestration operation.
+
+#### D. Orchestration Terminal Responsiveness and Throughput
+
+Scope:
+1. Reduce interactive terminal lag under sustained CLI/TUI output in both dev and release builds.
+2. Remove avoidable React rerender pressure from the terminal output path.
+3. Preserve lane/session isolation and existing safety controls while improving throughput.
+
+Technical requirements:
+1. Prefer push-stream delivery (event listener) over fixed-interval polling for interactive PTY output.
+2. Keep polling as compatibility fallback when push transport is unavailable.
+3. Batch output ingestion and flush at frame-friendly cadence to avoid per-event rerenders.
+4. Keep a bounded per-session chunk store for lane switching and scrollback replay.
+5. Ensure terminal write path uses coalesced payloads and avoids replay duplication.
+6. Keep PTY resize synchronized with xterm viewport dimensions.
+
+Acceptance targets:
+1. Perceived terminal latency is materially lower during sustained output.
+2. No duplicated lines when stream batches overlap or transport retries occur.
+3. Session/lane status and error surfaces remain correct with push transport enabled.
 
 ### 18.3 Integration Decisions (Locked)
 

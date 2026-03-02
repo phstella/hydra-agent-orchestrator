@@ -511,8 +511,45 @@ Chat-style side panels, rich prompt editor, multimodal input workflows.
 - `planning/roadmap.md` (Section 18, `P4.9.5`)
 ```
 
+## [P4.9.6] Orchestration Terminal Streaming Performance and Responsiveness
+
+- Phase: Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity)
+- Labels: hydra, phase-4, area-ui, area-core, type-performance
+- Estimate: L
+- Dependencies: P4.9.3, P4.9.4, P4.9.5
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Even with ANSI parity and terminal-only input, orchestration still feels laggy under sustained CLI/TUI output, especially when frequent stream updates trigger excessive UI work.
+
+## Scope
+Implement a low-latency interactive stream pipeline using push transport where available, keep polling as fallback, and reduce render-path churn through batched ingestion and coalesced terminal writes.
+
+## Acceptance Criteria
+- [ ] Interactive PTY output can be consumed via push stream (event listener) in Tauri runtime.
+- [ ] Polling remains available as fallback when push transport is unavailable.
+- [ ] Terminal output ingestion is batched/coalesced to avoid per-event rerenders.
+- [ ] Lane switching still preserves bounded stream history and isolation semantics.
+- [ ] Duplicate/replayed lines are prevented under overlap/retry scenarios.
+- [ ] Existing interactive smoke coverage remains green and includes overlap/no-dup regression checks.
+
+## Out of Scope
+Remote terminal protocol support, terminal session recording UI, transport encryption changes.
+
+## Dependencies
+- P4.9.3, P4.9.4, P4.9.5
+
+## Notes
+- Responsiveness target: make orchestration terminal feel close to native Claude Code/Codex CLI usage under sustained output.
+
+## Implementation Reference
+- `planning/roadmap.md` (Section 18, `P4.9.6`)
+```
+
 
 ## Coverage Check
 
-- Total issues generated: 13
-- Expected range: `M4.1` through `M4.8`, plus `P4.9.1` through `P4.9.5`
+- Total issues generated: 14
+- Expected range: `M4.1` through `M4.8`, plus `P4.9.1` through `P4.9.6`
