@@ -554,8 +554,45 @@ Remote terminal protocol support, terminal session recording UI, transport encry
 - `planning/p4.9.6-streaming-performance-pack.md`
 ```
 
+## [P4.9.7] Push Transport Attach Reliability and Diagnostics
+
+- Phase: Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity)
+- Labels: hydra, phase-4, area-ui, area-core, type-reliability
+- Estimate: M
+- Dependencies: P4.9.6
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Some environments remain on polling fallback (`poll`) even when push-stream transport should be available, which adds avoidable latency and obscures root cause.
+
+## Scope
+Diagnose and harden interactive push transport attach path so orchestration consistently uses push mode when runtime supports it, with explicit diagnostics when it cannot.
+
+## Acceptance Criteria
+- [ ] Push attach outcome is surfaced with explicit reason categories (attached, unavailable API, listener error, payload mismatch, permission/runtime block).
+- [ ] Add backend/frontend diagnostics path to inspect the latest push attach status for active orchestration sessions.
+- [ ] Ensure push attach retries are bounded and resilient across tab/view transitions and session creation timing races.
+- [ ] Poll fallback remains functional and continues to provide responsive focused-lane cadence.
+- [ ] Smoke coverage includes at least one attach-failure reason path and fallback correctness assertion.
+
+## Out of Scope
+Transport encryption changes, remote push brokers, telemetry backend integration.
+
+## Dependencies
+- P4.9.6
+
+## Notes
+- Operator-visible transport badge (`pending/push/poll`) is already present; this ticket adds attach-cause diagnostics and reliability hardening.
+
+## Implementation Reference
+- `planning/roadmap.md` (Section 18, `P4.9.7`)
+- `planning/p4.9.6-streaming-performance-pack.md`
+```
+
 
 ## Coverage Check
 
-- Total issues generated: 14
-- Expected range: `M4.1` through `M4.8`, plus `P4.9.1` through `P4.9.6`
+- Total issues generated: 15
+- Expected range: `M4.1` through `M4.8`, plus `P4.9.1` through `P4.9.7`

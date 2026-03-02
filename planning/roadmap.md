@@ -258,6 +258,7 @@ Execution sequence (P4.9):
 4. `P4.9.4` External CLI wrapper flow + simplified `Deploy Agent` trigger.
 5. `P4.9.5` Input architecture convergence: terminal-only interaction model.
 6. `P4.9.6` Streaming transport + render pipeline optimization for low-latency terminal responsiveness.
+7. `P4.9.7` Push transport attach reliability + diagnostics for environments that fall back to polling.
 
 ### 18.2 Technical Requirements Expansion
 
@@ -350,7 +351,8 @@ Current implementation status:
 3. Xterm write pipeline now uses callback-paced queue draining with bounded backlog controls.
 4. Selected-lane stream now uses low-latency direct append with replay-safe fallback when terminal mount races stream startup.
 5. Terminal header now surfaces active stream transport (`pending/push/poll`), and polling fallback cadence is tuned for focused-lane responsiveness.
-6. Remaining validation: manual release-build stress QA for sustained real CLI/TUI workloads.
+6. Open follow-up: environments that stay on `poll` require attach-cause diagnostics and reliability hardening (`P4.9.7`).
+7. Remaining validation: manual release-build stress QA for sustained real CLI/TUI workloads.
 
 ### 18.3 Integration Decisions (Locked)
 
