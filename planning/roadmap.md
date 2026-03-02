@@ -349,7 +349,8 @@ Current implementation status:
 2. Selected-lane output path is imperative (`appendChunk`/`replaceChunks`) to avoid React rerender hot paths.
 3. Xterm write pipeline now uses callback-paced queue draining with bounded backlog controls.
 4. Selected-lane stream now uses low-latency direct append with replay-safe fallback when terminal mount races stream startup.
-5. Remaining validation: manual release-build stress QA for sustained real CLI/TUI workloads.
+5. Terminal header now surfaces active stream transport (`pending/push/poll`), and polling fallback cadence is tuned for focused-lane responsiveness.
+6. Remaining validation: manual release-build stress QA for sustained real CLI/TUI workloads.
 
 ### 18.3 Integration Decisions (Locked)
 
