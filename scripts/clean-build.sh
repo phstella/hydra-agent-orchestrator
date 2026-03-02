@@ -85,9 +85,9 @@ echo "[clean-build] frontend build"
 
 echo "[clean-build] cargo build (hydra-app)"
 if [[ "${MODE}" == "release" ]]; then
-  cargo build --manifest-path "${APP_MANIFEST}" --release
+  cargo build --manifest-path "${APP_MANIFEST}" --release --features custom-protocol
 else
-  cargo build --manifest-path "${APP_MANIFEST}"
+  cargo build --manifest-path "${APP_MANIFEST}" --features custom-protocol
 fi
 
 if [[ -n "${TAG_NAME}" ]]; then

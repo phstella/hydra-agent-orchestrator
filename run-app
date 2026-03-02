@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_MANIFEST="${ROOT_DIR}/crates/hydra-app/Cargo.toml"
+MODE="release"
+
+usage() {
+  cat <<'EOF'
+Usage: ./run-app [--debug|--release] [--help]
+
+Runs the local hydra-app binary. If the binary is missing, this script builds it first.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --debug)
+      MODE="debug"
+      shift
+      ;;
+    --release)
+      MODE="release"
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [[ "${MODE}" == "release" ]]; then
+  BIN_PATH="${ROOT_DIR}/crates/hydra-app/target/release/hydra-app"
+  BUILD_ARGS=(--release)
+else
+  BIN_PATH="${ROOT_DIR}/crates/hydra-app/target/debug/hydra-app"
+  BUILD_ARGS=()
+fi
+
+if [[ ! -x "${BIN_PATH}" ]]; then
+  echo "[run-app] binary missing; building first (${MODE})"
+  cargo build --manifest-path "${APP_MANIFEST}" "${BUILD_ARGS[@]}" --features custom-protocol
+fi
+
+exec "${BIN_PATH}"
