@@ -9,6 +9,7 @@ interface InteractiveSessionRailProps {
   sessions: InteractiveSessionSummary[];
   selectedSessionId: string | null;
   pollErrors: Map<string, string>;
+  reduceMotion?: boolean;
   onSelectSession: (sessionId: string) => void;
   onStopSession: (sessionId: string) => void;
 }
@@ -50,6 +51,7 @@ export function InteractiveSessionRail({
   sessions,
   selectedSessionId,
   pollErrors,
+  reduceMotion = false,
   onSelectSession,
   onStopSession,
 }: InteractiveSessionRailProps) {
@@ -129,6 +131,7 @@ export function InteractiveSessionRail({
             instanceIndex={instanceIndex.get(session.sessionId) ?? null}
             selected={selectedSessionId === session.sessionId}
             pollError={pollErrors.get(session.sessionId) ?? null}
+            reduceMotion={reduceMotion}
             onSelect={() => onSelectSession(session.sessionId)}
             onStop={() => onStopSession(session.sessionId)}
           />
@@ -143,6 +146,7 @@ function LaneCard({
   instanceIndex,
   selected,
   pollError,
+  reduceMotion,
   onSelect,
   onStop,
 }: {
@@ -150,6 +154,7 @@ function LaneCard({
   instanceIndex: number | null;
   selected: boolean;
   pollError: string | null;
+  reduceMotion: boolean;
   onSelect: () => void;
   onStop: () => void;
 }) {
@@ -165,7 +170,7 @@ function LaneCard({
     padding: 'var(--space-2)',
     borderRadius: 'var(--radius-md)',
     cursor: 'pointer',
-    transition: 'all var(--transition-fast)',
+    transition: reduceMotion ? 'none' : 'all var(--transition-fast)',
     border: selected
       ? '1px solid var(--color-marine-500)'
       : '1px solid transparent',
@@ -187,7 +192,7 @@ function LaneCard({
       {/* Row 1: adapter key + instance index + lifecycle badge */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-1)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', minWidth: 0 }}>
-          {isRunning && <PulsingDot />}
+          {isRunning && <PulsingDot reduceMotion={reduceMotion} />}
           <span
             style={{
               fontSize: 'var(--text-sm)',
@@ -274,14 +279,14 @@ function LaneCard({
   );
 }
 
-function PulsingDot() {
+function PulsingDot({ reduceMotion }: { reduceMotion: boolean }) {
   const dotStyle: CSSProperties = {
     width: 8,
     height: 8,
     borderRadius: '50%',
     backgroundColor: 'var(--color-marine-400)',
     flexShrink: 0,
-    animation: 'pulse-dot 1.5s ease-in-out infinite',
+    animation: reduceMotion ? 'none' : 'pulse-dot 1.5s ease-in-out infinite',
   };
 
   return (

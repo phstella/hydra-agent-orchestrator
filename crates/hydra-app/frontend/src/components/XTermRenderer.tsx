@@ -104,6 +104,8 @@ export interface XTermRendererProps {
 
 export interface XTermRendererHandle {
   focus: () => void;
+  appendChunk: (chunk: string) => void;
+  replaceChunks: (chunks: string[]) => void;
 }
 
 export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>(
@@ -214,6 +216,22 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
       if (typeof termRef.current?.focus === 'function') {
         termRef.current.focus();
       }
+    },
+    appendChunk: (chunk: string) => {
+      if (!chunk) return;
+      pendingBufferRef.current += chunk;
+      trimPendingBacklogIfNeeded();
+      scheduleFlush();
+    },
+    replaceChunks: (nextChunks: string[]) => {
+      resetTerminal();
+      if (nextChunks.length === 0) return;
+      pendingBufferRef.current = nextChunks.join('');
+      trimPendingBacklogIfNeeded();
+      writtenRef.current = nextChunks.length;
+      firstChunkRef.current = nextChunks[0] ?? null;
+      lastChunkRef.current = nextChunks[nextChunks.length - 1] ?? null;
+      scheduleFlush();
     },
   }));
 
