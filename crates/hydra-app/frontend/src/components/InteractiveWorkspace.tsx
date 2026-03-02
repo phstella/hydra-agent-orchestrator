@@ -24,16 +24,16 @@ const MAX_CLIENT_CHUNKS_PER_SESSION = 2_000;
 const POLL_INTERVAL_MS = 250;
 const POLL_RETRY_MS = 1_000;
 const STREAM_FLUSH_INTERVAL_MS = 33;
-const EVENT_COUNT_FLUSH_INTERVAL_MS = 400;
+const EMPTY_CHUNKS: string[] = [];
 
-function appendBoundedChunk(existing: string[], incoming: string): string[] {
-  if (incoming.length === 0) return existing;
-  if (existing.length < MAX_CLIENT_CHUNKS_PER_SESSION) {
-    return [...existing, incoming];
+function appendBoundedChunk(existing: string[] | undefined, incoming: string): string[] {
+  const target = existing ?? [];
+  if (incoming.length === 0) return target;
+  target.push(incoming);
+  if (target.length > MAX_CLIENT_CHUNKS_PER_SESSION) {
+    target.splice(0, target.length - MAX_CLIENT_CHUNKS_PER_SESSION);
   }
-  const next = existing.slice(1);
-  next.push(incoming);
-  return next;
+  return target;
 }
 
 function extractTerminalText(event: InteractiveStreamEvent): string {
@@ -141,7 +141,6 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   // ---------------------------------------------------------------------------
   const [sessions, setSessions] = useState<InteractiveSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [selectedChunksSnapshot, setSelectedChunksSnapshot] = useState<string[]>([]);
   const [pollErrors, setPollErrors] = useState<Map<string, string>>(new Map());
   const [sessionErrors, setSessionErrors] = useState<Map<string, string>>(new Map());
   const [streamTransport, setStreamTransport] = useState<'pending' | 'push' | 'poll'>('pending');
@@ -174,35 +173,11 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const selectedSessionIdRef = useRef<string | null>(null);
   const sessionChunkStoreRef = useRef<Map<string, string[]>>(new Map());
   const pendingTextBySession = useRef<Map<string, string>>(new Map());
-  const pendingCountBySession = useRef<Map<string, number>>(new Map());
   const pendingPatchBySession = useRef<Map<string, SessionPatch>>(new Map());
   const pendingFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingCountFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // P4.9.5: Terminal ref for focus management
   const terminalRef = useRef<XTermRendererHandle>(null);
-
-  const flushEventCounts = useCallback(() => {
-    pendingCountFlushTimer.current = null;
-    const countEntries = [...pendingCountBySession.current.entries()];
-    pendingCountBySession.current.clear();
-    if (countEntries.length === 0) return;
-
-    const countMap = new Map(countEntries);
-    setSessions((prev) => {
-      let changed = false;
-      const next = prev.map((session) => {
-        const increment = countMap.get(session.sessionId) ?? 0;
-        if (increment === 0) return session;
-        changed = true;
-        return {
-          ...session,
-          eventCount: (session.eventCount ?? 0) + increment,
-        };
-      });
-      return changed ? next : prev;
-    });
-  }, []);
 
   const flushPendingStreamUpdates = useCallback(() => {
     pendingFlushTimer.current = null;
@@ -274,7 +249,6 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     if (events.length === 0 && !fallbackPatch) return;
 
     let appendText = '';
-    let eventCount = 0;
     let latestPatch = fallbackPatch ?? null;
 
     for (const event of events) {
@@ -282,7 +256,6 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       if (text.length > 0) {
         appendText += text;
       }
-      eventCount += 1;
       const patch = sessionPatchFromEvent(event);
       if (patch) {
         latestPatch = patch;
@@ -293,19 +266,12 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       const prev = pendingTextBySession.current.get(sessionId) ?? '';
       pendingTextBySession.current.set(sessionId, prev + appendText);
     }
-    if (eventCount > 0) {
-      const prev = pendingCountBySession.current.get(sessionId) ?? 0;
-      pendingCountBySession.current.set(sessionId, prev + eventCount);
-      if (!pendingCountFlushTimer.current) {
-        pendingCountFlushTimer.current = setTimeout(flushEventCounts, EVENT_COUNT_FLUSH_INTERVAL_MS);
-      }
-    }
     if (latestPatch) {
       pendingPatchBySession.current.set(sessionId, latestPatch);
     }
 
     scheduleStreamFlush();
-  }, [flushEventCounts, scheduleStreamFlush]);
+  }, [scheduleStreamFlush]);
 
   // ---------------------------------------------------------------------------
   // Initial load
@@ -604,7 +570,6 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       terminalSizes.current.delete(sessionId);
       sessionChunkStoreRef.current.delete(sessionId);
       if (selectedSessionIdRef.current === sessionId) {
-        setSelectedChunksSnapshot([]);
         terminalRef.current?.replaceChunks([]);
       }
     } catch {
@@ -643,7 +608,6 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     const replay = selectedSessionId
       ? (sessionChunkStoreRef.current.get(selectedSessionId) ?? [])
       : [];
-    setSelectedChunksSnapshot(replay);
     requestAnimationFrame(() => {
       terminalRef.current?.replaceChunks(replay);
     });
@@ -686,15 +650,10 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       terminalSizes.current.clear();
       sessionChunkStoreRef.current.clear();
       pendingTextBySession.current.clear();
-      pendingCountBySession.current.clear();
       pendingPatchBySession.current.clear();
       if (pendingFlushTimer.current) {
         clearTimeout(pendingFlushTimer.current);
         pendingFlushTimer.current = null;
-      }
-      if (pendingCountFlushTimer.current) {
-        clearTimeout(pendingCountFlushTimer.current);
-        pendingCountFlushTimer.current = null;
       }
     };
   }, []);
@@ -987,7 +946,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           agentKey={selectedSession?.agentKey ?? null}
           laneLabel={selectedSession ? laneLabel(selectedSession) : null}
           status={selectedSession?.status ?? null}
-          chunks={selectedChunksSnapshot}
+          chunks={EMPTY_CHUNKS}
           transportError={selectedPollError}
           sessionError={selectedSessionError}
           onTerminalInput={selectedSession?.status === 'running' ? handleTerminalInput : undefined}
@@ -1044,6 +1003,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           pollErrors={laneErrors}
           reduceMotion={reduceRailMotion}
           onSelectSession={(id) => {
+            selectedSessionIdRef.current = id;
             setSelectedSessionId(id);
             const session = sessions.find((entry) => entry.sessionId === id);
             if (!session || session.status === 'running') {
