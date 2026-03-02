@@ -23,7 +23,7 @@ import type {
 const MAX_CLIENT_CHUNKS_PER_SESSION = 2_000;
 const POLL_INTERVAL_MS = 250;
 const POLL_RETRY_MS = 1_000;
-const STREAM_FLUSH_INTERVAL_MS = 33;
+const STREAM_FLUSH_INTERVAL_MS = 12;
 const EMPTY_CHUNKS: string[] = [];
 
 function appendBoundedChunk(existing: string[] | undefined, incoming: string): string[] {
@@ -190,13 +190,26 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
 
     if (textEntries.length > 0) {
       const selectedId = selectedSessionIdRef.current;
+      let selectedReplayNeeded = false;
       for (const [sessionId, chunk] of textEntries) {
         const existing = sessionChunkStoreRef.current.get(sessionId) ?? [];
         const next = appendBoundedChunk(existing, chunk);
         sessionChunkStoreRef.current.set(sessionId, next);
         if (sessionId === selectedId) {
-          terminalRef.current?.appendChunk(chunk);
+          if (terminalRef.current) {
+            terminalRef.current.appendChunk(chunk);
+          } else {
+            selectedReplayNeeded = true;
+          }
         }
+      }
+
+      if (selectedReplayNeeded && selectedId) {
+        setTimeout(() => {
+          if (selectedSessionIdRef.current !== selectedId) return;
+          const replay = sessionChunkStoreRef.current.get(selectedId) ?? [];
+          terminalRef.current?.replaceChunks(replay);
+        }, 0);
       }
     }
 
@@ -263,8 +276,15 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
     }
 
     if (appendText.length > 0) {
-      const prev = pendingTextBySession.current.get(sessionId) ?? '';
-      pendingTextBySession.current.set(sessionId, prev + appendText);
+      if (sessionId === selectedSessionIdRef.current && terminalRef.current) {
+        const existing = sessionChunkStoreRef.current.get(sessionId);
+        const next = appendBoundedChunk(existing, appendText);
+        sessionChunkStoreRef.current.set(sessionId, next);
+        terminalRef.current?.appendChunk(appendText);
+      } else {
+        const prev = pendingTextBySession.current.get(sessionId) ?? '';
+        pendingTextBySession.current.set(sessionId, prev + appendText);
+      }
     }
     if (latestPatch) {
       pendingPatchBySession.current.set(sessionId, latestPatch);
@@ -509,6 +529,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       };
 
       setSessions((prev) => [newSession, ...prev]);
+      selectedSessionIdRef.current = result.sessionId;
       setSelectedSessionId(result.sessionId);
       setTaskPrompt('');
       setShowInitialPrompt(false);
@@ -605,10 +626,10 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
-    const replay = selectedSessionId
-      ? (sessionChunkStoreRef.current.get(selectedSessionId) ?? [])
-      : [];
     requestAnimationFrame(() => {
+      const replay = selectedSessionId
+        ? (sessionChunkStoreRef.current.get(selectedSessionId) ?? [])
+        : [];
       terminalRef.current?.replaceChunks(replay);
     });
   }, [selectedSessionId]);

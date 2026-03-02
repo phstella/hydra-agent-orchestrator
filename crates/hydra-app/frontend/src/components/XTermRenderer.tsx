@@ -35,11 +35,11 @@ const HYDRA_THEME = {
 } as const;
 
 const SCROLLBACK_LINES = 5_000;
-const WRITE_CHUNK_CHARS_BASE = 64 * 1024;
-const WRITE_CHUNK_CHARS_BURST = 256 * 1024;
-const BACKLOG_SOFT_LIMIT_CHARS = 500_000;
-const BACKLOG_HARD_LIMIT_CHARS = 2_000_000;
-const BACKLOG_RETAIN_CHARS = 1_000_000;
+const WRITE_CHUNK_CHARS_BASE = 16 * 1024;
+const WRITE_CHUNK_CHARS_BURST = 48 * 1024;
+const BACKLOG_SOFT_LIMIT_CHARS = 180_000;
+const BACKLOG_HARD_LIMIT_CHARS = 650_000;
+const BACKLOG_RETAIN_CHARS = 320_000;
 
 type DisposableAddon = { dispose?: () => void };
 
@@ -50,15 +50,19 @@ function importOptionalWebglAddon(): Promise<{ WebglAddon?: new () => Disposable
   return dynamicImport('@xterm/addon-webgl');
 }
 
+function isJsdomRuntime(): boolean {
+  return typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
+}
+
 function scheduleFrame(cb: () => void): number {
-  if (typeof globalThis.requestAnimationFrame === 'function') {
+  if (!isJsdomRuntime() && typeof globalThis.requestAnimationFrame === 'function') {
     return globalThis.requestAnimationFrame(cb);
   }
   return globalThis.setTimeout(cb, 0);
 }
 
 function cancelFrame(id: number): void {
-  if (typeof globalThis.cancelAnimationFrame === 'function') {
+  if (!isJsdomRuntime() && typeof globalThis.cancelAnimationFrame === 'function') {
     globalThis.cancelAnimationFrame(id);
     return;
   }
@@ -236,6 +240,19 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     const maxChunk = burstMode ? WRITE_CHUNK_CHARS_BURST : WRITE_CHUNK_CHARS_BASE;
     const chunk = dequeuePendingChunk(maxChunk);
     if (!chunk) {
+      writeDroppedNotice(term);
+      return;
+    }
+
+    // Some test/mocked terminals do not implement callback-aware write().
+    // Fallback keeps correctness in those environments while production xterm
+    // uses callback pacing to avoid parser overload.
+    if (term.write.length < 2) {
+      term.write(chunk);
+      if (pendingQueueCharsRef.current > 0) {
+        scheduleFlush();
+        return;
+      }
       writeDroppedNotice(term);
       return;
     }
