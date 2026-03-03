@@ -1,6 +1,6 @@
 # Product Roadmap
 
-Last updated: 2026-02-25
+Last updated: 2026-03-03
 
 ## 1. Planning Assumptions
 
@@ -351,7 +351,7 @@ Current implementation status:
 3. Xterm write pipeline now uses callback-paced queue draining with bounded backlog controls.
 4. Selected-lane stream now uses low-latency direct append with replay-safe fallback when terminal mount races stream startup.
 5. Terminal header now surfaces active stream transport (`pending/push/poll`), and polling fallback cadence is tuned for focused-lane responsiveness.
-6. Open follow-up: environments that stay on `poll` require attach-cause diagnostics and reliability hardening (`P4.9.7`).
+6. `P4.9.7` is implemented: attach-cause diagnostics, bounded retry hardening, backend emit-failure diagnostics IPC, and attach-failure smoke coverage are in place.
 7. Remaining validation: manual release-build stress QA for sustained real CLI/TUI workloads.
 
 ### 18.3 Integration Decisions (Locked)

@@ -1,6 +1,6 @@
 # Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity) Issue Bodies
 
-Last updated: 2026-02-25
+Last updated: 2026-03-03
 
 Generated from `planning/implementation-checklist.md`.
 Local-first execution is tracked in `planning/m4.7-local-execution-pack.md`;
@@ -571,11 +571,11 @@ Some environments remain on polling fallback (`poll`) even when push-stream tran
 Diagnose and harden interactive push transport attach path so orchestration consistently uses push mode when runtime supports it, with explicit diagnostics when it cannot.
 
 ## Acceptance Criteria
-- [ ] Push attach outcome is surfaced with explicit reason categories (attached, unavailable API, listener error, payload mismatch, permission/runtime block).
-- [ ] Add backend/frontend diagnostics path to inspect the latest push attach status for active orchestration sessions.
-- [ ] Ensure push attach retries are bounded and resilient across tab/view transitions and session creation timing races.
-- [ ] Poll fallback remains functional and continues to provide responsive focused-lane cadence.
-- [ ] Smoke coverage includes at least one attach-failure reason path and fallback correctness assertion.
+- [x] Push attach outcome is surfaced with explicit reason categories (attached, unavailable API, listener error, payload mismatch, permission/runtime block).
+- [x] Add backend/frontend diagnostics path to inspect the latest push attach status for active orchestration sessions.
+- [x] Ensure push attach retries are bounded and resilient across tab/view transitions and session creation timing races.
+- [x] Poll fallback remains functional and continues to provide responsive focused-lane cadence.
+- [x] Smoke coverage includes at least one attach-failure reason path and fallback correctness assertion.
 
 ## Out of Scope
 Transport encryption changes, remote push brokers, telemetry backend integration.
