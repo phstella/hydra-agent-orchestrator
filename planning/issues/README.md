@@ -1,6 +1,6 @@
 # Phase Issue Packs
 
-Last updated: 2026-02-25
+Last updated: 2026-03-03
 
 This folder contains per-phase issue body packs generated from
 `planning/implementation-checklist.md`.
@@ -15,11 +15,11 @@ Local execution should be tracked in `planning/*-local-*.md` packs.
 | `phase-1.md` | Core Orchestrator + Single Agent | M1.1-M1.8 | 8 |
 | `phase-2.md` | Multi-Agent Race + Scoring | M2.1-M2.12 | 12 |
 | `phase-3.md` | GUI Alpha | M3.1-M3.7 | 7 |
-| `phase-4.md` | Interactive Session Mode | M4.1-M4.8 | 8 |
+| `phase-4.md` | Interactive Session Mode | M4.1-M4.8, P4.9.1-P4.9.7 | 15 |
 | `phase-5.md` | Collaboration Workflows | M5.1-M5.6 | 6 |
 | `phase-6.md` | Windows Parity and Release Hardening | M6.1-M6.6 | 6 |
 
-**Total: 55 milestones**
+**Total: 62 milestones**
 
 ## Notes
 
@@ -32,4 +32,5 @@ Local execution should be tracked in `planning/*-local-*.md` packs.
   - `planning/p4-interactive-session-implementation-guide.md` (Phase 4)
   - `planning/p4-race-cockpit-convergence-implementation-guide.md` (Phase 4.7 gate)
   - `planning/m4.7-desktop-ui-contract.md` (M4.7 desktop contract)
+  - `planning/p4.9.6-streaming-performance-pack.md` (P4.9.6/P4.9.7 follow-up tracker)
   - `planning/p5-collaboration-workflows-implementation-guide.md` (Phase 5)

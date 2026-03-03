@@ -1,6 +1,6 @@
 # Implementation Checklist (Execution-Ready)
 
-Last updated: 2026-02-25
+Last updated: 2026-03-03
 
 ## 1. Locked Product Decisions
 
@@ -705,6 +705,47 @@ Local-first note:
 4. Operator stop/interrupt semantics remain available and clearly discoverable.
 5. Smoke tests cover terminal-only input, concurrent-lane isolation, and no-regression behavior.
 - Out of Scope: chat-style side composer redesign, multimodal prompt editor, collaborative cursors.
+
+### P4.9.6 Orchestration Terminal Streaming Performance and Responsiveness
+
+- Labels: `phase-4`, `area-ui`, `area-core`, `type-performance`
+- Estimate: `L`
+- Dependencies: `P4.9.3`, `P4.9.4`, `P4.9.5`
+- Problem: Even after ANSI parity and terminal-only input, orchestration can feel laggy under sustained CLI/TUI output when stream delivery and rendering create excessive UI churn.
+- Scope: Optimize interactive stream transport and terminal rendering path for low-latency responsiveness:
+  - prefer push-stream attach for PTY output where available
+  - keep polling as compatibility fallback
+  - batch/coalesce ingestion and terminal writes to avoid per-event rerender pressure
+  - preserve bounded per-session history for lane switching and replay without duplication
+- Acceptance Criteria:
+1. Interactive PTY output uses push transport when runtime support is available.
+2. Poll fallback remains functional when push attach is unavailable.
+3. Terminal ingestion and writes are batched/coalesced to reduce frame drops under sustained output.
+4. Lane switching preserves bounded per-session history and session isolation semantics.
+5. Duplicate/replayed lines are prevented across overlap/retry transport conditions.
+6. Manual release-build stress QA validates acceptable responsiveness for sustained real CLI/TUI workloads.
+- Out of Scope: remote terminal protocol support, terminal recording UI, transport encryption changes.
+- Execution Note: Use `planning/p4.9.6-streaming-performance-pack.md` as the tracker for performance tuning and QA evidence.
+
+### P4.9.7 Push Transport Attach Reliability and Diagnostics
+
+- Labels: `phase-4`, `area-ui`, `area-core`, `type-reliability`
+- Estimate: `M`
+- Dependencies: `P4.9.6`
+- Problem: Some environments remain on poll fallback even when push transport should attach, adding avoidable latency and making root cause unclear to operators.
+- Scope: Harden push attach lifecycle and expose attach-cause diagnostics for orchestration sessions:
+  - classify attach outcomes (attached, unavailable API, listener error, payload mismatch, runtime/permission block)
+  - expose latest attach diagnostic state to frontend surfaces
+  - harden attach/retry behavior across session startup and view-transition races
+  - preserve responsive poll fallback behavior when push cannot attach
+- Acceptance Criteria:
+1. Push attach result exposes explicit reason categories for each session.
+2. Frontend can display or inspect latest push attach diagnostics for active lanes.
+3. Push attach retry logic is bounded and resilient across startup timing races.
+4. Poll fallback remains operational with focused-lane responsive cadence.
+5. Smoke coverage includes attach-failure reason handling and fallback correctness.
+- Out of Scope: telemetry backend integration, remote push brokers, transport encryption redesign.
+- Execution Note: This milestone closes the open poll-fallback follow-up tracked from `P4.9.6`.
 
 ## 8. Phase 5 Tickets (Collaboration Workflows)
 

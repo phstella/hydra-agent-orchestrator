@@ -1,6 +1,6 @@
 # Phase 5 Tickets (Collaboration Workflows) Issue Bodies
 
-Last updated: 2026-02-25
+Last updated: 2026-03-03
 
 Generated from `planning/implementation-checklist.md`.
 Use local execution packs as the default tracking surface; this file is optional
@@ -15,7 +15,7 @@ Implementation guide: `planning/p5-collaboration-workflows-implementation-guide.
 - Phase: Phase 5 Tickets (Collaboration Workflows)
 - Labels: hydra, phase-5, area-workflow, type-feature
 - Estimate: M
-- Dependencies: M2.10, M4.8
+- Dependencies: M2.10, M4.8, P4.9.5
 
 ### Issue Body (Markdown)
 
@@ -36,7 +36,7 @@ Implement a DAG step executor that runs workflow nodes sequentially or in parall
 - Custom node types.
 
 ## Dependencies
-- M2.10, M4.8
+- M2.10, M4.8, P4.9.5
 
 ## Notes
 - Tier-1 launch adapters are claude and codex.
