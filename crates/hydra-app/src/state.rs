@@ -52,6 +52,9 @@ pub struct InteractiveSessionRuntime {
     pub error: Option<String>,
     pub pty_session: Option<PtySession>,
     pub artifact_writer: Option<Arc<Mutex<SessionArtifactWriter>>>,
+    pub push_emit_error_count: u64,
+    pub last_push_emit_error: Option<String>,
+    pub last_push_emit_at: Option<String>,
 }
 
 impl InteractiveSessionRuntime {
@@ -66,6 +69,9 @@ impl InteractiveSessionRuntime {
             error: None,
             pty_session: None,
             artifact_writer: None,
+            push_emit_error_count: 0,
+            last_push_emit_error: None,
+            last_push_emit_at: None,
         }
     }
 }
@@ -285,6 +291,28 @@ impl InteractiveStateHandle {
         });
 
         entries
+    }
+
+    pub async fn record_push_emit_failure(&self, session_id: &str, error: &str) {
+        let mut sessions = self.sessions.lock().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.push_emit_error_count = session.push_emit_error_count.saturating_add(1);
+            session.last_push_emit_error = Some(error.to_string());
+            session.last_push_emit_at = Some(chrono::Utc::now().to_rfc3339());
+        }
+    }
+
+    pub async fn push_transport_diagnostics(
+        &self,
+        session_id: &str,
+    ) -> Option<(u64, Option<String>, Option<String>)> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions.get(session_id)?;
+        Some((
+            session.push_emit_error_count,
+            session.last_push_emit_error.clone(),
+            session.last_push_emit_at.clone(),
+        ))
     }
 
     /// Shutdown all running sessions. Called on app exit.
@@ -846,6 +874,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interactive_push_emit_failure_diagnostics_are_tracked_per_session() {
+        let state = new_interactive_state();
+
+        let (tx, _rx) = mpsc::channel(16);
+        let session = PtySession::spawn(sleep_pty_config(60), tx).unwrap();
+        state
+            .register_session("diag-a", "claude", "2026-03-03T00:00:00Z", session, None)
+            .await;
+
+        assert_eq!(state.push_transport_diagnostics("missing").await, None);
+
+        state
+            .record_push_emit_failure("diag-a", "emit denied by runtime")
+            .await;
+        state
+            .record_push_emit_failure("diag-a", "emit denied by runtime")
+            .await;
+
+        let diagnostics = state.push_transport_diagnostics("diag-a").await;
+        let (count, last_error, last_at) = diagnostics.expect("diagnostics should exist");
+        assert_eq!(count, 2);
+        assert_eq!(last_error.as_deref(), Some("emit denied by runtime"));
+        assert!(last_at.is_some(), "timestamp should be recorded");
+
+        let _ = state.stop_session("diag-a").await;
+    }
+
+    #[tokio::test]
     async fn interactive_write_after_stop_returns_error() {
         let state = new_interactive_state();
 
@@ -1078,7 +1134,8 @@ mod tests {
             "sink should receive output events"
         );
         assert!(
-            seen.iter().any(|event_type| event_type == "session_completed"),
+            seen.iter()
+                .any(|event_type| event_type == "session_completed"),
             "sink should receive lifecycle completion events"
         );
     }

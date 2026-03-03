@@ -244,6 +244,13 @@ export interface InteractiveSessionSummary {
   eventCount: number;
 }
 
+export interface InteractiveTransportDiagnostics {
+  sessionId: string;
+  pushEmitErrorCount: number;
+  lastPushEmitError: string | null;
+  lastPushEmitAt: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // File Explorer (P4.9.2)
 // ---------------------------------------------------------------------------

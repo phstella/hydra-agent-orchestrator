@@ -25,6 +25,7 @@ import type {
   InteractiveResizeAck,
   InteractiveStopResult,
   InteractiveSessionSummary,
+  InteractiveTransportDiagnostics,
   DirectoryListing,
   FileWatcherStarted,
   FileWatchEventBatch,
@@ -34,6 +35,18 @@ import type {
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 type UnlistenFn = () => void;
 const INTERACTIVE_STREAM_EVENT = 'hydra://interactive-event';
+
+export type InteractivePushAttachReason =
+  | 'attached'
+  | 'unavailable_api'
+  | 'listener_error'
+  | 'runtime_block';
+
+export interface InteractivePushAttachResult {
+  unlisten: UnlistenFn | null;
+  reason: InteractivePushAttachReason;
+  detail: string | null;
+}
 
 let _invoke: InvokeFn | null = null;
 
@@ -171,21 +184,85 @@ export async function listInteractiveSessions(): Promise<InteractiveSessionSumma
   return invoke('list_interactive_sessions');
 }
 
+export async function getInteractiveTransportDiagnostics(
+  sessionId: string,
+): Promise<InteractiveTransportDiagnostics> {
+  const invoke = await getInvoke();
+  return invoke('get_interactive_transport_diagnostics', { sessionId });
+}
+
 /**
  * Prefer push-stream interactive events when running inside Tauri.
- * Returns `null` in mock/browser mode so callers can fallback to polling.
+ * Returns attach diagnostics so callers can decide whether to retry or
+ * fallback to polling.
  */
+function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error ?? 'unknown error');
+}
+
+function classifyInteractiveListenFailure(
+  error: unknown,
+): { reason: 'listener_error' | 'runtime_block'; detail: string } {
+  const detail = normalizeErrorMessage(error);
+  const lower = detail.toLowerCase();
+  if (
+    lower.includes('permission')
+    || lower.includes('denied')
+    || lower.includes('forbidden')
+    || lower.includes('blocked')
+    || lower.includes('security')
+  ) {
+    return { reason: 'runtime_block', detail };
+  }
+  return { reason: 'listener_error', detail };
+}
+
+function isInteractiveStreamEventPayload(payload: unknown): payload is InteractiveStreamEvent {
+  if (!payload || typeof payload !== 'object') return false;
+  const candidate = payload as Record<string, unknown>;
+  return typeof candidate.sessionId === 'string'
+    && typeof candidate.agentKey === 'string'
+    && typeof candidate.eventType === 'string'
+    && typeof candidate.timestamp === 'string';
+}
+
 export async function listenInteractiveEvents(
   onEvent: (event: InteractiveStreamEvent) => void,
-): Promise<UnlistenFn | null> {
+  onPayloadMismatch?: (detail: string) => void,
+): Promise<InteractivePushAttachResult> {
   try {
     const mod = await import('@tauri-apps/api/event');
-    const unlisten = await mod.listen<InteractiveStreamEvent>(INTERACTIVE_STREAM_EVENT, (event) => {
-      if (event.payload) onEvent(event.payload);
+    const unlisten = await mod.listen<unknown>(INTERACTIVE_STREAM_EVENT, (event) => {
+      if (isInteractiveStreamEventPayload(event.payload)) {
+        onEvent(event.payload);
+        return;
+      }
+      const payloadType = event.payload === null ? 'null' : typeof event.payload;
+      onPayloadMismatch?.(`invalid interactive-event payload type: ${payloadType}`);
     });
-    return unlisten;
-  } catch {
-    return null;
+    return { unlisten, reason: 'attached', detail: null };
+  } catch (error) {
+    const message = normalizeErrorMessage(error);
+    const lower = message.toLowerCase();
+    if (
+      lower.includes('@tauri-apps/api/event')
+      || lower.includes('tauri ipc is unavailable')
+      || lower.includes('failed to fetch dynamically imported module')
+      || lower.includes('cannot find module')
+    ) {
+      return {
+        unlisten: null,
+        reason: 'unavailable_api',
+        detail: message,
+      };
+    }
+    const classified = classifyInteractiveListenFailure(error);
+    return {
+      unlisten: null,
+      reason: classified.reason,
+      detail: classified.detail,
+    };
   }
 }
 
@@ -697,6 +774,15 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
         eventCount: s.events.length,
       }));
       return summaries as T;
+    }
+    case 'get_interactive_transport_diagnostics': {
+      const sessionId = (_args?.sessionId as string) ?? 'mock-session';
+      return {
+        sessionId,
+        pushEmitErrorCount: 0,
+        lastPushEmitError: null,
+        lastPushEmitAt: null,
+      } as T;
     }
 
     // File Explorer mock (P4.9.2)

@@ -1059,8 +1059,19 @@ pub async fn start_interactive_session(
         )
         .await;
 
+    let sink_session_id = session_id.clone();
+    let sink_state = interactive.clone();
     let app_sink = Arc::new(move |event: &InteractiveStreamEvent| {
-        let _ = app.emit(INTERACTIVE_STREAM_EVENT, event);
+        if let Err(e) = app.emit(INTERACTIVE_STREAM_EVENT, event) {
+            let sink_state = sink_state.clone();
+            let sink_session_id = sink_session_id.clone();
+            let error = e.to_string();
+            tauri::async_runtime::spawn(async move {
+                sink_state
+                    .record_push_emit_failure(&sink_session_id, &error)
+                    .await;
+            });
+        }
     });
 
     crate::state::spawn_pty_event_bridge_with_sink(
@@ -1184,6 +1195,26 @@ pub async fn list_interactive_sessions(
             },
         )
         .collect())
+}
+
+#[tauri::command]
+pub async fn get_interactive_transport_diagnostics(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<InteractiveTransportDiagnostics, String> {
+    let interactive = state.interactive.clone();
+    let Some((push_emit_error_count, last_push_emit_error, last_push_emit_at)) =
+        interactive.push_transport_diagnostics(&session_id).await
+    else {
+        return Err(IpcError::not_found(format!("session '{session_id}' not found")).to_string());
+    };
+
+    Ok(InteractiveTransportDiagnostics {
+        session_id,
+        push_emit_error_count,
+        last_push_emit_error,
+        last_push_emit_at,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2876,6 +2907,21 @@ branch refs/heads/main
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("eventCount"));
         assert!(json.contains("\"eventCount\":42"));
+    }
+
+    #[test]
+    fn interactive_transport_diagnostics_serializes() {
+        let diagnostics = InteractiveTransportDiagnostics {
+            session_id: "s1".to_string(),
+            push_emit_error_count: 2,
+            last_push_emit_error: Some("emit denied".to_string()),
+            last_push_emit_at: Some("2026-03-03T00:00:00Z".to_string()),
+        };
+        let json = serde_json::to_string(&diagnostics).unwrap();
+        assert!(json.contains("pushEmitErrorCount"));
+        assert!(json.contains("\"pushEmitErrorCount\":2"));
+        assert!(json.contains("lastPushEmitError"));
+        assert!(json.contains("lastPushEmitAt"));
     }
 
     #[test]

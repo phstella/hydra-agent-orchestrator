@@ -194,7 +194,17 @@ function setupDefaultMocks() {
     stderr: null,
   } as MergeExecutionPayload);
   vi.mocked(ipc.listInteractiveSessions).mockResolvedValue([]);
-  vi.mocked(ipc.listenInteractiveEvents).mockResolvedValue(null);
+  vi.mocked(ipc.listenInteractiveEvents).mockResolvedValue({
+    unlisten: null,
+    reason: 'unavailable_api',
+    detail: null,
+  });
+  vi.mocked(ipc.getInteractiveTransportDiagnostics).mockResolvedValue({
+    sessionId: 'test-session-1',
+    pushEmitErrorCount: 0,
+    lastPushEmitError: null,
+    lastPushEmitAt: null,
+  });
   vi.mocked(ipc.startInteractiveSession).mockResolvedValue({
     sessionId: 'test-session-1',
     agentKey: 'claude',
@@ -775,7 +785,11 @@ describe('Smoke Test 11: P4.9.5 terminal-only input model', () => {
     let pushHandler: ((event: InteractiveStreamEvent) => void) | null = null;
     vi.mocked(ipc.listenInteractiveEvents).mockImplementation(async (handler) => {
       pushHandler = handler;
-      return () => {};
+      return {
+        unlisten: () => {},
+        reason: 'attached',
+        detail: null,
+      };
     });
     vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
       sessionId: 'test-session-1',
@@ -812,6 +826,57 @@ describe('Smoke Test 11: P4.9.5 terminal-only input model', () => {
     await waitFor(() => {
       expect(screen.getByText(/push-stream-line/)).toBeInTheDocument();
     });
+  });
+
+  it('surfaces push attach listener_error diagnostics and keeps polling fallback active', async () => {
+    vi.mocked(ipc.listenInteractiveEvents).mockResolvedValue({
+      unlisten: null,
+      reason: 'listener_error',
+      detail: 'listener init failed',
+    });
+
+    let pollCount = 0;
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async () => {
+      pollCount += 1;
+      return {
+        sessionId: 'test-session-1',
+        events: pollCount === 1
+          ? [
+              {
+                sessionId: 'test-session-1',
+                agentKey: 'claude',
+                eventType: 'output',
+                data: { text: 'poll-fallback-line\n' },
+                timestamp: new Date().toISOString(),
+              },
+            ]
+          : [],
+        nextCursor: 1,
+        done: false,
+        status: 'running',
+        error: null,
+      } as InteractiveEventBatch;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'listener failure path');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-transport-mode')).toHaveTextContent('poll');
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/poll-fallback-line/)).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-transport-diagnostic')).toHaveTextContent('attach:listener_error');
+    });
+    await waitFor(() => {
+      expect(vi.mocked(ipc.listenInteractiveEvents).mock.calls.length).toBeGreaterThanOrEqual(3);
+    }, { timeout: 3000 });
   });
 
   it('hides initial prompt composer after deploy and keeps terminal as primary input', async () => {

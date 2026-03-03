@@ -224,6 +224,15 @@ pub struct InteractiveSessionSummary {
     pub event_count: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveTransportDiagnostics {
+    pub session_id: String,
+    pub push_emit_error_count: u64,
+    pub last_push_emit_error: Option<String>,
+    pub last_push_emit_at: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // IPC Error wrapper
 // ---------------------------------------------------------------------------

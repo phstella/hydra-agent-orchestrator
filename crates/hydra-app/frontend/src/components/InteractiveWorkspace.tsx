@@ -8,15 +8,18 @@ import {
   startInteractiveSession,
   pollInteractiveEvents,
   listenInteractiveEvents,
+  getInteractiveTransportDiagnostics,
   writeInteractiveInput,
   resizeInteractiveTerminal,
   stopInteractiveSession,
   listInteractiveSessions,
   listAdapters,
+  type InteractivePushAttachReason,
 } from '../ipc';
 import type {
   InteractiveSessionSummary,
   InteractiveStreamEvent,
+  InteractiveTransportDiagnostics,
   AdapterInfo,
 } from '../types';
 
@@ -25,7 +28,18 @@ const POLL_INTERVAL_ACTIVE_MS = 40;
 const POLL_INTERVAL_BACKGROUND_MS = 120;
 const POLL_RETRY_MS = 400;
 const STREAM_FLUSH_INTERVAL_MS = 12;
+const PUSH_ATTACH_MAX_ATTEMPTS = 3;
+const PUSH_ATTACH_RETRY_MS = 350;
 const EMPTY_CHUNKS: string[] = [];
+
+type PushAttachDiagnosticReason = 'pending' | InteractivePushAttachReason | 'payload_mismatch';
+
+interface PushAttachDiagnosticState {
+  reason: PushAttachDiagnosticReason;
+  detail: string | null;
+  attempts: number;
+  retryScheduled: boolean;
+}
 
 function appendBoundedChunk(existing: string[] | undefined, incoming: string): string[] {
   const target = existing ?? [];
@@ -145,6 +159,14 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   const [pollErrors, setPollErrors] = useState<Map<string, string>>(new Map());
   const [sessionErrors, setSessionErrors] = useState<Map<string, string>>(new Map());
   const [streamTransport, setStreamTransport] = useState<'pending' | 'push' | 'poll'>('pending');
+  const [pushAttachDiagnostics, setPushAttachDiagnostics] = useState<PushAttachDiagnosticState>({
+    reason: 'pending',
+    detail: null,
+    attempts: 0,
+    retryScheduled: false,
+  });
+  const [backendTransportDiagnostics, setBackendTransportDiagnostics] =
+    useState<InteractiveTransportDiagnostics | null>(null);
 
   // ---------------------------------------------------------------------------
   // Create-form state
@@ -353,33 +375,158 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
 
-    listenInteractiveEvents((event) => {
-      enqueueStreamEvents(event.sessionId, [event]);
-    })
-      .then((dispose) => {
-        if (cancelled) {
-          dispose?.();
-          return;
-        }
-        if (dispose) {
-          unlisten = dispose;
-          setStreamTransport('push');
-        } else {
-          setStreamTransport('poll');
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setStreamTransport('poll');
-        }
+    const clearRetryTimer = () => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const clearListener = () => {
+      if (unlisten) {
+        unlisten();
+        unlisten = null;
+      }
+    };
+
+    let attemptAttach: (() => Promise<void>) | null = null;
+
+    const scheduleRetry = (
+      reason: PushAttachDiagnosticReason,
+      detail: string | null,
+    ) => {
+      if (attempts >= PUSH_ATTACH_MAX_ATTEMPTS) return;
+      const delay = PUSH_ATTACH_RETRY_MS * attempts;
+      setPushAttachDiagnostics({
+        reason,
+        detail,
+        attempts,
+        retryScheduled: true,
       });
+      clearRetryTimer();
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (attemptAttach) {
+          void attemptAttach();
+        }
+      }, delay);
+    };
+
+    const shouldRetryReason = (reason: InteractivePushAttachReason | 'payload_mismatch') =>
+      reason === 'listener_error' || reason === 'runtime_block' || reason === 'payload_mismatch';
+
+    const handlePayloadMismatch = (detail: string) => {
+      if (cancelled) return;
+      clearListener();
+      setStreamTransport('poll');
+      setPushAttachDiagnostics({
+        reason: 'payload_mismatch',
+        detail,
+        attempts,
+        retryScheduled: false,
+      });
+      if (shouldRetryReason('payload_mismatch')) {
+        scheduleRetry('payload_mismatch', detail);
+      }
+    };
+
+    attemptAttach = async () => {
+      if (cancelled || unlisten) return;
+      attempts += 1;
+      setPushAttachDiagnostics({
+        reason: 'pending',
+        detail: null,
+        attempts,
+        retryScheduled: false,
+      });
+
+      const attach = await listenInteractiveEvents(
+        (event) => {
+          enqueueStreamEvents(event.sessionId, [event]);
+        },
+        handlePayloadMismatch,
+      );
+
+      if (cancelled) {
+        attach.unlisten?.();
+        return;
+      }
+
+      if (attach.unlisten) {
+        unlisten = attach.unlisten;
+        setStreamTransport('push');
+        setPushAttachDiagnostics({
+          reason: 'attached',
+          detail: null,
+          attempts,
+          retryScheduled: false,
+        });
+        return;
+      }
+
+      setStreamTransport('poll');
+      setPushAttachDiagnostics({
+        reason: attach.reason,
+        detail: attach.detail,
+        attempts,
+        retryScheduled: false,
+      });
+
+      if (shouldRetryReason(attach.reason)) {
+        scheduleRetry(attach.reason, attach.detail);
+      }
+    };
+
+    if (attemptAttach) {
+      void attemptAttach();
+    }
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      clearRetryTimer();
+      clearListener();
     };
   }, [enqueueStreamEvents]);
+
+  // ---------------------------------------------------------------------------
+  // Pull backend transport diagnostics while in fallback mode (P4.9.7).
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!selectedSessionId || streamTransport === 'push') {
+      setBackendTransportDiagnostics(null);
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const refreshDiagnostics = async () => {
+      try {
+        const diagnostics = await getInteractiveTransportDiagnostics(selectedSessionId);
+        if (!cancelled) {
+          setBackendTransportDiagnostics(diagnostics);
+        }
+      } catch {
+        if (!cancelled) {
+          setBackendTransportDiagnostics(null);
+        }
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(refreshDiagnostics, 1500);
+        }
+      }
+    };
+
+    void refreshDiagnostics();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [selectedSessionId, streamTransport]);
 
   // ---------------------------------------------------------------------------
   // Polling — per-session isolated (M4.8.5)
@@ -472,7 +619,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   }, [streamTransport]);
 
   useEffect(() => {
-    if (streamTransport !== 'poll') return;
+    if (streamTransport === 'push') return;
 
     sessions.forEach((session) => {
       if (session.status === 'running') {
@@ -540,7 +687,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       setUnsafeMode(false);
       setAllowExperimental(false);
       setExperimentalAcknowledged(false);
-      if (streamTransport === 'poll') {
+      if (streamTransport !== 'push') {
         startPolling(result.sessionId);
       }
     } catch (err) {
@@ -662,6 +809,45 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
   // Count duplicate adapter instances for lane label disambiguation (M4.8.2)
   const runningInstanceCount = agentKey ? countAdapterInstances(sessions, agentKey) : 0;
   const reduceRailMotion = streamTransport === 'push' || sessions.some((session) => session.status === 'running');
+  const transportDiagnostic = useMemo(() => {
+    const details: string[] = [];
+    if (pushAttachDiagnostics.reason !== 'pending' && pushAttachDiagnostics.reason !== 'attached') {
+      details.push(`attach:${pushAttachDiagnostics.reason}`);
+    }
+    if (pushAttachDiagnostics.retryScheduled) {
+      details.push(
+        `retry ${pushAttachDiagnostics.attempts}/${PUSH_ATTACH_MAX_ATTEMPTS}`,
+      );
+    } else if (
+      streamTransport === 'poll'
+      && pushAttachDiagnostics.attempts > 0
+      && pushAttachDiagnostics.reason !== 'pending'
+    ) {
+      details.push(`attempt ${pushAttachDiagnostics.attempts}/${PUSH_ATTACH_MAX_ATTEMPTS}`);
+    }
+    if ((backendTransportDiagnostics?.pushEmitErrorCount ?? 0) > 0) {
+      details.push(`emit errors:${backendTransportDiagnostics?.pushEmitErrorCount ?? 0}`);
+    }
+    if (details.length === 0) return null;
+    return details.join(' · ');
+  }, [
+    backendTransportDiagnostics?.pushEmitErrorCount,
+    pushAttachDiagnostics.attempts,
+    pushAttachDiagnostics.reason,
+    pushAttachDiagnostics.retryScheduled,
+    streamTransport,
+  ]);
+  const transportDiagnosticDetail = useMemo(() => {
+    const details: string[] = [];
+    if (pushAttachDiagnostics.detail) {
+      details.push(pushAttachDiagnostics.detail);
+    }
+    if (backendTransportDiagnostics?.lastPushEmitError) {
+      details.push(`backend emit: ${backendTransportDiagnostics.lastPushEmitError}`);
+    }
+    if (details.length === 0) return null;
+    return details.join(' | ');
+  }, [pushAttachDiagnostics.detail, backendTransportDiagnostics?.lastPushEmitError]);
 
   // ---------------------------------------------------------------------------
   // Cleanup on unmount
@@ -972,6 +1158,8 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
           laneLabel={selectedSession ? laneLabel(selectedSession) : null}
           status={selectedSession?.status ?? null}
           streamTransport={streamTransport}
+          transportDiagnostic={transportDiagnostic}
+          transportDiagnosticDetail={transportDiagnosticDetail}
           chunks={EMPTY_CHUNKS}
           transportError={selectedPollError}
           sessionError={selectedSessionError}

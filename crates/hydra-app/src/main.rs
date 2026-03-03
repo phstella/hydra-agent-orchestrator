@@ -27,6 +27,7 @@ fn main() {
             hydra_app::resize_interactive_terminal,
             hydra_app::stop_interactive_session,
             hydra_app::list_interactive_sessions,
+            hydra_app::get_interactive_transport_diagnostics,
             hydra_app::list_directory,
             hydra_app::start_file_watcher,
             hydra_app::poll_file_watch_events,

@@ -11,6 +11,8 @@ interface InteractiveTerminalPanelProps {
   laneLabel: string | null;
   status: string | null;
   streamTransport?: 'pending' | 'push' | 'poll';
+  transportDiagnostic: string | null;
+  transportDiagnosticDetail: string | null;
   chunks: string[];
   transportError: string | null;
   sessionError: string | null;
@@ -27,6 +29,8 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
   laneLabel,
   status,
   streamTransport = 'pending',
+  transportDiagnostic,
+  transportDiagnosticDetail,
   chunks,
   transportError,
   sessionError,
@@ -139,6 +143,23 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
           data-testid="terminal-transport-error"
         >
           Connection issue: {transportError}. Retrying...
+        </div>
+      )}
+
+      {transportDiagnostic && (
+        <div
+          style={{
+            padding: 'var(--space-2) var(--space-4)',
+            backgroundColor: 'color-mix(in srgb, var(--color-bg-900) 60%, var(--color-warning-500) 10%)',
+            borderBottom: '1px solid var(--color-border-700)',
+            color: 'var(--color-text-muted)',
+            fontSize: 'var(--text-xs)',
+            flexShrink: 0,
+          }}
+          data-testid="terminal-transport-diagnostic"
+          title={transportDiagnosticDetail ?? undefined}
+        >
+          {transportDiagnostic}
         </div>
       )}
 
