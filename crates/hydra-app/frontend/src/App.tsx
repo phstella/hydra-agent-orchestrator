@@ -37,21 +37,24 @@ function RailSectionHeader({
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: 'var(--space-1)',
+    gap: '2px',
     marginBottom: 'var(--space-1)',
   };
 
   const labelStyle: CSSProperties = {
-    fontSize: '9px',
-    textTransform: 'uppercase',
+    fontSize: '10px',
+    textTransform: 'none',
     letterSpacing: '0.08em',
     color: 'var(--color-text-secondary)',
     textAlign: 'center',
-    lineHeight: 1.2,
+    lineHeight: 1.1,
     width: '100%',
+    padding: '0 4px',
     fontWeight: 'var(--weight-semibold)' as unknown as number,
     fontFamily: 'var(--font-mono)',
-    whiteSpace: 'nowrap',
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   };
 
   return (
@@ -61,7 +64,7 @@ function RailSectionHeader({
       </div>
       <div
         style={{
-          width: '70%',
+          width: '76%',
           borderTop: '1px solid var(--color-border-600)',
         }}
       />
@@ -423,9 +426,10 @@ export default function App() {
     width: '100%',
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
+    alignItems: 'stretch',
     gap: '2px',
     padding: 'var(--space-2) 2px',
+    marginBottom: 'var(--space-2)',
     border: '1px solid var(--color-border-700)',
     borderRadius: 'var(--radius-md)',
     backgroundColor: 'color-mix(in srgb, var(--color-bg-950) 78%, var(--color-marine-500) 6%)',

@@ -179,7 +179,7 @@ export function TopStrip({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    height: 44,
+    height: 56,
     padding: '0 var(--space-4)',
     gap: 'var(--space-4)',
   };
@@ -211,8 +211,8 @@ export function TopStrip({
   };
 
   const brandIconStyle: CSSProperties = {
-    width: 36,
-    height: 36,
+    width: 48,
+    height: 48,
     objectFit: 'contain',
     flexShrink: 0,
   };

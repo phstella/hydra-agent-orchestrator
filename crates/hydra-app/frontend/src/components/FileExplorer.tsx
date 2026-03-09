@@ -173,6 +173,205 @@ function languageFromPath(path: string): string {
   return 'text';
 }
 
+type SyntaxTokenKind =
+  | 'plain'
+  | 'keyword'
+  | 'type'
+  | 'string'
+  | 'comment'
+  | 'number'
+  | 'operator'
+  | 'heading';
+
+interface SyntaxToken {
+  kind: SyntaxTokenKind;
+  value: string;
+}
+
+const KEYWORDS_BY_LANGUAGE: Record<string, Set<string>> = {
+  rust: new Set([
+    'as', 'break', 'const', 'continue', 'crate', 'else', 'enum', 'extern', 'false', 'fn',
+    'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref',
+    'return', 'self', 'Self', 'static', 'struct', 'super', 'trait', 'true', 'type', 'unsafe',
+    'use', 'where', 'while', 'async', 'await',
+  ]),
+  typescript: new Set([
+    'abstract', 'any', 'as', 'async', 'await', 'boolean', 'break', 'case', 'catch', 'class',
+    'const', 'continue', 'debugger', 'declare', 'default', 'delete', 'do', 'else', 'enum',
+    'export', 'extends', 'false', 'finally', 'for', 'from', 'function', 'if', 'implements',
+    'import', 'in', 'interface', 'let', 'new', 'null', 'number', 'of', 'private', 'protected',
+    'public', 'readonly', 'return', 'static', 'string', 'super', 'switch', 'this', 'throw',
+    'true', 'try', 'type', 'typeof', 'undefined', 'var', 'void', 'while',
+  ]),
+  tsx: new Set([
+    'abstract', 'any', 'as', 'async', 'await', 'boolean', 'break', 'case', 'catch', 'class',
+    'const', 'continue', 'debugger', 'declare', 'default', 'delete', 'do', 'else', 'enum',
+    'export', 'extends', 'false', 'finally', 'for', 'from', 'function', 'if', 'implements',
+    'import', 'in', 'interface', 'let', 'new', 'null', 'number', 'of', 'private', 'protected',
+    'public', 'readonly', 'return', 'static', 'string', 'super', 'switch', 'this', 'throw',
+    'true', 'try', 'type', 'typeof', 'undefined', 'var', 'void', 'while',
+  ]),
+  javascript: new Set([
+    'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+    'default', 'delete', 'do', 'else', 'export', 'extends', 'false', 'finally', 'for',
+    'function', 'if', 'import', 'in', 'let', 'new', 'null', 'return', 'static', 'super',
+    'switch', 'this', 'throw', 'true', 'try', 'typeof', 'undefined', 'var', 'void', 'while',
+  ]),
+  jsx: new Set([
+    'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+    'default', 'delete', 'do', 'else', 'export', 'extends', 'false', 'finally', 'for',
+    'function', 'if', 'import', 'in', 'let', 'new', 'null', 'return', 'static', 'super',
+    'switch', 'this', 'throw', 'true', 'try', 'typeof', 'undefined', 'var', 'void', 'while',
+  ]),
+  go: new Set([
+    'break', 'case', 'chan', 'const', 'continue', 'default', 'defer', 'else', 'fallthrough',
+    'for', 'func', 'go', 'if', 'import', 'interface', 'map', 'package', 'range', 'return',
+    'select', 'struct', 'switch', 'type', 'var',
+  ]),
+  python: new Set([
+    'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif',
+    'else', 'except', 'False', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is',
+    'lambda', 'None', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'True', 'try', 'while',
+    'with', 'yield',
+  ]),
+  shell: new Set([
+    'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do', 'done', 'case', 'esac', 'function',
+    'in', 'local', 'export', 'readonly', 'return',
+  ]),
+  json: new Set(['true', 'false', 'null']),
+};
+
+const TYPES_BY_LANGUAGE: Record<string, Set<string>> = {
+  rust: new Set([
+    'String', 'str', 'Vec', 'Option', 'Result', 'bool', 'i8', 'i16', 'i32', 'i64', 'isize',
+    'u8', 'u16', 'u32', 'u64', 'usize', 'f32', 'f64',
+  ]),
+  typescript: new Set(['Promise', 'Array', 'Record', 'Map', 'Set']),
+  tsx: new Set(['Promise', 'Array', 'Record', 'Map', 'Set']),
+  javascript: new Set(['Promise', 'Array', 'Map', 'Set', 'Date']),
+  jsx: new Set(['Promise', 'Array', 'Map', 'Set', 'Date']),
+  go: new Set(['string', 'int', 'int64', 'float64', 'bool', 'error']),
+  python: new Set(['str', 'int', 'float', 'bool', 'list', 'dict', 'tuple', 'set']),
+};
+
+const TOKEN_STYLE: Record<SyntaxTokenKind, CSSProperties> = {
+  plain: {},
+  keyword: { color: 'var(--color-marine-400)', fontWeight: 'var(--weight-semibold)' as unknown as number },
+  type: { color: 'var(--color-warning-400)' },
+  string: { color: 'var(--color-green-400)' },
+  comment: { color: 'var(--color-text-muted)', fontStyle: 'italic' },
+  number: { color: 'var(--color-warning-300)' },
+  operator: { color: 'var(--color-text-secondary)' },
+  heading: { color: 'var(--color-marine-300)', fontWeight: 'var(--weight-semibold)' as unknown as number },
+};
+
+function commentRegexForLanguage(language: string): string {
+  if (language === 'python' || language === 'shell' || language === 'yaml' || language === 'toml') {
+    return '#.*$';
+  }
+  if (language === 'markdown') {
+    return '<!--.*?-->';
+  }
+  if (language === 'json') {
+    return '';
+  }
+  return '\\/\\/.*$|\\/\\*.*?\\*\\/';
+}
+
+function tokenizeLine(line: string, language: string): SyntaxToken[] {
+  if (line.length === 0) {
+    return [{ kind: 'plain', value: '' }];
+  }
+
+  if (language === 'markdown' && /^#{1,6}\s/.test(line)) {
+    return [{ kind: 'heading', value: line }];
+  }
+
+  const commentRegex = commentRegexForLanguage(language);
+  const parts = [
+    '"(?:\\\\.|[^"\\\\])*"',
+    "'(?:\\\\.|[^'\\\\])*'",
+    '`(?:\\\\.|[^`\\\\])*`',
+    '\\b\\d+(?:\\.\\d+)?\\b',
+    '\\b[A-Za-z_][A-Za-z0-9_]*\\b',
+    '[{}()[\\].,:;<>!=+\\-*/%|&^~?]+',
+  ];
+
+  if (commentRegex.length > 0) {
+    parts.unshift(commentRegex);
+  }
+
+  const tokenRegex = new RegExp(parts.join('|'), 'g');
+  const tokens: SyntaxToken[] = [];
+  const keywords = KEYWORDS_BY_LANGUAGE[language] ?? new Set<string>();
+  const types = TYPES_BY_LANGUAGE[language] ?? new Set<string>();
+
+  let lastIndex = 0;
+  for (const match of line.matchAll(tokenRegex)) {
+    if (match.index === undefined) continue;
+
+    if (match.index > lastIndex) {
+      tokens.push({ kind: 'plain', value: line.slice(lastIndex, match.index) });
+    }
+
+    const value = match[0];
+    let kind: SyntaxTokenKind = 'plain';
+
+    if (
+      value.startsWith('//')
+      || value.startsWith('/*')
+      || value.startsWith('#')
+      || value.startsWith('<!--')
+    ) {
+      kind = 'comment';
+    } else if (value.startsWith('"') || value.startsWith("'") || value.startsWith('`')) {
+      kind = 'string';
+    } else if (/^\d/.test(value)) {
+      kind = 'number';
+    } else if (/^[{}()[\].,:;<>!=+\-*/%|&^~?]+$/.test(value)) {
+      kind = 'operator';
+    } else if (keywords.has(value)) {
+      kind = 'keyword';
+    } else if (types.has(value)) {
+      kind = 'type';
+    }
+
+    tokens.push({ kind, value });
+    lastIndex = match.index + value.length;
+  }
+
+  if (lastIndex < line.length) {
+    tokens.push({ kind: 'plain', value: line.slice(lastIndex) });
+  }
+
+  return tokens.length > 0 ? tokens : [{ kind: 'plain', value: line }];
+}
+
+function renderHighlightedCode(content: string, language: string): ReactNode[] {
+  const lines = content.split('\n');
+  const nodes: ReactNode[] = [];
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const lineTokens = tokenizeLine(lines[lineIndex], language);
+    for (let tokenIndex = 0; tokenIndex < lineTokens.length; tokenIndex += 1) {
+      const token = lineTokens[tokenIndex];
+      nodes.push(
+        <span
+          key={`line-${lineIndex}-token-${tokenIndex}`}
+          style={TOKEN_STYLE[token.kind]}
+        >
+          {token.value}
+        </span>,
+      );
+    }
+    if (lineIndex < lines.length - 1) {
+      nodes.push('\n');
+    }
+  }
+
+  return nodes;
+}
+
 interface FileExplorerProps {
   workspaceCwd: string | null;
 }
@@ -566,6 +765,7 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
   };
 
   const selectedFileName = selectedFilePath ? fileNameFromPath(selectedFilePath) : null;
+  const previewLanguage = selectedFilePath ? languageFromPath(selectedFilePath) : 'text';
 
   return (
     <div style={containerStyle} data-testid="file-explorer">
@@ -677,7 +877,7 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
                 }}
                 data-testid="file-preview-language"
               >
-                {languageFromPath(selectedFilePath)}
+                {previewLanguage}
               </span>
             )}
           </div>
@@ -739,7 +939,7 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
             {selectedFilePath && !previewLoading && preview && !preview.error && !preview.isBinary && (
               <>
                 <pre style={previewCodeStyle} data-testid="file-preview-content">
-                  {preview.content ?? ''}
+                  <code>{renderHighlightedCode(preview.content ?? '', previewLanguage)}</code>
                 </pre>
                 {preview.truncated && (
                   <div

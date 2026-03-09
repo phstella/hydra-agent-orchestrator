@@ -2390,6 +2390,7 @@ describe('Smoke Test 45: File Explorer file preview pane', () => {
       expect(ipc.readFilePreview).toHaveBeenCalledWith('/workspace/README.md', expect.any(Number));
       expect(screen.getByTestId('file-preview-name')).toHaveTextContent('README.md');
       expect(screen.getByTestId('file-preview-content')).toHaveTextContent('# Hydra');
+      expect(screen.getByTestId('file-preview-content').querySelectorAll('span').length).toBeGreaterThan(0);
     });
   });
 });
