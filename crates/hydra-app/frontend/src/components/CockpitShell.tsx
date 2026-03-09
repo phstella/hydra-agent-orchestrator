@@ -29,7 +29,7 @@ export function CockpitShell({ leftRail, topStrip, center, rightRail }: CockpitS
   };
 
   const leftRailStyle: CSSProperties = {
-    width: 64,
+    width: 72,
     flexShrink: 0,
     borderRight: '1px solid var(--color-border-700)',
     backgroundColor: 'var(--color-bg-900)',
@@ -83,7 +83,7 @@ export function CockpitShell({ leftRail, topStrip, center, rightRail }: CockpitS
 }
 
 interface NavRailButtonProps {
-  icon: string;
+  icon: ReactNode;
   label: string;
   active?: boolean;
   onClick: () => void;
@@ -103,7 +103,7 @@ export function NavRailButton({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 1,
-    width: 54,
+    width: 58,
     height: 58,
     padding: '2px',
     borderRadius: 'var(--radius-md)',
@@ -114,8 +114,16 @@ export function NavRailButton({
     color: active ? 'var(--color-marine-400)' : 'var(--color-text-muted)',
     cursor: 'pointer',
     transition: 'all var(--transition-fast)',
-    fontSize: 'var(--text-lg)',
     fontFamily: 'var(--font-family)',
+  };
+
+  const iconStyle: CSSProperties = {
+    width: 16,
+    height: 16,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   };
 
   const labelStyle: CSSProperties = {
@@ -139,7 +147,7 @@ export function NavRailButton({
       title={label}
       data-testid={testId}
     >
-      <span>{icon}</span>
+      <span style={iconStyle}>{icon}</span>
       <span style={labelStyle}>{label}</span>
     </button>
   );

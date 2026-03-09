@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { CockpitShell, NavRailButton, TopStrip } from './components/CockpitShell';
 import { CockpitCenter } from './components/CockpitCenter';
 import { LeaderboardRail } from './components/LeaderboardRail';
@@ -23,6 +24,134 @@ type StorageLike = {
   setItem?: (key: string, value: string) => void;
   removeItem?: (key: string) => void;
 };
+
+function RailSectionHeader({
+  label,
+  testId,
+}: {
+  label: string;
+  testId: string;
+}) {
+  const wrapperStyle: CSSProperties = {
+    width: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 'var(--space-1)',
+    marginBottom: '2px',
+  };
+
+  const labelStyle: CSSProperties = {
+    fontSize: '7px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: 'var(--color-text-muted)',
+    textAlign: 'center',
+    lineHeight: 1.15,
+    width: 58,
+    overflowWrap: 'anywhere',
+  };
+
+  return (
+    <div style={wrapperStyle}>
+      <div style={labelStyle} data-testid={testId}>
+        {label}
+      </div>
+      <div
+        style={{
+          width: 28,
+          borderTop: '1px solid var(--color-border-700)',
+        }}
+      />
+    </div>
+  );
+}
+
+function NavGlyph({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
+
+function OrchestrationIcon() {
+  return (
+    <NavGlyph>
+      <rect x="1.8" y="2.4" width="12.4" height="11.2" rx="2" />
+      <path d="M4.5 6.1 6.9 8l-2.4 1.9" />
+      <path d="M8.7 10h2.9" />
+    </NavGlyph>
+  );
+}
+
+function FilesIcon() {
+  return (
+    <NavGlyph>
+      <path d="M2.1 5.1h11.8l-1 7.2H3.1L2.1 5.1Z" />
+      <path d="M2.1 5.1V3.4c0-.8.6-1.4 1.4-1.4h2.7l1.1 1.3h4.9c.8 0 1.4.6 1.4 1.4v.4" />
+    </NavGlyph>
+  );
+}
+
+function RaceIcon() {
+  return (
+    <NavGlyph>
+      <path d="M2.4 12.6V3.3m0 0h7.9l-1.9 2 1.9 2H2.4m4.1 5.3h6.9m-6.9-2.4h6.9" />
+    </NavGlyph>
+  );
+}
+
+function ResultsIcon() {
+  return (
+    <NavGlyph>
+      <path d="M2.3 13.2h11.4" />
+      <rect x="3.1" y="7.7" width="2.2" height="3.8" />
+      <rect x="6.9" y="5.6" width="2.2" height="5.9" />
+      <rect x="10.7" y="3.7" width="2.2" height="7.8" />
+    </NavGlyph>
+  );
+}
+
+function ReviewIcon() {
+  return (
+    <NavGlyph>
+      <path d="M3 2.5h10v11H3z" />
+      <path d="M5.2 5.2h5.6M5.2 7.4h5.6M5.2 9.6h3.6" />
+      <path d="m10.6 10.2 1 1 1.9-2" />
+    </NavGlyph>
+  );
+}
+
+function DoctorIcon() {
+  return (
+    <NavGlyph>
+      <path d="M8 2.2 3.2 4.1v3.4c0 3.1 2 5 4.8 6.3 2.8-1.3 4.8-3.2 4.8-6.3V4.1L8 2.2Z" />
+      <path d="M8 5.2v4.6M5.7 7.5h4.6" />
+    </NavGlyph>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <NavGlyph>
+      <path d="M3.2 4.1h9.6M3.2 8h9.6M3.2 11.9h9.6" />
+      <circle cx="5.2" cy="4.1" r="1.2" />
+      <circle cx="10.8" cy="8" r="1.2" />
+      <circle cx="7.2" cy="11.9" r="1.2" />
+    </NavGlyph>
+  );
+}
 
 function getStorage(): StorageLike | null {
   if (typeof window === 'undefined') return null;
@@ -288,92 +417,78 @@ export default function App() {
     };
   }, [activeRunId, push]);
 
+  const railGroupStyle: CSSProperties = {
+    width: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 'var(--space-1)',
+    paddingBottom: 'var(--space-2)',
+  };
+
   const leftRail = (
     <>
-      <div
-        style={{
-          fontSize: '8px',
-          textTransform: 'uppercase',
-          letterSpacing: '0.08em',
-          color: 'var(--color-text-muted)',
-          marginBottom: 'var(--space-1)',
-        }}
-        data-testid="nav-group-orchestration-label"
-      >
-        Orch
+      <div style={railGroupStyle}>
+        <RailSectionHeader label="Orchestration" testId="nav-group-orchestration-label" />
+        <NavRailButton
+          icon={<OrchestrationIcon />}
+          label="Orchestration"
+          active={activeView === 'orchestration'}
+          onClick={() => setActiveView('orchestration')}
+          data-testid="nav-orchestration"
+        />
+        <NavRailButton
+          icon={<FilesIcon />}
+          label="Files"
+          active={activeView === 'files'}
+          onClick={() => setActiveView('files')}
+          data-testid="nav-files"
+        />
       </div>
-      <NavRailButton
-        icon="▸"
-        label="Orchestration"
-        active={activeView === 'orchestration'}
-        onClick={() => setActiveView('orchestration')}
-        data-testid="nav-orchestration"
-      />
-      <NavRailButton
-        icon="⊞"
-        label="Files"
-        active={activeView === 'files'}
-        onClick={() => setActiveView('files')}
-        data-testid="nav-files"
-      />
 
-      <div
-        style={{
-          width: 28,
-          borderTop: '1px solid var(--color-border-700)',
-          margin: 'var(--space-1) 0',
-        }}
-      />
-
-      <div
-        style={{
-          fontSize: '8px',
-          textTransform: 'uppercase',
-          letterSpacing: '0.08em',
-          color: 'var(--color-text-muted)',
-          marginBottom: 'var(--space-1)',
-        }}
-        data-testid="nav-group-race-label"
-      >
-        Race
+      <div style={railGroupStyle}>
+        <RailSectionHeader label="Race" testId="nav-group-race-label" />
+        <NavRailButton
+          icon={<RaceIcon />}
+          label="Race"
+          active={activeView === 'cockpit'}
+          onClick={() => setActiveView('cockpit')}
+          data-testid="nav-cockpit"
+        />
+        <NavRailButton
+          icon={<ResultsIcon />}
+          label="Results"
+          active={activeView === 'results'}
+          onClick={() => setActiveView('results')}
+          data-testid="nav-results"
+        />
+        <NavRailButton
+          icon={<ReviewIcon />}
+          label="Review"
+          active={activeView === 'review'}
+          onClick={() => setActiveView('review')}
+          data-testid="nav-review"
+        />
       </div>
-      <NavRailButton
-        icon="⟁"
-        label="Race"
-        active={activeView === 'cockpit'}
-        onClick={() => setActiveView('cockpit')}
-        data-testid="nav-cockpit"
-      />
-      <NavRailButton
-        icon="≡"
-        label="Results"
-        active={activeView === 'results'}
-        onClick={() => setActiveView('results')}
-        data-testid="nav-results"
-      />
-      <NavRailButton
-        icon="⊟"
-        label="Review"
-        active={activeView === 'review'}
-        onClick={() => setActiveView('review')}
-        data-testid="nav-review"
-      />
 
       <div style={{ flex: 1 }} />
-      <NavRailButton
-        icon="◉"
-        label={'Hydra\nDoctor'}
-        active={activeView === 'preflight'}
-        onClick={() => setActiveView('preflight')}
-        data-testid="nav-preflight"
-      />
-      <NavRailButton
-        icon="⚙"
-        label="Settings"
-        active={activeView === 'settings'}
-        onClick={() => setActiveView('settings')}
-        data-testid="nav-settings"
-      />
+      <div style={railGroupStyle}>
+        <RailSectionHeader label="System" testId="nav-group-system-label" />
+        <NavRailButton
+          icon={<DoctorIcon />}
+          label={'Hydra\nDoctor'}
+          active={activeView === 'preflight'}
+          onClick={() => setActiveView('preflight')}
+          data-testid="nav-preflight"
+        />
+        <NavRailButton
+          icon={<SettingsIcon />}
+          label="Settings"
+          active={activeView === 'settings'}
+          onClick={() => setActiveView('settings')}
+          data-testid="nav-settings"
+        />
+      </div>
     </>
   );
 
