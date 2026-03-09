@@ -29,7 +29,7 @@ export function CockpitShell({ leftRail, topStrip, center, rightRail }: CockpitS
   };
 
   const leftRailStyle: CSSProperties = {
-    width: 56,
+    width: 64,
     flexShrink: 0,
     borderRight: '1px solid var(--color-border-700)',
     backgroundColor: 'var(--color-bg-900)',
@@ -102,9 +102,10 @@ export function NavRailButton({
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
-    width: 44,
-    height: 44,
+    gap: 1,
+    width: 54,
+    height: 58,
+    padding: '2px',
     borderRadius: 'var(--radius-md)',
     border: 'none',
     background: active
@@ -118,13 +119,16 @@ export function NavRailButton({
   };
 
   const labelStyle: CSSProperties = {
-    fontSize: '9px',
-    lineHeight: 1.05,
+    fontSize: '8px',
+    lineHeight: 1.1,
     letterSpacing: '0.02em',
     textTransform: 'uppercase',
     fontWeight: 'var(--weight-medium)' as unknown as number,
     textAlign: 'center',
-    whiteSpace: 'pre-line',
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    maxWidth: '100%',
   };
 
   return (
@@ -188,10 +192,20 @@ export function TopStrip({
   };
 
   const brandStyle: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 'var(--space-2)',
     fontSize: 'var(--text-lg)',
     fontWeight: 'var(--weight-bold)' as unknown as number,
     color: 'var(--color-green-400)',
     fontFamily: 'var(--font-mono)',
+    flexShrink: 0,
+  };
+
+  const brandIconStyle: CSSProperties = {
+    width: 16,
+    height: 16,
+    objectFit: 'contain',
     flexShrink: 0,
   };
 
@@ -267,7 +281,10 @@ export function TopStrip({
     <div style={containerStyle} data-testid="top-strip-content">
       <style>{`@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
       <div style={leftStyle}>
-        <span style={brandStyle}>⟁ Hydra</span>
+        <span style={brandStyle}>
+          <img src="/hydra-icon.ico" alt="" aria-hidden="true" style={brandIconStyle} />
+          <span>Hydra</span>
+        </span>
         <span style={workspaceStyle} data-testid="strip-workspace">
           {workspacePath ?? '(current repo)'}
         </span>
