@@ -23,6 +23,7 @@ import type {
   MergePreviewPayload,
   MergeExecutionPayload,
   InteractiveSessionStarted,
+  InteractiveSessionSummary,
   InteractiveEventBatch,
   InteractiveStreamEvent,
   InteractiveWriteAck,
@@ -165,6 +166,48 @@ const MOCK_CODEX_DIFF: CandidateDiffPayload = {
   ],
 };
 
+function makeInteractiveStarted(
+  overrides: Partial<InteractiveSessionStarted> = {},
+): InteractiveSessionStarted {
+  const sessionId = overrides.sessionId ?? 'test-session-1';
+  const sourceRoot = overrides.sourceRoot ?? '/workspace';
+  const repoRoot = overrides.repoRoot ?? sourceRoot;
+  const worktreePath = overrides.worktreePath ?? null;
+  const effectiveCwd = overrides.effectiveCwd ?? worktreePath ?? sourceRoot;
+  return {
+    sessionId,
+    agentKey: overrides.agentKey ?? 'claude',
+    status: overrides.status ?? 'running',
+    startedAt: overrides.startedAt ?? new Date().toISOString(),
+    sourceRoot,
+    repoRoot,
+    effectiveCwd,
+    worktreePath,
+  };
+}
+
+function makeInteractiveSummary(
+  sessionId: string,
+  agentKey: string,
+  overrides: Partial<InteractiveSessionSummary> = {},
+): InteractiveSessionSummary {
+  const sourceRoot = overrides.sourceRoot ?? '/workspace';
+  const repoRoot = overrides.repoRoot ?? sourceRoot;
+  const worktreePath = overrides.worktreePath ?? null;
+  const effectiveCwd = overrides.effectiveCwd ?? worktreePath ?? sourceRoot;
+  return {
+    sessionId,
+    agentKey,
+    status: overrides.status ?? 'running',
+    startedAt: overrides.startedAt ?? new Date().toISOString(),
+    eventCount: overrides.eventCount ?? 0,
+    sourceRoot,
+    repoRoot,
+    effectiveCwd,
+    worktreePath,
+  };
+}
+
 function setupDefaultMocks() {
   vi.mocked(ipc.listAdapters).mockResolvedValue(MOCK_ADAPTERS);
   vi.mocked(ipc.runPreflight).mockResolvedValue(MOCK_PREFLIGHT);
@@ -205,12 +248,7 @@ function setupDefaultMocks() {
     lastPushEmitError: null,
     lastPushEmitAt: null,
   });
-  vi.mocked(ipc.startInteractiveSession).mockResolvedValue({
-    sessionId: 'test-session-1',
-    agentKey: 'claude',
-    status: 'running',
-    startedAt: new Date().toISOString(),
-  } as InteractiveSessionStarted);
+  vi.mocked(ipc.startInteractiveSession).mockResolvedValue(makeInteractiveStarted());
   vi.mocked(ipc.pollInteractiveEvents).mockResolvedValue({
     sessionId: 'test-session-1',
     events: [
@@ -688,20 +726,8 @@ describe('Smoke Test 9: Top-strip thread selector jumps to orchestration thread'
   it('switches view and focuses selected thread from top strip', async () => {
     const user = userEvent.setup();
     vi.mocked(ipc.listInteractiveSessions).mockResolvedValue([
-      {
-        sessionId: 'alpha1111-session-id',
-        agentKey: 'claude',
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        eventCount: 3,
-      },
-      {
-        sessionId: 'beta2222-session-id',
-        agentKey: 'codex',
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        eventCount: 5,
-      },
+      makeInteractiveSummary('alpha1111-session-id', 'claude', { eventCount: 3 }),
+      makeInteractiveSummary('beta2222-session-id', 'codex', { eventCount: 5 }),
     ]);
 
     render(<App />);
@@ -727,20 +753,8 @@ describe('Smoke Test 9b: Side thread selection is not overridden after top-strip
   it('keeps side-selected thread focused when multiple same-agent threads exist', async () => {
     const user = userEvent.setup();
     vi.mocked(ipc.listInteractiveSessions).mockResolvedValue([
-      {
-        sessionId: 'samea111-session-id',
-        agentKey: 'claude',
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        eventCount: 2,
-      },
-      {
-        sessionId: 'samea222-session-id',
-        agentKey: 'claude',
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        eventCount: 4,
-      },
+      makeInteractiveSummary('samea111-session-id', 'claude', { eventCount: 2 }),
+      makeInteractiveSummary('samea222-session-id', 'claude', { eventCount: 4 }),
     ]);
 
     render(<App />);
@@ -772,8 +786,11 @@ describe('Smoke Test 9: Create and select orchestration session', () => {
     await waitFor(() => {
       expect(screen.getByTestId('create-panel')).toBeInTheDocument();
       expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument();
+      expect(screen.getByTestId('thread-root-input')).toBeInTheDocument();
     });
 
+    await user.clear(screen.getByTestId('thread-root-input'));
+    await user.type(screen.getByTestId('thread-root-input'), '/tmp/thread-root-a');
     await user.type(screen.getByTestId('session-task-prompt'), 'Fix the bug');
     await user.click(screen.getByTestId('confirm-create-session'));
 
@@ -782,6 +799,7 @@ describe('Smoke Test 9: Create and select orchestration session', () => {
         expect.objectContaining({
           agentKey: 'claude',
           taskPrompt: 'Fix the bug',
+          cwd: '/tmp/thread-root-a',
         }),
       );
     });
@@ -1926,12 +1944,17 @@ describe('Smoke Test 33: Duplicate adapter sessions can be created from orchestr
     let sessionCounter = 0;
     vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
       sessionCounter++;
-      return {
+      const worktreePath = sessionCounter > 1
+        ? `/tmp/.hydra/worktrees/interactive/dup-session-${sessionCounter}/${req.agentKey}`
+        : null;
+      return makeInteractiveStarted({
         sessionId: `dup-session-${sessionCounter}`,
         agentKey: req.agentKey,
-        status: 'running',
-        startedAt: new Date().toISOString(),
-      } as InteractiveSessionStarted;
+        sourceRoot: '/tmp/thread-root-dup',
+        repoRoot: '/tmp/thread-root-dup',
+        effectiveCwd: worktreePath ?? '/tmp/thread-root-dup',
+        worktreePath,
+      });
     });
     vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
       sessionId,
@@ -1977,6 +2000,7 @@ describe('Smoke Test 33: Duplicate adapter sessions can be created from orchestr
     // Both sessions exist as distinct lane cards
     expect(screen.getByTestId('session-item-dup-session-1')).toBeInTheDocument();
     expect(screen.getByTestId('session-item-dup-session-2')).toBeInTheDocument();
+    expect(screen.getByTestId('lane-worktree-dup-session-2')).toBeInTheDocument();
 
     // IPC called twice with codex
     expect(ipc.startInteractiveSession).toHaveBeenCalledTimes(2);
@@ -1991,12 +2015,10 @@ describe('Smoke Test 34: Lane selection changes focused terminal source', () => 
     let sessionCounter = 0;
     vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
       sessionCounter++;
-      return {
+      return makeInteractiveStarted({
         sessionId: `focus-session-${sessionCounter}`,
         agentKey: req.agentKey,
-        status: 'running',
-        startedAt: new Date().toISOString(),
-      } as InteractiveSessionStarted;
+      });
     });
     vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
       sessionId,
@@ -2055,12 +2077,10 @@ describe('Smoke Test 35: Per-lane input isolation under duplicate adapters', () 
     let sessionCounter = 0;
     vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
       sessionCounter++;
-      return {
+      return makeInteractiveStarted({
         sessionId: `input-session-${sessionCounter}`,
         agentKey: req.agentKey,
-        status: 'running',
-        startedAt: new Date().toISOString(),
-      } as InteractiveSessionStarted;
+      });
     });
     vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
       sessionId,
@@ -2124,12 +2144,10 @@ describe('Smoke Test 36: Per-lane stop isolation under duplicate adapters', () =
     let sessionCounter = 0;
     vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
       sessionCounter++;
-      return {
+      return makeInteractiveStarted({
         sessionId: `stop-session-${sessionCounter}`,
         agentKey: req.agentKey,
-        status: 'running',
-        startedAt: new Date().toISOString(),
-      } as InteractiveSessionStarted;
+      });
     });
     vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
       sessionId,
@@ -2178,12 +2196,10 @@ describe('Smoke Test 37: Lane-local polling error does not collapse sibling lane
     let sessionCounter = 0;
     vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
       sessionCounter++;
-      return {
+      return makeInteractiveStarted({
         sessionId: `err-session-${sessionCounter}`,
         agentKey: req.agentKey,
-        status: 'running',
-        startedAt: new Date().toISOString(),
-      } as InteractiveSessionStarted;
+      });
     });
 
     // Session 1 polls successfully; session 2 fails
@@ -2796,12 +2812,10 @@ describe('P4.9.5: Terminal-only input model', () => {
     let sessionCounter = 0;
     vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
       sessionCounter++;
-      return {
+      return makeInteractiveStarted({
         sessionId: `concurrent-${sessionCounter}`,
         agentKey: req.agentKey,
-        status: 'running',
-        startedAt: new Date().toISOString(),
-      } as InteractiveSessionStarted;
+      });
     });
     vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => ({
       sessionId,
