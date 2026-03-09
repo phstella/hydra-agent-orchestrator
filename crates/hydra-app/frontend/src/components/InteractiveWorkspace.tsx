@@ -1011,22 +1011,21 @@ export function InteractiveWorkspace({
   const reduceRailMotion = streamTransport === 'push' || sessions.some((session) => session.status === 'running');
   const transportDiagnostic = useMemo(() => {
     const details: string[] = [];
-    if (pushAttachDiagnostics.reason !== 'pending' && pushAttachDiagnostics.reason !== 'attached') {
-      details.push(`attach:${pushAttachDiagnostics.reason}`);
+    const pushEmitErrorCount = backendTransportDiagnostics?.pushEmitErrorCount ?? 0;
+    const attachReason = pushAttachDiagnostics.reason;
+    const showAttachReason = attachReason === 'runtime_block'
+      || attachReason === 'payload_mismatch';
+    const showRetryDetail = pushAttachDiagnostics.retryScheduled
+      && (attachReason === 'runtime_block' || attachReason === 'payload_mismatch');
+
+    if (showAttachReason) {
+      details.push(`attach:${attachReason}`);
     }
-    if (pushAttachDiagnostics.retryScheduled) {
-      details.push(
-        `retry ${pushAttachDiagnostics.attempts}/${PUSH_ATTACH_MAX_ATTEMPTS}`,
-      );
-    } else if (
-      streamTransport === 'poll'
-      && pushAttachDiagnostics.attempts > 0
-      && pushAttachDiagnostics.reason !== 'pending'
-    ) {
-      details.push(`attempt ${pushAttachDiagnostics.attempts}/${PUSH_ATTACH_MAX_ATTEMPTS}`);
+    if (showRetryDetail) {
+      details.push(`retry ${pushAttachDiagnostics.attempts}/${PUSH_ATTACH_MAX_ATTEMPTS}`);
     }
-    if ((backendTransportDiagnostics?.pushEmitErrorCount ?? 0) > 0) {
-      details.push(`emit errors:${backendTransportDiagnostics?.pushEmitErrorCount ?? 0}`);
+    if (pushEmitErrorCount > 0) {
+      details.push(`emit errors:${pushEmitErrorCount}`);
     }
     if (details.length === 0) return null;
     return details.join(' · ');
@@ -1035,7 +1034,6 @@ export function InteractiveWorkspace({
     pushAttachDiagnostics.attempts,
     pushAttachDiagnostics.reason,
     pushAttachDiagnostics.retryScheduled,
-    streamTransport,
   ]);
   const transportDiagnosticDetail = useMemo(() => {
     const details: string[] = [];

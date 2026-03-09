@@ -280,7 +280,7 @@ export default function App() {
     }))
   ), [orchestrationSessions]);
 
-  const effectiveSelectedThreadId = orchestrationSelectionRequestId ?? orchestrationSelectedSessionId;
+  const topStripSelectedThreadId = orchestrationSelectionRequestId ?? orchestrationSelectedSessionId;
 
   const openExperimentalModal = useCallback((adapter: AdapterInfo) => {
     setExperimentalModal({ open: true, adapter });
@@ -546,7 +546,7 @@ export default function App() {
       experimentalCount={selectedExperimentalCount}
       activeThreadCount={activeThreadCount}
       threadOptions={topStripThreadOptions}
-      selectedThreadId={effectiveSelectedThreadId}
+      selectedThreadId={topStripSelectedThreadId}
       onSelectThread={handleTopStripThreadSelect}
     />
   );
@@ -638,7 +638,7 @@ export default function App() {
         return (
           <InteractiveWorkspace
             workspaceCwd={workspaceCwd}
-            selectedSessionIdOverride={effectiveSelectedThreadId}
+            selectedSessionIdOverride={orchestrationSelectionRequestId}
             onSessionSnapshotChange={handleOrchestrationSnapshotChange}
           />
         );

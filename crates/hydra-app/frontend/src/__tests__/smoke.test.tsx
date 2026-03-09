@@ -723,6 +723,46 @@ describe('Smoke Test 9: Top-strip thread selector jumps to orchestration thread'
   });
 });
 
+describe('Smoke Test 9b: Side thread selection is not overridden after top-strip jump', () => {
+  it('keeps side-selected thread focused when multiple same-agent threads exist', async () => {
+    const user = userEvent.setup();
+    vi.mocked(ipc.listInteractiveSessions).mockResolvedValue([
+      {
+        sessionId: 'samea111-session-id',
+        agentKey: 'claude',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        eventCount: 2,
+      },
+      {
+        sessionId: 'samea222-session-id',
+        agentKey: 'claude',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        eventCount: 4,
+      },
+    ]);
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('strip-thread-selector')).toBeEnabled();
+      expect(screen.getByTestId('session-item-samea111-session-id')).toBeInTheDocument();
+      expect(screen.getByTestId('session-item-samea222-session-id')).toBeInTheDocument();
+    });
+
+    await user.selectOptions(screen.getByTestId('strip-thread-selector'), 'samea222-session-id');
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-lane-label')).toHaveTextContent('claude · samea222');
+    });
+
+    await user.click(screen.getByTestId('session-item-samea111-session-id'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-lane-label')).toHaveTextContent('claude · samea111');
+    });
+  });
+});
+
 describe('Smoke Test 9: Create and select orchestration session', () => {
   it('creates session from orchestration create panel with IPC', async () => {
     const user = userEvent.setup();
@@ -877,7 +917,7 @@ describe('Smoke Test 11: P4.9.5 terminal-only input model', () => {
     });
   });
 
-  it('surfaces push attach listener_error diagnostics and keeps polling fallback active', async () => {
+  it('keeps polling fallback active without a noisy listener_error banner', async () => {
     vi.mocked(ipc.listenInteractiveEvents).mockResolvedValue({
       unlisten: null,
       reason: 'listener_error',
@@ -920,9 +960,7 @@ describe('Smoke Test 11: P4.9.5 terminal-only input model', () => {
     await waitFor(() => {
       expect(screen.getByText(/poll-fallback-line/)).toBeInTheDocument();
     });
-    await waitFor(() => {
-      expect(screen.getByTestId('terminal-transport-diagnostic')).toHaveTextContent('attach:listener_error');
-    });
+    expect(screen.queryByTestId('terminal-transport-diagnostic')).not.toBeInTheDocument();
     await waitFor(() => {
       expect(vi.mocked(ipc.listenInteractiveEvents).mock.calls.length).toBeGreaterThanOrEqual(3);
     }, { timeout: 3000 });
