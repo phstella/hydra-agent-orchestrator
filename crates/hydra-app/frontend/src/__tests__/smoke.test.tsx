@@ -679,6 +679,47 @@ describe('Smoke Test 8: Orchestration tab renders and shows empty state', () => 
       expect(screen.getByTestId('empty-session-state')).toBeInTheDocument();
     });
     expect(screen.getByTestId('terminal-empty-state')).toBeInTheDocument();
+    expect(screen.getByTestId('strip-active-threads-badge')).toHaveTextContent('0 active threads');
+    expect(screen.getByTestId('strip-thread-selector')).toBeDisabled();
+  });
+});
+
+describe('Smoke Test 9: Top-strip thread selector jumps to orchestration thread', () => {
+  it('switches view and focuses selected thread from top strip', async () => {
+    const user = userEvent.setup();
+    vi.mocked(ipc.listInteractiveSessions).mockResolvedValue([
+      {
+        sessionId: 'alpha1111-session-id',
+        agentKey: 'claude',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        eventCount: 3,
+      },
+      {
+        sessionId: 'beta2222-session-id',
+        agentKey: 'codex',
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        eventCount: 5,
+      },
+    ]);
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('strip-active-threads-badge')).toHaveTextContent('2 active threads');
+      expect(screen.getByTestId('strip-thread-selector')).toBeEnabled();
+    });
+
+    await user.click(screen.getByTestId('nav-cockpit'));
+    await waitFor(() => expect(screen.getByTestId('race-config-panel')).toBeInTheDocument());
+
+    await user.selectOptions(screen.getByTestId('strip-thread-selector'), 'beta2222-session-id');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('orchestration-console')).toBeInTheDocument();
+      expect(screen.getByTestId('terminal-lane-label')).toHaveTextContent('codex · beta2222');
+    });
   });
 });
 
@@ -1141,12 +1182,14 @@ describe('Smoke Test 13: Orchestration terminal handles stream errors and ANSI o
     });
 
     // Raw ANSI was preserved and passed to Terminal.write()
-    const instances = (globalThis as Record<string, unknown>).__xtermInstances as Array<{
-      __rawWrites: string[];
-    }>;
-    const termInstance = instances.find((t) => t.__rawWrites.length > 0);
-    expect(termInstance).toBeDefined();
-    expect(termInstance!.__rawWrites.some((w) => w.includes('\u001b[32m'))).toBe(true);
+    await waitFor(() => {
+      const instances = (globalThis as Record<string, unknown>).__xtermInstances as Array<{
+        __rawWrites: string[];
+      }>;
+      const termInstance = instances.find((t) => t.__rawWrites.length > 0);
+      expect(termInstance).toBeDefined();
+      expect(termInstance!.__rawWrites.some((w) => w.includes('\u001b[32m'))).toBe(true);
+    });
   });
 });
 

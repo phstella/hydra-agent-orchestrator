@@ -7,7 +7,10 @@ import { PreflightDashboard } from './components/PreflightDashboard';
 import { ExperimentalAdapterModal } from './components/ExperimentalAdapterModal';
 import { ResultsScoreboard } from './components/ResultsScoreboard';
 import { CandidateDiffReview } from './components/CandidateDiffReview';
-import { InteractiveWorkspace } from './components/InteractiveWorkspace';
+import {
+  InteractiveWorkspace,
+  type InteractiveWorkspaceSessionSnapshot,
+} from './components/InteractiveWorkspace';
 import { FileExplorer } from './components/FileExplorer';
 import { Card, Button, Badge } from './components/design-system';
 import { getRaceResult, listAdapters, pollRaceEvents, startRace } from './ipc';
@@ -209,6 +212,9 @@ export default function App() {
 
   const [raceAgents, setRaceAgents] = useState<string[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [orchestrationSessions, setOrchestrationSessions] = useState<InteractiveWorkspaceSessionSnapshot['sessions']>([]);
+  const [orchestrationSelectedSessionId, setOrchestrationSelectedSessionId] = useState<string | null>(null);
+  const [orchestrationSelectionRequestId, setOrchestrationSelectionRequestId] = useState<string | null>(null);
 
   const agentStatuses = useAgentStatuses(events, raceAgents, runStatus);
 
@@ -263,6 +269,18 @@ export default function App() {
   }, [workspaceDraft]);
 
   const workspaceDirty = workspaceDraft.trim() !== workspacePath.trim();
+  const activeThreadCount = useMemo(() => (
+    orchestrationSessions.filter((session) => session.status === 'running').length
+  ), [orchestrationSessions]);
+
+  const topStripThreadOptions = useMemo(() => (
+    orchestrationSessions.map((session) => ({
+      sessionId: session.sessionId,
+      label: `${session.agentKey} · ${session.sessionId.slice(0, 8)} · ${session.status}`,
+    }))
+  ), [orchestrationSessions]);
+
+  const effectiveSelectedThreadId = orchestrationSelectionRequestId ?? orchestrationSelectedSessionId;
 
   const openExperimentalModal = useCallback((adapter: AdapterInfo) => {
     setExperimentalModal({ open: true, adapter });
@@ -362,6 +380,24 @@ export default function App() {
     clear();
     setActiveView('cockpit');
   }, [clear]);
+
+  const handleOrchestrationSnapshotChange = useCallback((snapshot: InteractiveWorkspaceSessionSnapshot) => {
+    setOrchestrationSessions(snapshot.sessions);
+    setOrchestrationSelectedSessionId(snapshot.selectedSessionId);
+    setOrchestrationSelectionRequestId((current) => {
+      if (!current) return null;
+      if (snapshot.selectedSessionId === current) return null;
+      if (snapshot.sessions.length > 0 && !snapshot.sessions.some((session) => session.sessionId === current)) {
+        return null;
+      }
+      return current;
+    });
+  }, []);
+
+  const handleTopStripThreadSelect = useCallback((sessionId: string) => {
+    setActiveView('orchestration');
+    setOrchestrationSelectionRequestId(sessionId);
+  }, []);
 
   const handleSaveWorkspaceSettings = useCallback(() => {
     const normalized = workspaceDraft.trim();
@@ -508,6 +544,10 @@ export default function App() {
       runId={activeRunId}
       adapterCount={selectedAdapters.length}
       experimentalCount={selectedExperimentalCount}
+      activeThreadCount={activeThreadCount}
+      threadOptions={topStripThreadOptions}
+      selectedThreadId={effectiveSelectedThreadId}
+      onSelectThread={handleTopStripThreadSelect}
     />
   );
 
@@ -595,7 +635,13 @@ export default function App() {
         );
 
       case 'orchestration':
-        return <InteractiveWorkspace workspaceCwd={workspaceCwd} />;
+        return (
+          <InteractiveWorkspace
+            workspaceCwd={workspaceCwd}
+            selectedSessionIdOverride={effectiveSelectedThreadId}
+            onSessionSnapshotChange={handleOrchestrationSnapshotChange}
+          />
+        );
 
       case 'files':
         return <FileExplorer workspaceCwd={workspaceCwd} />;

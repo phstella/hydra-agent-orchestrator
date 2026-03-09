@@ -159,6 +159,15 @@ interface TopStripProps {
   runId: string | null;
   adapterCount: number;
   experimentalCount: number;
+  activeThreadCount: number;
+  threadOptions: TopStripThreadOption[];
+  selectedThreadId: string | null;
+  onSelectThread?: (sessionId: string) => void;
+}
+
+interface TopStripThreadOption {
+  sessionId: string;
+  label: string;
 }
 
 export function TopStrip({
@@ -167,6 +176,10 @@ export function TopStrip({
   runId,
   adapterCount,
   experimentalCount,
+  activeThreadCount,
+  threadOptions,
+  selectedThreadId,
+  onSelectThread,
 }: TopStripProps) {
   const isRunning = runStatus === 'running' || runStatus === 'starting';
   const isDone = runStatus === 'completed' || runStatus === 'failed';
@@ -257,6 +270,29 @@ export function TopStrip({
     color: 'var(--color-text-muted)',
   };
 
+  const activeThreadsBadgeStyle: CSSProperties = {
+    ...badgeStyle,
+    backgroundColor: 'color-mix(in srgb, var(--color-green-500) 14%, transparent)',
+    color: 'var(--color-green-300)',
+  };
+
+  const threadSelectorStyle: CSSProperties = {
+    height: 28,
+    minWidth: 210,
+    maxWidth: 280,
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--color-border-700)',
+    backgroundColor: 'var(--color-bg-900)',
+    color: 'var(--color-text-secondary)',
+    padding: '0 var(--space-2)',
+    fontFamily: 'var(--font-family)',
+    fontSize: 'var(--text-xs)',
+  };
+
+  const selectedThreadValue = selectedThreadId && threadOptions.some((option) => option.sessionId === selectedThreadId)
+    ? selectedThreadId
+    : '';
+
   return (
     <div style={containerStyle} data-testid="top-strip-content">
       <style>{`@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
@@ -291,6 +327,30 @@ export function TopStrip({
             {experimentalCount} experimental
           </span>
         )}
+        <span style={activeThreadsBadgeStyle} data-testid="strip-active-threads-badge">
+          {activeThreadCount} active threads
+        </span>
+        <select
+          value={selectedThreadValue}
+          onChange={(event) => {
+            const sessionId = event.target.value;
+            if (!sessionId) return;
+            onSelectThread?.(sessionId);
+          }}
+          disabled={threadOptions.length === 0 || !onSelectThread}
+          style={threadSelectorStyle}
+          data-testid="strip-thread-selector"
+          title="Jump to orchestration thread"
+        >
+          <option value="">
+            {threadOptions.length === 0 ? 'No threads' : 'Jump to thread'}
+          </option>
+          {threadOptions.map((option) => (
+            <option key={option.sessionId} value={option.sessionId}>
+              {option.label}
+            </option>
+          ))}
+        </select>
         <span style={versionStyle}>v0.1.0-alpha</span>
       </div>
     </div>

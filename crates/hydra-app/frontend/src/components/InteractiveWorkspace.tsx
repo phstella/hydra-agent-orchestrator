@@ -321,9 +321,20 @@ function countAdapterInstances(sessions: InteractiveSessionSummary[], adapterKey
 
 interface InteractiveWorkspaceProps {
   workspaceCwd: string | null;
+  selectedSessionIdOverride?: string | null;
+  onSessionSnapshotChange?: (snapshot: InteractiveWorkspaceSessionSnapshot) => void;
 }
 
-export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps) {
+export interface InteractiveWorkspaceSessionSnapshot {
+  sessions: InteractiveSessionSummary[];
+  selectedSessionId: string | null;
+}
+
+export function InteractiveWorkspace({
+  workspaceCwd,
+  selectedSessionIdOverride = null,
+  onSessionSnapshotChange,
+}: InteractiveWorkspaceProps) {
   // ---------------------------------------------------------------------------
   // Session state (all keyed by session_id — M4.8.2)
   // ---------------------------------------------------------------------------
@@ -957,6 +968,22 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
       terminalRef.current?.replaceChunks(replay);
     });
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!selectedSessionIdOverride) return;
+    if (selectedSessionIdRef.current === selectedSessionIdOverride) return;
+    const session = sessions.find((entry) => entry.sessionId === selectedSessionIdOverride);
+    if (!session) return;
+    selectedSessionIdRef.current = selectedSessionIdOverride;
+    setSelectedSessionId(selectedSessionIdOverride);
+    if (session.status === 'running') {
+      startPolling(selectedSessionIdOverride);
+    }
+  }, [selectedSessionIdOverride, sessions, startPolling]);
+
+  useEffect(() => {
+    onSessionSnapshotChange?.({ sessions, selectedSessionId });
+  }, [onSessionSnapshotChange, sessions, selectedSessionId]);
 
   // ---------------------------------------------------------------------------
   // Derived state for focused lane
