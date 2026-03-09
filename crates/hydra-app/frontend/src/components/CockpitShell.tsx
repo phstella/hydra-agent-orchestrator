@@ -215,6 +215,8 @@ export function TopStrip({
     height: 96,
     objectFit: 'contain',
     flexShrink: 0,
+    display: 'block',
+    filter: 'brightness(1.25) saturate(1.2) drop-shadow(0 0 8px rgba(33, 255, 196, 0.35))',
   };
 
   const workspaceStyle: CSSProperties = {
@@ -290,7 +292,7 @@ export function TopStrip({
       <style>{`@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
       <div style={leftStyle}>
         <span style={brandStyle}>
-          <img src="/hydra-icon.ico?v=2" alt="" aria-hidden="true" style={brandIconStyle} />
+          <img src="/hydra-icon.png?v=1" alt="" aria-hidden="true" style={brandIconStyle} />
           <span>Hydra</span>
         </span>
         <span style={workspaceStyle} data-testid="strip-workspace">
