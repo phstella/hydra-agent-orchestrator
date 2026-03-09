@@ -2351,8 +2351,8 @@ describe('Smoke Test 44: File Explorer shows entry-type icons', () => {
     await user.click(screen.getByTestId('nav-files'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('tree-icon-src')).toHaveTextContent('DIR');
-      expect(screen.getByTestId('tree-icon-README.md')).toHaveTextContent('MD');
+      expect(screen.getByTestId('tree-icon-src')).toHaveAttribute('title', 'icon-directory');
+      expect(screen.getByTestId('tree-icon-README.md')).toHaveAttribute('title', 'icon-markdown');
     });
   });
 });

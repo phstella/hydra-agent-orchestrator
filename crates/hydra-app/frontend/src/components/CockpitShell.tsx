@@ -203,8 +203,8 @@ export function TopStrip({
   };
 
   const brandIconStyle: CSSProperties = {
-    width: 16,
-    height: 16,
+    width: 22,
+    height: 22,
     objectFit: 'contain',
     flexShrink: 0,
   };

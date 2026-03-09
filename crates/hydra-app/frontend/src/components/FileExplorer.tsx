@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { Button } from './design-system';
 import {
   listDirectory,
@@ -37,35 +37,123 @@ function extensionFromName(name: string): string {
   return name.slice(idx + 1).toLowerCase();
 }
 
-function iconLabelForEntry(entry: FileTreeEntry): string {
-  if (entry.entryType === 'directory') return 'DIR';
-  if (entry.entryType === 'symlink') return 'LNK';
+type FileIconKind =
+  | 'directory'
+  | 'symlink'
+  | 'rust'
+  | 'typescript'
+  | 'javascript'
+  | 'json'
+  | 'markdown'
+  | 'config'
+  | 'shell'
+  | 'go'
+  | 'python'
+  | 'image'
+  | 'file';
+
+function iconKindForEntry(entry: FileTreeEntry): FileIconKind {
+  if (entry.entryType === 'directory') return 'directory';
+  if (entry.entryType === 'symlink') return 'symlink';
 
   const ext = extensionFromName(entry.name);
-  if (ext === 'rs') return 'RS';
-  if (ext === 'ts' || ext === 'tsx') return 'TS';
-  if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') return 'JS';
-  if (ext === 'json') return 'JSON';
-  if (ext === 'md' || ext === 'mdx') return 'MD';
-  if (ext === 'yml' || ext === 'yaml' || ext === 'toml' || ext === 'ini') return 'CFG';
-  if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return 'SH';
-  if (ext === 'go') return 'GO';
-  if (ext === 'py') return 'PY';
+  if (ext === 'rs') return 'rust';
+  if (ext === 'ts' || ext === 'tsx') return 'typescript';
+  if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') return 'javascript';
+  if (ext === 'json') return 'json';
+  if (ext === 'md' || ext === 'mdx') return 'markdown';
+  if (ext === 'yml' || ext === 'yaml' || ext === 'toml' || ext === 'ini') return 'config';
+  if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return 'shell';
+  if (ext === 'go') return 'go';
+  if (ext === 'py') return 'python';
   if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'gif' || ext === 'ico' || ext === 'svg') {
-    return 'IMG';
+    return 'image';
   }
-  return 'FILE';
+  return 'file';
 }
 
-function iconColorForEntry(entry: FileTreeEntry): string {
-  const icon = iconLabelForEntry(entry);
-  if (icon === 'DIR') return 'var(--color-marine-400)';
-  if (icon === 'RS' || icon === 'GO' || icon === 'PY' || icon === 'TS' || icon === 'JS') {
+function iconColorForKind(kind: FileIconKind): string {
+  if (kind === 'directory') return 'var(--color-marine-400)';
+  if (
+    kind === 'rust'
+    || kind === 'go'
+    || kind === 'python'
+    || kind === 'typescript'
+    || kind === 'javascript'
+  ) {
     return 'var(--color-green-400)';
   }
-  if (icon === 'MD' || icon === 'JSON' || icon === 'CFG') return 'var(--color-warning-400)';
-  if (icon === 'IMG') return 'var(--color-danger-400)';
+  if (kind === 'markdown' || kind === 'json' || kind === 'config') return 'var(--color-warning-400)';
+  if (kind === 'image') return 'var(--color-danger-400)';
   return 'var(--color-text-muted)';
+}
+
+function renderTreeIcon(kind: FileIconKind, expanded: boolean): ReactNode {
+  switch (kind) {
+    case 'directory':
+      return expanded ? (
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+          <path d="M1.5 6.5h13l-1.2 6H2.7L1.5 6.5Z" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M1.5 6.5V4.2c0-.9.7-1.7 1.7-1.7h3l1.1 1.2h5.5c1 0 1.7.7 1.7 1.7v1.1" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+          <path d="M1.5 4.2c0-.9.7-1.7 1.7-1.7h3l1.1 1.2h5.5c1 0 1.7.7 1.7 1.7v6.4c0 .9-.7 1.7-1.7 1.7H3.2c-.9 0-1.7-.7-1.7-1.7V4.2Z" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      );
+    case 'symlink':
+      return (
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+          <path d="M6 10.5H4.7a2.7 2.7 0 0 1 0-5.4H6" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M10 5.1h1.3a2.7 2.7 0 1 1 0 5.4H10" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M6.4 8h3.2" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      );
+    case 'rust':
+      return (
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M8 4.6v6.8M4.6 8h6.8" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      );
+    case 'typescript':
+    case 'javascript':
+    case 'go':
+    case 'python':
+    case 'shell':
+      return (
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+          <rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M5 8h6M8 5v6" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      );
+    case 'json':
+    case 'config':
+    case 'markdown':
+      return (
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+          <path d="M4 1.8h5l3 3v9.4H4V1.8Z" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M9 1.8V5h3" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      );
+    case 'image':
+      return (
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+          <rect x="1.8" y="2.3" width="12.4" height="11.4" rx="1.8" stroke="currentColor" strokeWidth="1.2" />
+          <circle cx="5.6" cy="6" r="1.1" fill="currentColor" />
+          <path d="m3.5 11.6 2.6-2.3 2.1 1.7 2.3-2.2 2 2.8" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      );
+    case 'file':
+    default:
+      return (
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+          <path d="M4 1.8h5l3 3v9.4H4V1.8Z" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M9 1.8V5h3" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M5.5 8.1h5M5.5 10.2h5" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      );
+  }
 }
 
 function languageFromPath(path: string): string {
@@ -693,6 +781,7 @@ function TreeNode({
   const isDir = entry.entryType === 'directory';
   const isExpanded = expanded.has(entry.path);
   const children = isExpanded ? expanded.get(entry.path) ?? [] : [];
+  const iconKind = iconKindForEntry(entry);
   const isSelected = !isDir
     && selectedFilePath !== null
     && normalizePath(selectedFilePath) === normalizePath(entry.path);
@@ -724,13 +813,13 @@ function TreeNode({
 
   const iconStyle: CSSProperties = {
     flexShrink: 0,
-    minWidth: 24,
+    width: 16,
+    height: 16,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     textAlign: 'center',
-    fontSize: '10px',
-    border: '1px solid var(--color-border-700)',
-    borderRadius: 4,
-    padding: '0 4px',
-    color: iconColorForEntry(entry),
+    color: iconColorForKind(iconKind),
   };
 
   const handleClick = () => {
@@ -751,8 +840,12 @@ function TreeNode({
         <span style={chevronStyle}>
           {isDir ? (isExpanded ? '▾' : '▸') : ' '}
         </span>
-        <span style={iconStyle} data-testid={`tree-icon-${entry.name}`}>
-          {iconLabelForEntry(entry)}
+        <span
+          style={iconStyle}
+          data-testid={`tree-icon-${entry.name}`}
+          title={`icon-${iconKind}`}
+        >
+          {renderTreeIcon(iconKind, isExpanded)}
         </span>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {entry.name}
