@@ -165,6 +165,10 @@ pub struct InteractiveSessionStarted {
     pub agent_key: String,
     pub status: String,
     pub started_at: String,
+    pub source_root: String,
+    pub repo_root: String,
+    pub effective_cwd: String,
+    pub worktree_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,6 +226,10 @@ pub struct InteractiveSessionSummary {
     pub status: String,
     pub started_at: String,
     pub event_count: u64,
+    pub source_root: String,
+    pub repo_root: String,
+    pub effective_cwd: String,
+    pub worktree_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

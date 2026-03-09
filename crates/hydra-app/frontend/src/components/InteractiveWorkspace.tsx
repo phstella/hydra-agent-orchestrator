@@ -367,6 +367,7 @@ export function InteractiveWorkspace({
   const [allowExperimental, setAllowExperimental] = useState(false);
   const [experimentalAcknowledged, setExperimentalAcknowledged] = useState(false);
   const [unsafeMode, setUnsafeMode] = useState(false);
+  const [threadRootInput, setThreadRootInput] = useState(workspaceCwd ?? '');
 
   // ---------------------------------------------------------------------------
   // Polling refs (session_id keyed — M4.8.2)
@@ -552,6 +553,12 @@ export function InteractiveWorkspace({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (workspaceCwd && threadRootInput.trim().length === 0) {
+      setThreadRootInput(workspaceCwd);
+    }
+  }, [workspaceCwd, threadRootInput]);
 
   // ---------------------------------------------------------------------------
   // Transport selection — prefer push stream in Tauri, fallback to polling.
@@ -845,12 +852,15 @@ export function InteractiveWorkspace({
 
     try {
       const initialPrompt = showPromptComposer ? taskPrompt.trim() : '';
+      const targetThreadRoot = threadRootInput.trim().length > 0
+        ? threadRootInput.trim()
+        : (workspaceCwd ?? null);
       const result = await startInteractiveSession({
         agentKey,
         taskPrompt: initialPrompt,
         allowExperimental: allowExperimental && experimentalAcknowledged,
         unsafeMode,
-        cwd: workspaceCwd,
+        cwd: targetThreadRoot,
         cols: 120,
         rows: 30,
       });
@@ -861,6 +871,10 @@ export function InteractiveWorkspace({
         status: result.status,
         startedAt: result.startedAt,
         eventCount: 0,
+        sourceRoot: result.sourceRoot,
+        repoRoot: result.repoRoot,
+        effectiveCwd: result.effectiveCwd,
+        worktreePath: result.worktreePath,
       };
 
       setSessions((prev) => [newSession, ...prev]);
@@ -891,6 +905,7 @@ export function InteractiveWorkspace({
     unsafeMode,
     streamTransport,
     needsExperimentalConfirmation,
+    threadRootInput,
     workspaceCwd,
   ]);
 
@@ -1246,7 +1261,46 @@ export function InteractiveWorkspace({
             style={{ marginBottom: 'var(--space-1)', fontSize: '10px', color: 'var(--color-text-muted)' }}
             data-testid="interactive-workspace-path"
           >
-            Workspace: {workspaceCwd ?? '(current repository)'}
+            Thread Folder
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
+            <input
+              type="text"
+              value={threadRootInput}
+              onChange={(e) => setThreadRootInput(e.target.value)}
+              placeholder={workspaceCwd ?? '/path/to/project'}
+              data-testid="thread-root-input"
+              style={{
+                width: '100%',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--color-border-700)',
+                backgroundColor: 'var(--color-bg-900)',
+                color: 'var(--color-text-primary)',
+                padding: 'var(--space-1) var(--space-2)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--text-xs)',
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => setThreadRootInput(workspaceCwd ?? '')}
+              data-testid="thread-root-use-workspace"
+              style={{
+                border: '1px solid var(--color-border-700)',
+                backgroundColor: 'var(--color-surface-800)',
+                color: 'var(--color-text-secondary)',
+                borderRadius: 'var(--radius-md)',
+                padding: 'var(--space-1) var(--space-2)',
+                cursor: 'pointer',
+                fontSize: 'var(--text-xs)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Use Workspace
+            </button>
+          </div>
+          <div style={{ marginBottom: 'var(--space-1)', fontSize: '10px', color: 'var(--color-text-muted)' }}>
+            Default workspace: {workspaceCwd ?? '(current repository)'}
           </div>
           <div style={{ marginBottom: 'var(--space-1)', fontSize: '10px', color: 'var(--color-text-muted)' }}>
             Deploy creates the thread. Send normal prompts directly in the terminal.

@@ -497,6 +497,10 @@ interface MockInteractiveSession {
   agentKey: string;
   status: string;
   startedAt: string;
+  sourceRoot: string;
+  repoRoot: string;
+  effectiveCwd: string;
+  worktreePath: string | null;
   eventCursor: number;
   events: Array<{
     sessionId: string;
@@ -659,6 +663,10 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
       const agentKey = (request.agentKey as string) ?? 'claude';
       const allowExp = (request.allowExperimental as boolean) ?? false;
       const unsafeModeReq = (request.unsafeMode as boolean) ?? false;
+      const sourceRoot = typeof request.cwd === 'string' && request.cwd.trim().length > 0
+        ? request.cwd.trim()
+        : '/workspace';
+      const repoRoot = sourceRoot;
 
       const adapter = MOCK_ADAPTERS.find((a) => a.key === agentKey);
       if (!adapter) {
@@ -676,11 +684,24 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
       }
 
       const sessionId = `mock-session-${Date.now()}`;
+      const startedAt = new Date().toISOString();
+      const hasActiveSameSource = Array.from(mockInteractiveSessions.values()).some(
+        (session) => session.status === 'running' && session.sourceRoot === sourceRoot,
+      );
+      const worktreePath = hasActiveSameSource
+        ? `${repoRoot}/.hydra/worktrees/interactive/${sessionId}/${agentKey}`
+        : null;
+      const effectiveCwd = worktreePath ?? sourceRoot;
+
       mockInteractiveSessions.set(sessionId, {
         sessionId,
         agentKey,
         status: 'running',
-        startedAt: new Date().toISOString(),
+        startedAt,
+        sourceRoot,
+        repoRoot,
+        effectiveCwd,
+        worktreePath,
         eventCursor: 0,
         events: buildMockInteractiveEvents(sessionId, agentKey),
       });
@@ -688,7 +709,11 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
         sessionId,
         agentKey,
         status: 'running',
-        startedAt: new Date().toISOString(),
+        startedAt,
+        sourceRoot,
+        repoRoot,
+        effectiveCwd,
+        worktreePath,
       } as T;
     }
     case 'poll_interactive_events': {
@@ -781,6 +806,10 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
         status: s.status,
         startedAt: s.startedAt,
         eventCount: s.events.length,
+        sourceRoot: s.sourceRoot,
+        repoRoot: s.repoRoot,
+        effectiveCwd: s.effectiveCwd,
+        worktreePath: s.worktreePath,
       }));
       return summaries as T;
     }

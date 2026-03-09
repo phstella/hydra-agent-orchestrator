@@ -12,9 +12,10 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
 
 use hydra_core::artifact::{EventKind, RunEvent};
+use hydra_core::worktree::WorktreeService;
 
 use crate::ipc_types::*;
-use crate::state::{AppState, AppStateHandle};
+use crate::state::{AppState, AppStateHandle, InteractiveManagedWorktree, InteractiveSessionPaths};
 
 const MAX_EVENTS_PER_POLL: usize = 512;
 const INTERACTIVE_STREAM_EVENT: &str = "hydra://interactive-event";
@@ -558,6 +559,50 @@ fn cargo_hydra_cli_parts_without_binary() -> Vec<String> {
     ]
 }
 
+fn resolve_existing_directory(cwd: Option<&str>, context_message: &str) -> Result<PathBuf, IpcError> {
+    let selected_cwd = cwd.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+
+    let detail = selected_cwd
+        .map(|path| format!(" (path: {path})"))
+        .unwrap_or_default();
+
+    let target_dir = if let Some(path) = selected_cwd {
+        PathBuf::from(path)
+    } else {
+        std::env::current_dir()
+            .map_err(|e| IpcError::internal(format!("failed to resolve current directory: {e}")))?
+    };
+
+    if !target_dir.exists() {
+        return Err(IpcError::validation(format!(
+            "{context_message}{detail}. Path does not exist."
+        )));
+    }
+    if !target_dir.is_dir() {
+        return Err(IpcError::validation(format!(
+            "{context_message}{detail}. Path is not a directory."
+        )));
+    }
+
+    Ok(target_dir)
+}
+
+fn canonicalize_existing_directory(path: &Path) -> Result<PathBuf, IpcError> {
+    path.canonicalize().map_err(|e| {
+        IpcError::validation(format!(
+            "Unable to resolve workspace directory '{}' to an absolute path: {e}",
+            path.display()
+        ))
+    })
+}
+
 fn resolve_repo_root(cwd: Option<&str>, not_repo_message: &str) -> Result<PathBuf, IpcError> {
     resolve_repo_root_internal(cwd, not_repo_message, false)
 }
@@ -582,28 +627,10 @@ fn resolve_repo_root_internal(
             Some(trimmed)
         }
     });
-
+    let target_dir = resolve_existing_directory(cwd, not_repo_message)?;
     let detail = selected_cwd
         .map(|path| format!(" (path: {path})"))
         .unwrap_or_default();
-
-    let target_dir = if let Some(path) = selected_cwd {
-        PathBuf::from(path)
-    } else {
-        std::env::current_dir()
-            .map_err(|e| IpcError::internal(format!("failed to resolve current directory: {e}")))?
-    };
-
-    if !target_dir.exists() {
-        return Err(IpcError::validation(format!(
-            "{not_repo_message}{detail}. Path does not exist."
-        )));
-    }
-    if !target_dir.is_dir() {
-        return Err(IpcError::validation(format!(
-            "{not_repo_message}{detail}. Path is not a directory."
-        )));
-    }
 
     if let Ok(root) = try_repo_root_from_dir(&target_dir) {
         return Ok(root);
@@ -961,24 +988,6 @@ pub async fn start_interactive_session(
         .to_string());
     }
 
-    // M4.5: Working tree cleanliness check
-    let cwd = resolve_repo_root_with_auto_init(
-        request.cwd.as_deref(),
-        "Not inside a git repository; cannot start interactive session",
-    )
-    .map_err(|e| e.to_string())?;
-
-    let scope = resolve_working_tree_scope(&cwd, request.cwd.as_deref());
-    let wt_status = read_working_tree_status(&cwd, scope.as_deref());
-    if !wt_status.clean {
-        let detail = wt_status
-            .message
-            .unwrap_or_else(|| "Working tree has uncommitted changes.".to_string());
-        return Err(
-            IpcError::dirty_worktree(interactive_dirty_worktree_message(&detail)).to_string(),
-        );
-    }
-
     // P4.9.4: Direct external CLI invocation -- resolve binary and build
     // minimal interactive args without race-mode flags.
     let configured_path = {
@@ -1019,28 +1028,125 @@ pub async fn start_interactive_session(
 
     drop(config);
 
+    let source_root = resolve_existing_directory(
+        request.cwd.as_deref(),
+        "Not inside a git repository; cannot start interactive session",
+    )
+    .map_err(|e| e.to_string())?;
+    let source_root = canonicalize_existing_directory(&source_root).map_err(|e| e.to_string())?;
+
+    let repo_root = resolve_repo_root_with_auto_init(
+        request.cwd.as_deref(),
+        "Not inside a git repository; cannot start interactive session",
+    )
+    .map_err(|e| e.to_string())?;
+    let repo_root = canonicalize_existing_directory(&repo_root).map_err(|e| e.to_string())?;
+
+    let source_root_display = source_root.to_string_lossy().to_string();
+    let repo_root_display = repo_root.to_string_lossy().to_string();
+
+    let interactive = state.interactive.clone();
+    let has_same_source_running = interactive
+        .has_running_session_for_source(&source_root_display)
+        .await;
+
+    // M4.5: Working tree cleanliness check.
+    // Skip this guard when we will launch in a dedicated worktree because
+    // same-folder concurrent threads are intentionally isolated.
+    if !has_same_source_running {
+        let scope = if source_root != repo_root {
+            Some(source_root.clone())
+        } else {
+            None
+        };
+        let wt_status = read_working_tree_status(&repo_root, scope.as_deref());
+        if !wt_status.clean {
+            let detail = wt_status
+                .message
+                .unwrap_or_else(|| "Working tree has uncommitted changes.".to_string());
+            return Err(
+                IpcError::dirty_worktree(interactive_dirty_worktree_message(&detail)).to_string(),
+            );
+        }
+    }
+
+    let mut effective_cwd = source_root.clone();
+    let mut worktree_path: Option<String> = None;
+    let mut managed_worktree: Option<InteractiveManagedWorktree> = None;
+
+    if has_same_source_running {
+        let run_id = uuid::Uuid::parse_str(&session_id)
+            .map_err(|e| IpcError::internal(format!("invalid session_id for run id: {e}")).to_string())?;
+        let wt_base = repo_root.join(".hydra").join("worktrees").join("interactive");
+        let wt_service = WorktreeService::new(repo_root.clone(), wt_base);
+        let wt_info = wt_service
+            .create(run_id, &request.agent_key, "HEAD")
+            .await
+            .map_err(|e| {
+                IpcError::launch_error(format!(
+                    "Failed to create interactive worktree for '{}': {}",
+                    request.agent_key, e
+                ))
+                .to_string()
+            })?;
+
+        worktree_path = Some(wt_info.path.to_string_lossy().to_string());
+
+        if let Ok(relative) = source_root.strip_prefix(&repo_root) {
+            if !relative.as_os_str().is_empty() {
+                let candidate = wt_info.path.join(relative);
+                if candidate.exists() {
+                    effective_cwd = candidate;
+                } else {
+                    effective_cwd = wt_info.path.clone();
+                }
+            } else {
+                effective_cwd = wt_info.path.clone();
+            }
+        } else {
+            effective_cwd = wt_info.path.clone();
+        }
+
+        managed_worktree = Some(InteractiveManagedWorktree {
+            repo_root: repo_root_display.clone(),
+            run_id: run_id.to_string(),
+            agent_key: request.agent_key.clone(),
+            path: wt_info.path.to_string_lossy().to_string(),
+            branch: wt_info.branch,
+        });
+    }
+
+    let effective_cwd_display = effective_cwd.to_string_lossy().to_string();
+
     let pty_config = hydra_core::supervisor::pty::PtySessionConfig {
         program: binary_path.to_string_lossy().to_string(),
         args: interactive_args,
         env: vec![],
-        cwd: cwd.clone(),
+        cwd: effective_cwd.clone(),
         initial_cols: cols,
         initial_rows: rows,
     };
 
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(1024);
-    let pty_session = hydra_core::supervisor::pty::PtySession::spawn(pty_config, event_tx)
-        .map_err(|e| IpcError::launch_error(format!("PTY spawn failed: {e}")).to_string())?;
+    let pty_session = match hydra_core::supervisor::pty::PtySession::spawn(pty_config, event_tx) {
+        Ok(session) => session,
+        Err(e) => {
+            if let Some(worktree) = &managed_worktree {
+                cleanup_managed_worktree_on_launch_failure(worktree).await;
+            }
+            return Err(IpcError::launch_error(format!("PTY spawn failed: {e}")).to_string());
+        }
+    };
 
     // M4.6: Initialize session artifact writer
-    let hydra_root = cwd.join(".hydra");
+    let hydra_root = repo_root.join(".hydra");
     let is_experimental = adapter.tier() == hydra_core::adapter::AdapterTier::Experimental;
     let artifact_writer = match hydra_core::artifact::SessionArtifactWriter::init(
         &hydra_root,
         &session_id,
         &request.agent_key,
         &started_at,
-        &cwd.to_string_lossy(),
+        &effective_cwd_display,
         request.unsafe_mode,
         is_experimental,
     ) {
@@ -1051,12 +1157,18 @@ pub async fn start_interactive_session(
         }
     };
 
-    let interactive = state.interactive.clone();
     interactive
-        .register_session(
+        .register_session_with_paths(
             &session_id,
             &request.agent_key,
             &started_at,
+            InteractiveSessionPaths {
+                source_root: source_root_display.clone(),
+                repo_root: repo_root_display.clone(),
+                effective_cwd: effective_cwd_display.clone(),
+                worktree_path: worktree_path.clone(),
+                managed_worktree,
+            },
             pty_session,
             artifact_writer,
         )
@@ -1090,6 +1202,10 @@ pub async fn start_interactive_session(
         agent_key: request.agent_key,
         status: "running".to_string(),
         started_at,
+        source_root: source_root_display,
+        repo_root: repo_root_display,
+        effective_cwd: effective_cwd_display,
+        worktree_path,
     })
 }
 
@@ -1189,12 +1305,16 @@ pub async fn list_interactive_sessions(
     Ok(entries
         .into_iter()
         .map(
-            |(sid, agent_key, status, started_at, event_count)| InteractiveSessionSummary {
+            |(sid, agent_key, status, started_at, event_count, source_root, repo_root, effective_cwd, worktree_path)| InteractiveSessionSummary {
                 session_id: sid,
                 agent_key,
                 status,
                 started_at,
                 event_count,
+                source_root,
+                repo_root,
+                effective_cwd,
+                worktree_path,
             },
         )
         .collect())
@@ -2317,6 +2437,30 @@ fn interactive_dirty_worktree_message(detail: &str) -> String {
     }
 }
 
+async fn cleanup_managed_worktree_on_launch_failure(worktree: &InteractiveManagedWorktree) {
+    let repo_root = PathBuf::from(&worktree.repo_root);
+    let wt_base = repo_root.join(".hydra").join("worktrees").join("interactive");
+    let run_id = uuid::Uuid::parse_str(&worktree.run_id).unwrap_or_else(|_| uuid::Uuid::nil());
+    let info = hydra_core::worktree::WorktreeInfo {
+        path: PathBuf::from(&worktree.path),
+        branch: worktree.branch.clone(),
+        run_id,
+        agent_key: worktree.agent_key.clone(),
+    };
+    let service = WorktreeService::new(repo_root.clone(), wt_base);
+    if let Err(err) = service.force_cleanup(&info).await {
+        tracing::warn!(
+            session_run_id = %worktree.run_id,
+            agent_key = %worktree.agent_key,
+            repo_root = %worktree.repo_root,
+            worktree_path = %worktree.path,
+            branch = %worktree.branch,
+            error = %err,
+            "failed to cleanup interactive worktree after PTY launch failure"
+        );
+    }
+}
+
 /// P4.9.4: Build minimal interactive CLI args for direct external tool invocation.
 /// No race-mode flags (--output-format json, --verbose, --stream-json, etc.).
 fn build_interactive_args(
@@ -3036,11 +3180,17 @@ branch refs/heads/main
             agent_key: "claude".to_string(),
             status: "running".to_string(),
             started_at: "2026-02-24T00:00:00Z".to_string(),
+            source_root: "/repo".to_string(),
+            repo_root: "/repo".to_string(),
+            effective_cwd: "/repo".to_string(),
+            worktree_path: None,
         };
         let json = serde_json::to_string(&started).unwrap();
         assert!(json.contains("sessionId"));
         assert!(json.contains("agentKey"));
         assert!(json.contains("startedAt"));
+        assert!(json.contains("sourceRoot"));
+        assert!(json.contains("effectiveCwd"));
     }
 
     #[test]
@@ -3089,10 +3239,16 @@ branch refs/heads/main
             status: "running".to_string(),
             started_at: "2026-02-24T00:00:00Z".to_string(),
             event_count: 42,
+            source_root: "/repo".to_string(),
+            repo_root: "/repo".to_string(),
+            effective_cwd: "/repo".to_string(),
+            worktree_path: None,
         };
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("eventCount"));
         assert!(json.contains("\"eventCount\":42"));
+        assert!(json.contains("sourceRoot"));
+        assert!(json.contains("effectiveCwd"));
     }
 
     #[test]

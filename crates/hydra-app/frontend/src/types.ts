@@ -197,6 +197,10 @@ export interface InteractiveSessionStarted {
   agentKey: string;
   status: string;
   startedAt: string;
+  sourceRoot: string;
+  repoRoot: string;
+  effectiveCwd: string;
+  worktreePath: string | null;
 }
 
 export interface InteractiveStreamEvent {
@@ -242,6 +246,10 @@ export interface InteractiveSessionSummary {
   status: string;
   startedAt: string;
   eventCount: number;
+  sourceRoot: string;
+  repoRoot: string;
+  effectiveCwd: string;
+  worktreePath: string | null;
 }
 
 export interface InteractiveTransportDiagnostics {

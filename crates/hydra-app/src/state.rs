@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -8,6 +9,7 @@ use hydra_core::adapter::{AdapterRegistry, ProbeReport, ProbeRunner};
 use hydra_core::artifact::SessionArtifactWriter;
 use hydra_core::config::HydraConfig;
 use hydra_core::supervisor::pty::{PtyEvent, PtySession};
+use hydra_core::worktree::{WorktreeInfo, WorktreeService};
 
 use crate::ipc_types::{AgentStreamEvent, FileWatchEvent, InteractiveStreamEvent, RaceResult};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,11 +44,47 @@ impl RaceRuntime {
 // Interactive session runtime (M4.2)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone)]
+pub struct InteractiveManagedWorktree {
+    pub repo_root: String,
+    pub run_id: String,
+    pub agent_key: String,
+    pub path: String,
+    pub branch: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InteractiveSessionPaths {
+    pub source_root: String,
+    pub repo_root: String,
+    pub effective_cwd: String,
+    pub worktree_path: Option<String>,
+    pub managed_worktree: Option<InteractiveManagedWorktree>,
+}
+
+impl InteractiveSessionPaths {
+    pub fn for_primary_checkout(source_root: String, repo_root: String, effective_cwd: String) -> Self {
+        Self {
+            source_root,
+            repo_root,
+            effective_cwd,
+            worktree_path: None,
+            managed_worktree: None,
+        }
+    }
+}
+
 pub struct InteractiveSessionRuntime {
     pub session_id: String,
     pub agent_key: String,
     pub status: String,
     pub started_at: String,
+    pub source_root: String,
+    pub source_root_key: String,
+    pub repo_root: String,
+    pub effective_cwd: String,
+    pub worktree_path: Option<String>,
+    pub managed_worktree: Option<InteractiveManagedWorktree>,
     pub events: Vec<InteractiveStreamEvent>,
     pub event_base_cursor: u64,
     pub error: Option<String>,
@@ -58,12 +96,24 @@ pub struct InteractiveSessionRuntime {
 }
 
 impl InteractiveSessionRuntime {
-    fn new(session_id: String, agent_key: String, started_at: String) -> Self {
+    fn new(
+        session_id: String,
+        agent_key: String,
+        started_at: String,
+        paths: InteractiveSessionPaths,
+    ) -> Self {
+        let source_root_key = normalize_path_key(&paths.source_root);
         Self {
             session_id,
             agent_key,
             status: "running".to_string(),
             started_at,
+            source_root: paths.source_root,
+            source_root_key,
+            repo_root: paths.repo_root,
+            effective_cwd: paths.effective_cwd,
+            worktree_path: paths.worktree_path,
+            managed_worktree: paths.managed_worktree,
             events: Vec::new(),
             event_base_cursor: 0,
             error: None,
@@ -82,11 +132,12 @@ pub struct InteractiveStateHandle {
 }
 
 impl InteractiveStateHandle {
-    pub async fn register_session(
+    pub async fn register_session_with_paths(
         &self,
         session_id: &str,
         agent_key: &str,
         started_at: &str,
+        paths: InteractiveSessionPaths,
         pty_session: PtySession,
         artifact_writer: Option<SessionArtifactWriter>,
     ) {
@@ -95,10 +146,38 @@ impl InteractiveStateHandle {
             session_id.to_string(),
             agent_key.to_string(),
             started_at.to_string(),
+            paths,
         );
         runtime.pty_session = Some(pty_session);
         runtime.artifact_writer = artifact_writer.map(|w| Arc::new(Mutex::new(w)));
         sessions.insert(session_id.to_string(), runtime);
+    }
+
+    pub async fn register_session(
+        &self,
+        session_id: &str,
+        agent_key: &str,
+        started_at: &str,
+        pty_session: PtySession,
+        artifact_writer: Option<SessionArtifactWriter>,
+    ) {
+        let default_root = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .to_string_lossy()
+            .to_string();
+        self.register_session_with_paths(
+            session_id,
+            agent_key,
+            started_at,
+            InteractiveSessionPaths::for_primary_checkout(
+                default_root.clone(),
+                default_root.clone(),
+                default_root,
+            ),
+            pty_session,
+            artifact_writer,
+        )
+        .await;
     }
 
     pub async fn append_event(&self, session_id: &str, event: InteractiveStreamEvent) {
@@ -171,6 +250,14 @@ impl InteractiveStateHandle {
         sessions.get(session_id).map(|s| s.status.clone())
     }
 
+    pub async fn has_running_session_for_source(&self, source_root: &str) -> bool {
+        let source_key = normalize_path_key(source_root);
+        let sessions = self.sessions.lock().await;
+        sessions
+            .values()
+            .any(|s| s.status == "running" && s.source_root_key == source_key)
+    }
+
     pub async fn write_input(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
         let (writer, agent_key) = {
             let mut sessions = self.sessions.lock().await;
@@ -227,9 +314,24 @@ impl InteractiveStateHandle {
             .map_err(|e| format!("resize failed: {e}"))
     }
 
+    async fn take_managed_worktree(
+        &self,
+        session_id: &str,
+    ) -> Option<InteractiveManagedWorktree> {
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions.get_mut(session_id)?;
+        session.managed_worktree.take()
+    }
+
+    pub async fn cleanup_session_worktree(&self, session_id: &str) {
+        if let Some(worktree) = self.take_managed_worktree(session_id).await {
+            cleanup_managed_worktree(worktree).await;
+        }
+    }
+
     /// Stop a session. Returns (was_running, current_status). Idempotent.
     pub async fn stop_session(&self, session_id: &str) -> Result<(bool, String), String> {
-        let (was_running, status, writer, started_at) = {
+        let (was_running, status, writer, started_at, worktree) = {
             let mut sessions = self.sessions.lock().await;
             let session = sessions
                 .get_mut(session_id)
@@ -248,6 +350,7 @@ impl InteractiveStateHandle {
                 status,
                 session.artifact_writer.clone(),
                 session.started_at.clone(),
+                session.managed_worktree.take(),
             )
         };
 
@@ -262,12 +365,17 @@ impl InteractiveStateHandle {
                 let _ = writer.finalize("stopped", &ended_at, duration_ms);
             }
         }
+        if let Some(worktree) = worktree {
+            cleanup_managed_worktree(worktree).await;
+        }
         Ok((was_running, status))
     }
 
-    pub async fn list_sessions(&self) -> Vec<(String, String, String, String, u64)> {
+    pub async fn list_sessions(
+        &self,
+    ) -> Vec<(String, String, String, String, u64, String, String, String, Option<String>)> {
         let sessions = self.sessions.lock().await;
-        let mut entries: Vec<(String, String, String, String, u64)> = sessions
+        let mut entries: Vec<(String, String, String, String, u64, String, String, String, Option<String>)> = sessions
             .values()
             .map(|s| {
                 (
@@ -276,6 +384,10 @@ impl InteractiveStateHandle {
                     s.status.clone(),
                     s.started_at.clone(),
                     s.event_base_cursor + s.events.len() as u64,
+                    s.source_root.clone(),
+                    s.repo_root.clone(),
+                    s.effective_cwd.clone(),
+                    s.worktree_path.clone(),
                 )
             })
             .collect();
@@ -318,6 +430,7 @@ impl InteractiveStateHandle {
     /// Shutdown all running sessions. Called on app exit.
     pub async fn shutdown_all(&self) {
         let mut to_finalize: Vec<(Arc<Mutex<SessionArtifactWriter>>, String)> = Vec::new();
+        let mut worktrees_to_cleanup: Vec<InteractiveManagedWorktree> = Vec::new();
         let mut sessions = self.sessions.lock().await;
         for session in sessions.values_mut() {
             if session.status == "running" {
@@ -329,6 +442,9 @@ impl InteractiveStateHandle {
                 if let Some(ref writer) = session.artifact_writer {
                     to_finalize.push((writer.clone(), session.started_at.clone()));
                 }
+            }
+            if let Some(worktree) = session.managed_worktree.take() {
+                worktrees_to_cleanup.push(worktree);
             }
         }
         drop(sessions);
@@ -342,6 +458,10 @@ impl InteractiveStateHandle {
             let mut writer = writer.lock().await;
             let _ = writer.finalize("stopped", &ended_at, duration_ms);
         }
+
+        for worktree in worktrees_to_cleanup {
+            cleanup_managed_worktree(worktree).await;
+        }
     }
 }
 
@@ -354,6 +474,43 @@ where
 
 pub async fn shutdown_all_with_timeout(state: &InteractiveStateHandle, timeout: Duration) -> bool {
     completes_within_timeout(state.shutdown_all(), timeout).await
+}
+
+fn normalize_path_key(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        path.to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string()
+    }
+}
+
+async fn cleanup_managed_worktree(worktree: InteractiveManagedWorktree) {
+    let repo_root = PathBuf::from(&worktree.repo_root);
+    let worktree_path = PathBuf::from(&worktree.path);
+    let wt_base = repo_root.join(".hydra").join("worktrees").join("interactive");
+    let run_id = uuid::Uuid::parse_str(&worktree.run_id).unwrap_or_else(|_| uuid::Uuid::nil());
+    let info = WorktreeInfo {
+        path: worktree_path.clone(),
+        branch: worktree.branch.clone(),
+        run_id,
+        agent_key: worktree.agent_key.clone(),
+    };
+
+    let service = WorktreeService::new(repo_root.clone(), wt_base);
+    if let Err(err) = service.force_cleanup(&info).await {
+        tracing::warn!(
+            session_run_id = %worktree.run_id,
+            agent_key = %worktree.agent_key,
+            repo_root = %repo_root.display(),
+            worktree_path = %worktree_path.display(),
+            branch = %worktree.branch,
+            error = %err,
+            "failed to cleanup interactive managed worktree"
+        );
+    }
 }
 
 fn interactive_text_payload(field_name: &str, data: &[u8]) -> serde_json::Value {
@@ -436,6 +593,7 @@ pub fn spawn_pty_event_bridge_with_sink(
                             );
                         }
                         state.mark_completed(&session_id).await;
+                        state.cleanup_session_worktree(&session_id).await;
                         (
                             "session_completed".to_string(),
                             serde_json::json!({
@@ -458,6 +616,7 @@ pub fn spawn_pty_event_bridge_with_sink(
                                 writer.finalize("failed", &ended_at, duration.as_millis() as u64);
                         }
                         state.mark_failed(&session_id, &error).await;
+                        state.cleanup_session_worktree(&session_id).await;
                         (
                             "session_failed".to_string(),
                             serde_json::json!({
@@ -481,6 +640,7 @@ pub fn spawn_pty_event_bridge_with_sink(
                         let _ = writer.finalize("failed", &ended_at, duration.as_millis() as u64);
                     }
                     state.mark_failed(&session_id, error).await;
+                    state.cleanup_session_worktree(&session_id).await;
                     (
                         "session_failed".to_string(),
                         serde_json::json!({
@@ -994,6 +1154,73 @@ mod tests {
         assert_eq!(state.get_status("sb").await, Some("running".to_string()));
 
         state.stop_session("sb").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn interactive_running_source_detection_tracks_session_status() {
+        let state = new_interactive_state();
+        let source_root = std::env::temp_dir().join("hydra-source-a");
+        let source_str = source_root.to_string_lossy().to_string();
+
+        let (tx, _rx) = mpsc::channel(64);
+        let session = PtySession::spawn(sleep_pty_config(60), tx).unwrap();
+        state
+            .register_session_with_paths(
+                "src-a",
+                "claude",
+                "2026-02-24T00:00:00Z",
+                InteractiveSessionPaths::for_primary_checkout(
+                    source_str.clone(),
+                    source_str.clone(),
+                    source_str.clone(),
+                ),
+                session,
+                None,
+            )
+            .await;
+
+        assert!(state.has_running_session_for_source(&source_str).await);
+        state.stop_session("src-a").await.unwrap();
+        assert!(!state.has_running_session_for_source(&source_str).await);
+    }
+
+    #[tokio::test]
+    async fn interactive_list_sessions_exposes_path_metadata() {
+        let state = new_interactive_state();
+        let repo_root = std::env::temp_dir().join("hydra-list-meta");
+        let source_root = repo_root.join("service-a");
+        let worktree_path = repo_root.join(".hydra/worktrees/interactive/x/claude");
+
+        let (tx, _rx) = mpsc::channel(64);
+        let session = PtySession::spawn(sleep_pty_config(60), tx).unwrap();
+        state
+            .register_session_with_paths(
+                "meta-a",
+                "claude",
+                "2026-02-24T00:00:00Z",
+                InteractiveSessionPaths {
+                    source_root: source_root.to_string_lossy().to_string(),
+                    repo_root: repo_root.to_string_lossy().to_string(),
+                    effective_cwd: worktree_path.to_string_lossy().to_string(),
+                    worktree_path: Some(worktree_path.to_string_lossy().to_string()),
+                    managed_worktree: None,
+                },
+                session,
+                None,
+            )
+            .await;
+
+        let list = state.list_sessions().await;
+        assert_eq!(list.len(), 1);
+        let item = &list[0];
+        assert_eq!(item.0, "meta-a");
+        assert_eq!(item.1, "claude");
+        assert_eq!(item.5, source_root.to_string_lossy());
+        assert_eq!(item.6, repo_root.to_string_lossy());
+        assert_eq!(item.7, worktree_path.to_string_lossy());
+        assert_eq!(item.8.as_deref(), Some(worktree_path.to_string_lossy().as_ref()));
+
+        state.stop_session("meta-a").await.unwrap();
     }
 
     #[tokio::test]

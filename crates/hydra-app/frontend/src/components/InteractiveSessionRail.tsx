@@ -260,7 +260,49 @@ function LaneCard({
         </span>
       </div>
 
-      {/* Row 3: poll error indicator (M4.8.5) */}
+      {/* Row 3: effective thread path + worktree marker */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 'var(--space-1)',
+        }}
+      >
+        <span
+          style={{
+            fontSize: '10px',
+            color: 'var(--color-text-muted)',
+            fontFamily: 'var(--font-mono)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            minWidth: 0,
+          }}
+          title={session.effectiveCwd}
+          data-testid={`lane-path-${session.sessionId}`}
+        >
+          {session.effectiveCwd}
+        </span>
+        {session.worktreePath && (
+          <span
+            style={{
+              fontSize: '10px',
+              color: 'var(--color-warning-400)',
+              border: '1px solid color-mix(in srgb, var(--color-warning-500) 40%, transparent)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '0 var(--space-1)',
+              flexShrink: 0,
+            }}
+            title={session.worktreePath}
+            data-testid={`lane-worktree-${session.sessionId}`}
+          >
+            wt
+          </span>
+        )}
+      </div>
+
+      {/* Row 4: poll error indicator (M4.8.5) */}
       {pollError && (
         <div
           style={{
