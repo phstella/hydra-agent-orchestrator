@@ -7,6 +7,7 @@ use std::sync::{
 };
 
 use tauri::{Emitter, State};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
 use tokio::time::{sleep, Duration};
 
@@ -1933,6 +1934,8 @@ fn unsafe_mode_requirement_hint(adapter_key: &str) -> &'static str {
 // ---------------------------------------------------------------------------
 
 const MAX_FILE_WATCH_EVENTS_PER_POLL: usize = 512;
+const DEFAULT_FILE_PREVIEW_BYTES: usize = 128 * 1024;
+const MAX_FILE_PREVIEW_BYTES: usize = 1024 * 1024;
 
 fn file_watch_event_type(kind: &notify::EventKind) -> Option<&'static str> {
     use notify::event::ModifyKind;
@@ -1944,6 +1947,27 @@ fn file_watch_event_type(kind: &notify::EventKind) -> Option<&'static str> {
         notify::EventKind::Remove(_) => Some("delete"),
         _ => None,
     }
+}
+
+fn is_probably_binary(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    if bytes.iter().any(|b| *b == 0) {
+        return true;
+    }
+
+    let sample = &bytes[..bytes.len().min(4096)];
+    let mut control_count = 0usize;
+
+    for &b in sample {
+        let is_text = matches!(b, b'\t' | b'\n' | b'\r' | b' '..=b'~') || b >= 0x80;
+        if !is_text {
+            control_count += 1;
+        }
+    }
+
+    (control_count * 100) / sample.len() > 30
 }
 
 #[tauri::command]
@@ -2016,6 +2040,72 @@ pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
     Ok(DirectoryListing {
         path,
         entries,
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn read_file_preview(
+    path: String,
+    max_bytes: Option<usize>,
+) -> Result<FilePreview, String> {
+    let file_path = PathBuf::from(&path);
+    if !file_path.is_file() {
+        return Ok(FilePreview {
+            path,
+            content: None,
+            truncated: false,
+            is_binary: false,
+            size: None,
+            error: Some("Path is not a file".to_string()),
+        });
+    }
+
+    let preview_limit = max_bytes
+        .unwrap_or(DEFAULT_FILE_PREVIEW_BYTES)
+        .clamp(1024, MAX_FILE_PREVIEW_BYTES);
+
+    let metadata = tokio::fs::metadata(&file_path)
+        .await
+        .map_err(|e| format!("Failed to read metadata for {}: {e}", file_path.display()))?;
+    let size = Some(metadata.len());
+
+    let file = tokio::fs::File::open(&file_path)
+        .await
+        .map_err(|e| format!("Failed to open file {}: {e}", file_path.display()))?;
+
+    let mut buf = Vec::with_capacity(preview_limit + 1);
+    let bytes_read = file
+        .take((preview_limit + 1) as u64)
+        .read_to_end(&mut buf)
+        .await
+        .map_err(|e| format!("Failed to read file {}: {e}", file_path.display()))?;
+
+    let truncated = bytes_read > preview_limit;
+    if truncated {
+        buf.truncate(preview_limit);
+    }
+
+    let is_binary = is_probably_binary(&buf);
+    if is_binary {
+        return Ok(FilePreview {
+            path,
+            content: None,
+            truncated,
+            is_binary: true,
+            size,
+            error: None,
+        });
+    }
+
+    let content = String::from_utf8_lossy(&buf).into_owned();
+
+    Ok(FilePreview {
+        path,
+        content: Some(content),
+        truncated,
+        is_binary: false,
+        size,
         error: None,
     })
 }
@@ -2674,6 +2764,18 @@ index 3333333..4444444 100644
             file_watch_event_type(&EventKind::Remove(RemoveKind::Any)),
             Some("delete")
         );
+    }
+
+    #[test]
+    fn binary_detection_flags_nul_bytes() {
+        let data = b"hello\0world";
+        assert!(is_probably_binary(data));
+    }
+
+    #[test]
+    fn binary_detection_allows_utf8_text() {
+        let data = "fn main() {\n  println!(\"olá\");\n}\n".as_bytes();
+        assert!(!is_probably_binary(data));
     }
 
     #[test]

@@ -27,6 +27,7 @@ import type {
   InteractiveSessionSummary,
   InteractiveTransportDiagnostics,
   DirectoryListing,
+  FilePreview,
   FileWatcherStarted,
   FileWatchEventBatch,
   FileWatcherStopped,
@@ -273,6 +274,14 @@ export async function listenInteractiveEvents(
 export async function listDirectory(path: string): Promise<DirectoryListing> {
   const invoke = await getInvoke();
   return invoke('list_directory', { path });
+}
+
+export async function readFilePreview(
+  path: string,
+  maxBytes?: number,
+): Promise<FilePreview> {
+  const invoke = await getInvoke();
+  return invoke('read_file_preview', { path, maxBytes: maxBytes ?? null });
 }
 
 export async function startFileWatcher(root: string): Promise<FileWatcherStarted> {
@@ -796,6 +805,20 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
           { name: 'README.md', path: `${dirPath}/README.md`, entryType: 'file', size: 1024, modifiedAt: new Date().toISOString() },
           { name: '.gitignore', path: `${dirPath}/.gitignore`, entryType: 'file', size: 64, modifiedAt: new Date().toISOString() },
         ],
+        error: null,
+      } as T;
+    }
+
+    case 'read_file_preview': {
+      const filePath = (_args?.path as string) ?? '/workspace/README.md';
+      const lower = filePath.toLowerCase();
+      const isBinary = lower.endsWith('.png') || lower.endsWith('.ico') || lower.endsWith('.jpg');
+      return {
+        path: filePath,
+        content: isBinary ? null : `# Mock Preview\n\nPreview for ${filePath}\n`,
+        truncated: false,
+        isBinary,
+        size: isBinary ? 4096 : 256,
         error: null,
       } as T;
     }

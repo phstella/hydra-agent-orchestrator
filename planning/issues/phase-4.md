@@ -381,17 +381,19 @@ File explorer implementation; terminal renderer fidelity work.
 Operators lack a reliable live repository tree inside Hydra while agents are changing files, leading to stale context and external-tool dependency.
 
 ## Scope
-Add a `File Explorer` tab showing the full workspace tree. Auto-update from filesystem watcher events only, with a manual `Refresh` button for explicit resync.
+Add a `File Explorer` tab showing the full workspace tree. Auto-update from filesystem watcher events only, with a manual `Refresh` button for explicit resync. Include entry-type icon affordances and an inline text/code preview pane.
 
 ## Acceptance Criteria
 - [ ] Explorer renders full repository tree rooted at active workspace (`workspaceCwd`) with no default hiding.
 - [ ] Tree updates on watcher events (`create/modify/delete/rename`) without manual page refresh.
 - [ ] Manual `Refresh` triggers full tree resync.
+- [ ] Tree rows show entry-type icons for quick scanning (directory/file categories).
+- [ ] Selecting a text/code file shows inline preview content; binary files show an explicit non-previewable state.
 - [ ] Watcher lifecycle is correctly handled on workspace switch and app shutdown.
 - [ ] UI remains responsive for large repositories and event bursts.
 
 ## Out of Scope
-Symbol indexing, semantic code graph, built-in diff viewer inside explorer.
+Symbol indexing, semantic code graph, full IDE-grade syntax highlighting.
 
 ## Dependencies
 - P4.9.1, M1.3

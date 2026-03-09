@@ -3,15 +3,17 @@ import type { CSSProperties } from 'react';
 import { Button } from './design-system';
 import {
   listDirectory,
+  readFilePreview,
   startFileWatcher,
   pollFileWatchEvents,
   stopFileWatcher,
 } from '../ipc';
-import type { FileTreeEntry, FileWatchEvent } from '../types';
+import type { FileTreeEntry, FileWatchEvent, FilePreview } from '../types';
 
 const WATCH_POLL_INTERVAL_MS = 1_000;
 const WATCH_POLL_RETRY_MS = 3_000;
 const DEBOUNCE_REFRESH_MS = 300;
+const DEFAULT_PREVIEW_BYTES = 96 * 1024;
 
 function normalizePath(path: string): string {
   return path.replace(/\\/g, '/');
@@ -21,6 +23,66 @@ function parentDirectory(path: string, fallback: string): string {
   const lastSlash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   if (lastSlash <= 0) return fallback;
   return path.slice(0, lastSlash);
+}
+
+function fileNameFromPath(path: string): string {
+  const normalized = normalizePath(path);
+  const idx = normalized.lastIndexOf('/');
+  return idx >= 0 ? normalized.slice(idx + 1) : normalized;
+}
+
+function extensionFromName(name: string): string {
+  const idx = name.lastIndexOf('.');
+  if (idx < 0 || idx === name.length - 1) return '';
+  return name.slice(idx + 1).toLowerCase();
+}
+
+function iconLabelForEntry(entry: FileTreeEntry): string {
+  if (entry.entryType === 'directory') return 'DIR';
+  if (entry.entryType === 'symlink') return 'LNK';
+
+  const ext = extensionFromName(entry.name);
+  if (ext === 'rs') return 'RS';
+  if (ext === 'ts' || ext === 'tsx') return 'TS';
+  if (ext === 'js' || ext === 'jsx' || ext === 'mjs' || ext === 'cjs') return 'JS';
+  if (ext === 'json') return 'JSON';
+  if (ext === 'md' || ext === 'mdx') return 'MD';
+  if (ext === 'yml' || ext === 'yaml' || ext === 'toml' || ext === 'ini') return 'CFG';
+  if (ext === 'sh' || ext === 'bash' || ext === 'zsh') return 'SH';
+  if (ext === 'go') return 'GO';
+  if (ext === 'py') return 'PY';
+  if (ext === 'png' || ext === 'jpg' || ext === 'jpeg' || ext === 'gif' || ext === 'ico' || ext === 'svg') {
+    return 'IMG';
+  }
+  return 'FILE';
+}
+
+function iconColorForEntry(entry: FileTreeEntry): string {
+  const icon = iconLabelForEntry(entry);
+  if (icon === 'DIR') return 'var(--color-marine-400)';
+  if (icon === 'RS' || icon === 'GO' || icon === 'PY' || icon === 'TS' || icon === 'JS') {
+    return 'var(--color-green-400)';
+  }
+  if (icon === 'MD' || icon === 'JSON' || icon === 'CFG') return 'var(--color-warning-400)';
+  if (icon === 'IMG') return 'var(--color-danger-400)';
+  return 'var(--color-text-muted)';
+}
+
+function languageFromPath(path: string): string {
+  const name = fileNameFromPath(path).toLowerCase();
+  if (name === 'cargo.toml' || name.endsWith('.toml')) return 'toml';
+  if (name.endsWith('.rs')) return 'rust';
+  if (name.endsWith('.ts')) return 'typescript';
+  if (name.endsWith('.tsx')) return 'tsx';
+  if (name.endsWith('.js')) return 'javascript';
+  if (name.endsWith('.jsx')) return 'jsx';
+  if (name.endsWith('.json')) return 'json';
+  if (name.endsWith('.md') || name.endsWith('.mdx')) return 'markdown';
+  if (name.endsWith('.yml') || name.endsWith('.yaml')) return 'yaml';
+  if (name.endsWith('.py')) return 'python';
+  if (name.endsWith('.go')) return 'go';
+  if (name.endsWith('.sh') || name.endsWith('.bash') || name.endsWith('.zsh')) return 'shell';
+  return 'text';
 }
 
 interface FileExplorerProps {
@@ -34,9 +96,15 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
   const [error, setError] = useState<string | null>(null);
   const [watcherId, setWatcherId] = useState<string | null>(null);
   const [watchError, setWatchError] = useState<string | null>(null);
+
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [preview, setPreview] = useState<FilePreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollCursor = useRef(0);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previewRequestId = useRef(0);
 
   const effectivePath = workspaceCwd ?? '.';
 
@@ -81,6 +149,38 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
   }, []);
 
   // -------------------------------------------------------------------------
+  // Load file preview
+  // -------------------------------------------------------------------------
+  const loadPreview = useCallback(async (path: string) => {
+    const requestId = ++previewRequestId.current;
+    setPreviewLoading(true);
+    try {
+      const result = await readFilePreview(path, DEFAULT_PREVIEW_BYTES);
+      if (previewRequestId.current !== requestId) return;
+      setPreview(result);
+    } catch (err) {
+      if (previewRequestId.current !== requestId) return;
+      setPreview({
+        path,
+        content: null,
+        truncated: false,
+        isBinary: false,
+        size: null,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      if (previewRequestId.current === requestId) {
+        setPreviewLoading(false);
+      }
+    }
+  }, []);
+
+  const handleSelectFile = useCallback((path: string) => {
+    setSelectedFilePath(path);
+    loadPreview(path);
+  }, [loadPreview]);
+
+  // -------------------------------------------------------------------------
   // Toggle expand/collapse
   // -------------------------------------------------------------------------
   const toggleDir = useCallback(
@@ -104,7 +204,10 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
   const handleRefresh = useCallback(() => {
     setExpanded(new Map());
     loadRoot();
-  }, [loadRoot]);
+    if (selectedFilePath) {
+      loadPreview(selectedFilePath);
+    }
+  }, [loadPreview, loadRoot, selectedFilePath]);
 
   // -------------------------------------------------------------------------
   // Debounced refresh for watcher events
@@ -113,8 +216,12 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
     (events: FileWatchEvent[]) => {
       if (events.length === 0) return;
 
-      // Determine which directories need refreshing
       const dirsToRefresh = new Set<string>();
+      const selectedParent = selectedFilePath
+        ? normalizePath(parentDirectory(selectedFilePath, effectivePath))
+        : null;
+      let refreshSelectedPreview = false;
+
       for (const evt of events) {
         const parentDir = parentDirectory(evt.path, effectivePath);
         if (normalizePath(parentDir) === normalizePath(effectivePath)) {
@@ -130,9 +237,20 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
             dirsToRefresh.add(altParentDir);
           }
         }
+
+        if (selectedFilePath) {
+          const normalizedEvent = normalizePath(evt.path);
+          const normalizedSelected = normalizePath(selectedFilePath);
+          if (
+            normalizedEvent === normalizedSelected
+            || (selectedParent !== null && normalizePath(parentDir) === selectedParent)
+          ) {
+            refreshSelectedPreview = true;
+          }
+        }
       }
 
-      if (dirsToRefresh.size === 0) return;
+      if (dirsToRefresh.size === 0 && !refreshSelectedPreview) return;
 
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
       debounceTimer.current = setTimeout(() => {
@@ -144,9 +262,12 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
             loadSubdir(dir);
           }
         }
+        if (refreshSelectedPreview && selectedFilePath) {
+          loadPreview(selectedFilePath);
+        }
       }, DEBOUNCE_REFRESH_MS);
     },
-    [effectivePath, expanded, loadRoot, loadSubdir],
+    [effectivePath, expanded, loadPreview, loadRoot, loadSubdir, selectedFilePath],
   );
 
   // -------------------------------------------------------------------------
@@ -239,6 +360,10 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
   // Initial load
   // -------------------------------------------------------------------------
   useEffect(() => {
+    setSelectedFilePath(null);
+    setPreview(null);
+    setPreviewLoading(false);
+    previewRequestId.current = 0;
     loadRoot();
   }, [loadRoot]);
 
@@ -278,6 +403,23 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
     whiteSpace: 'nowrap',
   };
 
+  const bodyStyle: CSSProperties = {
+    display: 'flex',
+    flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
+  };
+
+  const treePaneStyle: CSSProperties = {
+    width: '40%',
+    minWidth: 300,
+    borderRight: '1px solid var(--color-border-700)',
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+    overflow: 'hidden',
+  };
+
   const treeAreaStyle: CSSProperties = {
     flex: 1,
     overflowY: 'auto',
@@ -286,6 +428,56 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
     fontFamily: 'var(--font-mono)',
     fontSize: 'var(--text-xs)',
   };
+
+  const previewPaneStyle: CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    backgroundColor: 'var(--color-bg-950)',
+  };
+
+  const previewHeaderStyle: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 'var(--space-2)',
+    padding: 'var(--space-2) var(--space-3)',
+    borderBottom: '1px solid var(--color-border-700)',
+    backgroundColor: 'var(--color-bg-900)',
+    minHeight: 37,
+    flexShrink: 0,
+  };
+
+  const previewNameStyle: CSSProperties = {
+    fontFamily: 'var(--font-mono)',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-secondary)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  };
+
+  const previewBodyStyle: CSSProperties = {
+    flex: 1,
+    minHeight: 0,
+    overflow: 'auto',
+  };
+
+  const previewCodeStyle: CSSProperties = {
+    margin: 0,
+    padding: 'var(--space-3)',
+    minHeight: '100%',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '12px',
+    lineHeight: 1.5,
+    color: 'var(--color-text-secondary)',
+    whiteSpace: 'pre',
+    overflowX: 'auto',
+  };
+
+  const selectedFileName = selectedFilePath ? fileNameFromPath(selectedFilePath) : null;
 
   return (
     <div style={containerStyle} data-testid="file-explorer">
@@ -347,31 +539,137 @@ export function FileExplorer({ workspaceCwd }: FileExplorerProps) {
         </div>
       )}
 
-      <div style={treeAreaStyle} data-testid="file-tree">
-        {loading && rootEntries.length === 0 && (
-          <div style={{ color: 'var(--color-text-muted)', padding: 'var(--space-4)', textAlign: 'center' }}>
-            Loading...
-          </div>
-        )}
+      <div style={bodyStyle}>
+        <div style={treePaneStyle}>
+          <div style={treeAreaStyle} data-testid="file-tree">
+            {loading && rootEntries.length === 0 && (
+              <div style={{ color: 'var(--color-text-muted)', padding: 'var(--space-4)', textAlign: 'center' }}>
+                Loading...
+              </div>
+            )}
 
-        {!loading && rootEntries.length === 0 && !error && (
-          <div
-            style={{ color: 'var(--color-text-muted)', padding: 'var(--space-4)', textAlign: 'center' }}
-            data-testid="file-tree-empty"
-          >
-            No files found.
-          </div>
-        )}
+            {!loading && rootEntries.length === 0 && !error && (
+              <div
+                style={{ color: 'var(--color-text-muted)', padding: 'var(--space-4)', textAlign: 'center' }}
+                data-testid="file-tree-empty"
+              >
+                No files found.
+              </div>
+            )}
 
-        {rootEntries.map((entry) => (
-          <TreeNode
-            key={entry.path}
-            entry={entry}
-            depth={0}
-            expanded={expanded}
-            onToggle={toggleDir}
-          />
-        ))}
+            {rootEntries.map((entry) => (
+              <TreeNode
+                key={entry.path}
+                entry={entry}
+                depth={0}
+                expanded={expanded}
+                selectedFilePath={selectedFilePath}
+                onToggle={toggleDir}
+                onSelectFile={handleSelectFile}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div style={previewPaneStyle} data-testid="file-preview-pane">
+          <div style={previewHeaderStyle}>
+            <span style={previewNameStyle} data-testid="file-preview-name">
+              {selectedFileName ?? 'Select a file to preview'}
+            </span>
+            {selectedFilePath && (
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '10px',
+                  color: 'var(--color-text-muted)',
+                  border: '1px solid var(--color-border-700)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '1px 6px',
+                  flexShrink: 0,
+                }}
+                data-testid="file-preview-language"
+              >
+                {languageFromPath(selectedFilePath)}
+              </span>
+            )}
+          </div>
+
+          <div style={previewBodyStyle}>
+            {!selectedFilePath && (
+              <div
+                style={{
+                  color: 'var(--color-text-muted)',
+                  fontSize: 'var(--text-xs)',
+                  padding: 'var(--space-4)',
+                  textAlign: 'center',
+                }}
+                data-testid="file-preview-empty"
+              >
+                Select a file in the tree to preview text/code content.
+              </div>
+            )}
+
+            {selectedFilePath && previewLoading && (
+              <div
+                style={{
+                  color: 'var(--color-text-muted)',
+                  fontSize: 'var(--text-xs)',
+                  padding: 'var(--space-4)',
+                }}
+                data-testid="file-preview-loading"
+              >
+                Loading preview...
+              </div>
+            )}
+
+            {selectedFilePath && !previewLoading && preview?.error && (
+              <div
+                style={{
+                  color: 'var(--color-danger-400)',
+                  fontSize: 'var(--text-xs)',
+                  padding: 'var(--space-4)',
+                }}
+                data-testid="file-preview-error"
+              >
+                {preview.error}
+              </div>
+            )}
+
+            {selectedFilePath && !previewLoading && preview && !preview.error && preview.isBinary && (
+              <div
+                style={{
+                  color: 'var(--color-warning-400)',
+                  fontSize: 'var(--text-xs)',
+                  padding: 'var(--space-4)',
+                }}
+                data-testid="file-preview-binary"
+              >
+                Binary file preview is not available.{preview.size !== null ? ` (${formatSize(preview.size)})` : ''}
+              </div>
+            )}
+
+            {selectedFilePath && !previewLoading && preview && !preview.error && !preview.isBinary && (
+              <>
+                <pre style={previewCodeStyle} data-testid="file-preview-content">
+                  {preview.content ?? ''}
+                </pre>
+                {preview.truncated && (
+                  <div
+                    style={{
+                      padding: 'var(--space-2) var(--space-3)',
+                      borderTop: '1px solid var(--color-border-700)',
+                      color: 'var(--color-warning-400)',
+                      fontSize: 'var(--text-xs)',
+                    }}
+                    data-testid="file-preview-truncated"
+                  >
+                    Preview truncated to {formatSize(DEFAULT_PREVIEW_BYTES)}.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -381,16 +679,23 @@ function TreeNode({
   entry,
   depth,
   expanded,
+  selectedFilePath,
   onToggle,
+  onSelectFile,
 }: {
   entry: FileTreeEntry;
   depth: number;
   expanded: Map<string, FileTreeEntry[]>;
+  selectedFilePath: string | null;
   onToggle: (path: string) => void;
+  onSelectFile: (path: string) => void;
 }) {
   const isDir = entry.entryType === 'directory';
   const isExpanded = expanded.has(entry.path);
   const children = isExpanded ? expanded.get(entry.path) ?? [] : [];
+  const isSelected = !isDir
+    && selectedFilePath !== null
+    && normalizePath(selectedFilePath) === normalizePath(entry.path);
 
   const nodeStyle: CSSProperties = {
     display: 'flex',
@@ -398,32 +703,56 @@ function TreeNode({
     gap: 'var(--space-1)',
     padding: '2px var(--space-1)',
     paddingLeft: `calc(var(--space-3) * ${depth} + var(--space-1))`,
-    cursor: isDir ? 'pointer' : 'default',
+    cursor: 'pointer',
     color: isDir ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
     borderRadius: 'var(--radius-sm)',
+    backgroundColor: isSelected
+      ? 'color-mix(in srgb, var(--color-marine-500) 12%, transparent)'
+      : 'transparent',
   };
 
-  const iconStyle: CSSProperties = {
+  const chevronStyle: CSSProperties = {
     flexShrink: 0,
-    width: 16,
+    width: 12,
     textAlign: 'center',
-    fontSize: 'var(--text-xs)',
     color: isDir
       ? isExpanded
         ? 'var(--color-marine-400)'
         : 'var(--color-text-muted)'
-      : 'var(--color-text-muted)',
+      : 'transparent',
+  };
+
+  const iconStyle: CSSProperties = {
+    flexShrink: 0,
+    minWidth: 24,
+    textAlign: 'center',
+    fontSize: '10px',
+    border: '1px solid var(--color-border-700)',
+    borderRadius: 4,
+    padding: '0 4px',
+    color: iconColorForEntry(entry),
+  };
+
+  const handleClick = () => {
+    if (isDir) {
+      onToggle(entry.path);
+      return;
+    }
+    onSelectFile(entry.path);
   };
 
   return (
     <>
       <div
         style={nodeStyle}
-        onClick={isDir ? () => onToggle(entry.path) : undefined}
+        onClick={handleClick}
         data-testid={`tree-node-${entry.name}`}
       >
-        <span style={iconStyle}>
-          {isDir ? (isExpanded ? '▾' : '▸') : '·'}
+        <span style={chevronStyle}>
+          {isDir ? (isExpanded ? '▾' : '▸') : ' '}
+        </span>
+        <span style={iconStyle} data-testid={`tree-icon-${entry.name}`}>
+          {iconLabelForEntry(entry)}
         </span>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {entry.name}
@@ -434,14 +763,16 @@ function TreeNode({
           </span>
         )}
       </div>
-      {isExpanded &&
-        children.map((child) => (
+      {isExpanded
+        && children.map((child) => (
           <TreeNode
             key={child.path}
             entry={child}
             depth={depth + 1}
             expanded={expanded}
+            selectedFilePath={selectedFilePath}
             onToggle={onToggle}
+            onSelectFile={onSelectFile}
           />
         ))}
     </>

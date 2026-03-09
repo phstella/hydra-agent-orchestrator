@@ -293,6 +293,15 @@ export interface FileWatcherStopped {
   wasActive: boolean;
 }
 
+export interface FilePreview {
+  path: string;
+  content: string | null;
+  truncated: boolean;
+  isBinary: boolean;
+  size: number | null;
+  error: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

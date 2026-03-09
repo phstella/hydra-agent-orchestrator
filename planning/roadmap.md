@@ -268,6 +268,7 @@ Scope:
 1. Add top-level `File Explorer` tab in the app shell.
 2. Display full repository tree rooted at active workspace (`workspaceCwd`).
 3. Keep tree synchronized with current filesystem state while agents run.
+4. Add entry-type visual icons and an inline text/code preview pane.
 
 Technical requirements:
 1. Introduce backend IPC for repository tree snapshots (initial load + targeted subtree refresh).
@@ -277,11 +278,13 @@ Technical requirements:
 5. Show the full repository tree (no default path hiding, including ignored paths).
 6. Add explicit manual refresh control (`Refresh`) for user-invoked resync.
 7. Handle large repos with virtualization/lazy expansion to keep UI responsive.
+8. Support file preview reads via backend IPC with truncation/binary safeguards.
 
 Acceptance targets:
 1. Explorer reflects agent-written file changes without manual refresh.
 2. No stale tree state after agent completion.
 3. UI remains responsive under high file-event volume.
+4. Clicking a text/code file shows an inline preview; binary files show a non-previewable message.
 
 #### B. Orchestration Tab Restructure + Terminal Fidelity
 

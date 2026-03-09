@@ -250,6 +250,14 @@ function setupDefaultMocks() {
     entries: [],
     error: null,
   });
+  vi.mocked(ipc.readFilePreview).mockResolvedValue({
+    path: './README.md',
+    content: '# Mock Preview\n',
+    truncated: false,
+    isBinary: false,
+    size: 128,
+    error: null,
+  });
   vi.mocked(ipc.startFileWatcher).mockResolvedValue({
     watcherId: 'default-watcher',
     root: '.',
@@ -2324,6 +2332,65 @@ describe('Smoke Test 43: File Explorer watcher events trigger debounced refresh'
     await waitFor(() => {
       expect(screen.getByTestId('tree-node-after.txt')).toBeInTheDocument();
     }, { timeout: 3000 });
+  });
+});
+
+describe('Smoke Test 44: File Explorer shows entry-type icons', () => {
+  it('renders icon badges for directories and files', async () => {
+    vi.mocked(ipc.listDirectory).mockResolvedValue({
+      path: '/workspace',
+      entries: [
+        { name: 'src', path: '/workspace/src', entryType: 'directory', size: null, modifiedAt: '2026-02-25T00:00:00Z' },
+        { name: 'README.md', path: '/workspace/README.md', entryType: 'file', size: 1024, modifiedAt: '2026-02-25T00:00:00Z' },
+      ],
+      error: null,
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-files'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tree-icon-src')).toHaveTextContent('DIR');
+      expect(screen.getByTestId('tree-icon-README.md')).toHaveTextContent('MD');
+    });
+  });
+});
+
+describe('Smoke Test 45: File Explorer file preview pane', () => {
+  it('loads text preview when a file node is selected', async () => {
+    vi.mocked(ipc.listDirectory).mockResolvedValue({
+      path: '/workspace',
+      entries: [
+        { name: 'README.md', path: '/workspace/README.md', entryType: 'file', size: 1024, modifiedAt: '2026-02-25T00:00:00Z' },
+      ],
+      error: null,
+    });
+
+    vi.mocked(ipc.readFilePreview).mockResolvedValue({
+      path: '/workspace/README.md',
+      content: '# Hydra\n\nPreview body\n',
+      truncated: false,
+      isBinary: false,
+      size: 1024,
+      error: null,
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-files'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tree-node-README.md')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('tree-node-README.md'));
+
+    await waitFor(() => {
+      expect(ipc.readFilePreview).toHaveBeenCalledWith('/workspace/README.md', expect.any(Number));
+      expect(screen.getByTestId('file-preview-name')).toHaveTextContent('README.md');
+      expect(screen.getByTestId('file-preview-content')).toHaveTextContent('# Hydra');
+    });
   });
 });
 

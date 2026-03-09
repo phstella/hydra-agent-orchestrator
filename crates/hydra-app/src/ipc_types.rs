@@ -387,6 +387,17 @@ pub struct FileWatcherStopped {
     pub was_active: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilePreview {
+    pub path: String,
+    pub content: Option<String>,
+    pub truncated: bool,
+    pub is_binary: bool,
+    pub size: Option<u64>,
+    pub error: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Diff / Merge types (P3-UI-05)
 // ---------------------------------------------------------------------------
