@@ -29,14 +29,14 @@ export function CockpitShell({ leftRail, topStrip, center, rightRail }: CockpitS
   };
 
   const leftRailStyle: CSSProperties = {
-    width: 72,
+    width: 88,
     flexShrink: 0,
     borderRight: '1px solid var(--color-border-700)',
     backgroundColor: 'var(--color-bg-900)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    paddingTop: 'var(--space-3)',
+    padding: 'var(--space-3) 4px 4px',
     gap: 'var(--space-2)',
     overflowY: 'auto',
   };
@@ -103,9 +103,9 @@ export function NavRailButton({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 1,
-    width: 58,
-    height: 58,
-    padding: '2px',
+    width: 72,
+    height: 60,
+    padding: '3px',
     borderRadius: 'var(--radius-md)',
     border: 'none',
     background: active
@@ -118,8 +118,8 @@ export function NavRailButton({
   };
 
   const iconStyle: CSSProperties = {
-    width: 16,
-    height: 16,
+    width: 18,
+    height: 18,
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -130,7 +130,7 @@ export function NavRailButton({
     fontSize: '8px',
     lineHeight: 1.1,
     letterSpacing: '0.02em',
-    textTransform: 'uppercase',
+    textTransform: 'none',
     fontWeight: 'var(--weight-medium)' as unknown as number,
     textAlign: 'center',
     whiteSpace: 'normal',
@@ -211,8 +211,8 @@ export function TopStrip({
   };
 
   const brandIconStyle: CSSProperties = {
-    width: 28,
-    height: 28,
+    width: 36,
+    height: 36,
     objectFit: 'contain',
     flexShrink: 0,
   };
