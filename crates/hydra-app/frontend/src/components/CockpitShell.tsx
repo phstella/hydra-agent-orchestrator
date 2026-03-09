@@ -159,8 +159,6 @@ interface TopStripProps {
   runId: string | null;
   adapterCount: number;
   experimentalCount: number;
-  onRun?: () => void;
-  onStop?: () => void;
 }
 
 export function TopStrip({
@@ -169,8 +167,6 @@ export function TopStrip({
   runId,
   adapterCount,
   experimentalCount,
-  onRun,
-  onStop,
 }: TopStripProps) {
   const isRunning = runStatus === 'running' || runStatus === 'starting';
   const isDone = runStatus === 'completed' || runStatus === 'failed';
@@ -261,32 +257,6 @@ export function TopStrip({
     color: 'var(--color-text-muted)',
   };
 
-  const runBtnStyle: CSSProperties = {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 'var(--space-1)',
-    padding: 'var(--space-1) var(--space-3)',
-    borderRadius: 'var(--radius-md)',
-    border: 'none',
-    fontFamily: 'var(--font-family)',
-    fontSize: 'var(--text-sm)',
-    fontWeight: 'var(--weight-medium)' as unknown as number,
-    cursor: isRunning ? 'not-allowed' : 'pointer',
-    transition: 'all var(--transition-fast)',
-    background: 'var(--color-green-500)',
-    color: 'var(--color-text-inverse)',
-    opacity: isRunning ? 0.5 : 1,
-  };
-
-  const stopBtnStyle: CSSProperties = {
-    ...runBtnStyle,
-    background: 'var(--color-danger-500)',
-    color: 'var(--color-text-primary)',
-    cursor: 'pointer',
-    opacity: 1,
-  };
-
   return (
     <div style={containerStyle} data-testid="top-strip-content">
       <style>{`@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
@@ -320,26 +290,6 @@ export function TopStrip({
           >
             {experimentalCount} experimental
           </span>
-        )}
-        {onRun && !isRunning && (
-          <button
-            type="button"
-            style={runBtnStyle}
-            onClick={onRun}
-            data-testid="strip-run-btn"
-          >
-            ▶ Run
-          </button>
-        )}
-        {onStop && isRunning && (
-          <button
-            type="button"
-            style={stopBtnStyle}
-            onClick={onStop}
-            data-testid="strip-stop-btn"
-          >
-            ■ Stop
-          </button>
         )}
         <span style={versionStyle}>v0.1.0-alpha</span>
       </div>

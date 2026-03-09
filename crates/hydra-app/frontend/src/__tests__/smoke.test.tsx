@@ -1427,10 +1427,10 @@ describe('Smoke Test 23: Failed race can be retried from cockpit', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('race-config-panel')).toBeInTheDocument();
-      expect(screen.getByTestId('strip-run-btn')).toBeInTheDocument();
+      expect(screen.queryByTestId('strip-run-btn')).not.toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId('strip-run-btn'));
+    await user.click(screen.getByTestId('cockpit-start-race'));
 
     await waitFor(() => {
       expect(ipc.startRace).toHaveBeenCalledTimes(2);

@@ -508,7 +508,6 @@ export default function App() {
       runId={activeRunId}
       adapterCount={selectedAdapters.length}
       experimentalCount={selectedExperimentalCount}
-      onRun={runStatus === 'idle' || runStatus === 'failed' ? handleStartRace : undefined}
     />
   );
 
