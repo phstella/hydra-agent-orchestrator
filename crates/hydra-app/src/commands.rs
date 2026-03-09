@@ -190,7 +190,8 @@ pub async fn get_working_tree_status(cwd: Option<String>) -> Result<WorkingTreeS
         "Not inside a git repository; cannot inspect working tree",
     )
     .map_err(|e| e.to_string())?;
-    Ok(read_working_tree_status(&repo_root))
+    let scope = resolve_working_tree_scope(&repo_root, cwd.as_deref());
+    Ok(read_working_tree_status(&repo_root, scope.as_deref()))
 }
 
 // ---------------------------------------------------------------------------
@@ -967,7 +968,8 @@ pub async fn start_interactive_session(
     )
     .map_err(|e| e.to_string())?;
 
-    let wt_status = read_working_tree_status(&cwd);
+    let scope = resolve_working_tree_scope(&cwd, request.cwd.as_deref());
+    let wt_status = read_working_tree_status(&cwd, scope.as_deref());
     if !wt_status.clean {
         let detail = wt_status
             .message
@@ -1551,11 +1553,56 @@ fn parse_merge_preview_payload(
     ))
 }
 
-fn read_working_tree_status(repo_root: &Path) -> WorkingTreeStatus {
-    let output = std::process::Command::new("git")
+fn resolve_working_tree_scope(repo_root: &Path, cwd: Option<&str>) -> Option<PathBuf> {
+    let selected = cwd
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)?;
+
+    let absolute_selected = if selected.is_absolute() {
+        selected
+    } else {
+        std::env::current_dir().ok()?.join(selected)
+    };
+
+    let canonical_root = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
+    let canonical_selected = absolute_selected
+        .canonicalize()
+        .unwrap_or(absolute_selected);
+
+    if !canonical_selected.starts_with(&canonical_root) || canonical_selected == canonical_root {
+        return None;
+    }
+
+    Some(canonical_selected)
+}
+
+fn read_working_tree_status(repo_root: &Path, scope: Option<&Path>) -> WorkingTreeStatus {
+    let canonical_root = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
+    let relative_scope = scope.and_then(|scope_path| {
+        let canonical_scope = scope_path
+            .canonicalize()
+            .unwrap_or_else(|_| scope_path.to_path_buf());
+        canonical_scope
+            .strip_prefix(&canonical_root)
+            .ok()
+            .filter(|path| !path.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+    });
+
+    let mut command = std::process::Command::new("git");
+    command
         .args(["status", "--porcelain"])
-        .current_dir(repo_root)
-        .output();
+        .current_dir(repo_root);
+    if let Some(pathspec) = &relative_scope {
+        command.arg("--").arg(pathspec);
+    }
+
+    let output = command.output();
 
     match output {
         Ok(output) if output.status.success() => {
@@ -2787,6 +2834,43 @@ index 3333333..4444444 100644
 
         assert!(!is_hydra_artifact_path("src/main.rs"));
         assert!(!is_hydra_artifact_path("docs/.hydra-notes.md"));
+    }
+
+    #[test]
+    fn resolve_working_tree_scope_returns_subpath_within_repo_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        let workspace = repo_root.join("packages").join("ui");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let scope =
+            resolve_working_tree_scope(&repo_root, Some(workspace.to_string_lossy().as_ref()))
+                .expect("scope should resolve for nested workspace");
+        assert_eq!(scope, workspace);
+    }
+
+    #[test]
+    fn resolve_working_tree_scope_returns_none_for_repo_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+
+        let scope =
+            resolve_working_tree_scope(&repo_root, Some(repo_root.to_string_lossy().as_ref()));
+        assert!(scope.is_none());
+    }
+
+    #[test]
+    fn resolve_working_tree_scope_returns_none_for_outside_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let scope =
+            resolve_working_tree_scope(&repo_root, Some(outside.to_string_lossy().as_ref()));
+        assert!(scope.is_none());
     }
 
     #[test]

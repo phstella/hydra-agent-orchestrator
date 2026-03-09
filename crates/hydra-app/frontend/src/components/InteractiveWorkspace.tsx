@@ -53,22 +53,195 @@ function appendBoundedChunk(existing: string[] | undefined, incoming: string): s
 
 function extractTerminalText(event: InteractiveStreamEvent): string {
   if (event.eventType === 'user_input') return '';
-
-  if (!event.data || typeof event.data !== 'object') {
-    if (typeof event.data === 'string') return event.data;
-    return '';
-  }
-  const data = event.data as Record<string, unknown>;
-  if (typeof data.text === 'string') return data.text;
-  if (typeof data.line === 'string') return data.line;
-  if (typeof data.message === 'string') return data.message;
   if (event.eventType === 'session_started') return '\r\n--- Session started ---\r\n';
   if (event.eventType === 'session_completed') return '\r\n--- Session completed ---\r\n';
   if (event.eventType === 'session_failed') return '\r\n--- Session failed ---\r\n';
   if (event.eventType === 'session_stopped') return '\r\n--- Session stopped ---\r\n';
-  const keys = Object.keys(data);
-  if (keys.length === 0) return '';
-  return JSON.stringify(data);
+
+  if (typeof event.data === 'string') return event.data;
+  const data = asRecord(event.data);
+  if (!data) return '';
+
+  if (typeof data.text === 'string') return data.text;
+  if (typeof data.line === 'string') {
+    const parsed = parseInteractiveStructuredLine(data.line);
+    if (parsed) return ensureTerminalLineEnding(parsed);
+    return data.line;
+  }
+  if (typeof data.message === 'string') {
+    return ensureTerminalLineEnding(summarizeInteractiveText(data.message));
+  }
+  if (typeof data.error === 'string') {
+    return ensureTerminalLineEnding(`Error: ${summarizeInteractiveText(data.error, 220)}`);
+  }
+
+  const humanized = humanizeInteractiveStructuredPayload(data);
+  if (humanized) return ensureTerminalLineEnding(humanized);
+
+  return '';
+}
+
+function ensureTerminalLineEnding(text: string): string {
+  if (!text) return '';
+  if (text.endsWith('\n') || text.endsWith('\r')) return text;
+  return `${text}\r\n`;
+}
+
+function parseInteractiveStructuredLine(line: string): string | null {
+  const normalized = normalizeInteractiveTerminalText(line);
+  if (!normalized) return '';
+  if (!looksLikeJsonValue(normalized)) return summarizeInteractiveText(normalized);
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    return humanizeInteractiveStructuredPayload(parsed) ?? summarizeInteractiveText(normalized);
+  } catch {
+    return summarizeInteractiveText(normalized);
+  }
+}
+
+function humanizeInteractiveStructuredPayload(payload: unknown): string | null {
+  const record = asRecord(payload);
+  if (!record) return null;
+
+  if (typeof record.result === 'string') return summarizeInteractiveText(record.result);
+  if (typeof record.text === 'string') return summarizeInteractiveText(record.text);
+  if (typeof record.message === 'string') return summarizeInteractiveText(record.message);
+  if (typeof record.content === 'string') return summarizeInteractiveText(record.content);
+
+  const payloadType = typeof record.type === 'string' ? record.type : null;
+
+  if (payloadType === 'assistant') {
+    const message = asRecord(record.message);
+    const rendered = renderInteractiveAssistantContent(message);
+    if (rendered) return rendered;
+  }
+
+  if (payloadType === 'user') {
+    const message = asRecord(record.message);
+    const rendered = renderInteractiveUserToolResults(record, message);
+    if (rendered) return rendered;
+  }
+
+  if (payloadType === 'item.completed') {
+    const item = asRecord(record.item);
+    if (item && typeof item.text === 'string') {
+      return summarizeInteractiveText(item.text);
+    }
+  }
+
+  return null;
+}
+
+function renderInteractiveAssistantContent(message: Record<string, unknown> | null): string | null {
+  if (!message) return null;
+  const content = message.content;
+  if (!Array.isArray(content)) return null;
+
+  const lines: string[] = [];
+  for (const part of content) {
+    const entry = asRecord(part);
+    if (!entry) continue;
+    if (typeof entry.text === 'string') {
+      lines.push(summarizeInteractiveText(entry.text));
+      continue;
+    }
+    if (entry.type === 'tool_use') {
+      const toolName = typeof entry.name === 'string' ? entry.name : 'tool';
+      const input = asRecord(entry.input);
+      const filePath = input && typeof input.file_path === 'string' ? input.file_path : null;
+      if (filePath) {
+        const fileName = filePath.split('/').pop() ?? filePath;
+        lines.push(`Tool ${toolName}: ${fileName}`);
+      } else {
+        lines.push(`Tool ${toolName} invoked`);
+      }
+    }
+  }
+
+  if (lines.length === 0) return null;
+  return summarizeInteractiveText(lines.join('\n'), 400);
+}
+
+function renderInteractiveUserToolResults(
+  root: Record<string, unknown>,
+  message: Record<string, unknown> | null,
+): string | null {
+  if (!message) return null;
+  const content = message.content;
+  if (!Array.isArray(content)) return null;
+
+  for (const part of content) {
+    const entry = asRecord(part);
+    if (!entry) continue;
+    if (entry.type === 'tool_result') {
+      const text = typeof entry.content === 'string' ? entry.content : null;
+      if (text) {
+        const firstLine = normalizeInteractiveTerminalText(text)
+          .split('\n')
+          .find((line) => line.trim().length > 0);
+        if (firstLine) return summarizeInteractiveText(firstLine, 220);
+      }
+    }
+  }
+
+  const toolUseResult = asRecord(root.tool_use_result);
+  if (toolUseResult && typeof toolUseResult.filePath === 'string') {
+    const name = toolUseResult.filePath.split('/').pop() ?? toolUseResult.filePath;
+    return `Updated ${name}`;
+  }
+
+  return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function looksLikeJsonValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length < 2) return false;
+  return (
+    (trimmed.startsWith('{') && trimmed.endsWith('}'))
+    || (trimmed.startsWith('[') && trimmed.endsWith(']'))
+  );
+}
+
+function summarizeInteractiveText(raw: string, maxChars = 320): string {
+  const normalized = normalizeInteractiveTerminalText(raw).trim();
+  if (!normalized) return '';
+
+  const lines = normalized.split('\n').filter((line) => line.trim().length > 0);
+  const joined = lines.join('\n');
+  if (joined.length <= maxChars && lines.length <= 6) {
+    return joined;
+  }
+
+  if (lines.length > 6) {
+    const shown = lines.slice(0, 6).join('\n');
+    const extra = lines.length - 6;
+    return `${shown}\n... (${extra} more lines)`;
+  }
+
+  return `${joined.slice(0, maxChars)}...`;
+}
+
+function normalizeInteractiveTerminalText(raw: string): string {
+  if (!raw) return '';
+  const withoutOsc = raw.replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '');
+  const withoutCsi = withoutOsc.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
+  const normalizedCr = withoutCsi
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => {
+      const lastCr = line.lastIndexOf('\r');
+      return lastCr >= 0 ? line.slice(lastCr + 1) : line;
+    })
+    .join('\n');
+  return normalizedCr.replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
 }
 
 /**
