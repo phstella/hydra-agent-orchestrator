@@ -928,6 +928,103 @@ async fn emit_orchestrator_event(
 
 const MAX_INTERACTIVE_EVENTS_PER_POLL: usize = 512;
 
+struct InteractiveLaunchPaths {
+    source_root: PathBuf,
+    repo_root: PathBuf,
+    effective_cwd: PathBuf,
+    source_root_display: String,
+    repo_root_display: String,
+    effective_cwd_display: String,
+    has_same_source_running: bool,
+    worktree_path: Option<String>,
+    managed_worktree: Option<InteractiveManagedWorktree>,
+}
+
+async fn resolve_interactive_launch_paths(
+    interactive: &crate::state::InteractiveStateHandle,
+    requested_cwd: Option<&str>,
+    session_id: &str,
+    agent_key: &str,
+) -> Result<InteractiveLaunchPaths, String> {
+    let source_root = resolve_existing_directory(
+        requested_cwd,
+        "Not inside a git repository; cannot start interactive session",
+    )
+    .map_err(|e| e.to_string())?;
+    let source_root = canonicalize_existing_directory(&source_root).map_err(|e| e.to_string())?;
+
+    let repo_root = resolve_repo_root_with_auto_init(
+        requested_cwd,
+        "Not inside a git repository; cannot start interactive session",
+    )
+    .map_err(|e| e.to_string())?;
+    let repo_root = canonicalize_existing_directory(&repo_root).map_err(|e| e.to_string())?;
+
+    let source_root_display = source_root.to_string_lossy().to_string();
+    let repo_root_display = repo_root.to_string_lossy().to_string();
+
+    let has_same_source_running = interactive
+        .has_running_session_for_source(&source_root_display)
+        .await;
+
+    let mut effective_cwd = source_root.clone();
+    let mut worktree_path: Option<String> = None;
+    let mut managed_worktree: Option<InteractiveManagedWorktree> = None;
+
+    if has_same_source_running {
+        let run_id = uuid::Uuid::parse_str(session_id)
+            .map_err(|e| IpcError::internal(format!("invalid session_id for run id: {e}")).to_string())?;
+        let wt_base = repo_root.join(".hydra").join("worktrees").join("interactive");
+        let wt_service = WorktreeService::new(repo_root.clone(), wt_base);
+        let wt_info = wt_service.create(run_id, agent_key, "HEAD").await.map_err(|e| {
+            IpcError::launch_error(format!(
+                "Failed to create interactive worktree for '{}': {}",
+                agent_key, e
+            ))
+            .to_string()
+        })?;
+
+        worktree_path = Some(wt_info.path.to_string_lossy().to_string());
+
+        if let Ok(relative) = source_root.strip_prefix(&repo_root) {
+            if !relative.as_os_str().is_empty() {
+                let candidate = wt_info.path.join(relative);
+                if candidate.exists() {
+                    effective_cwd = candidate;
+                } else {
+                    effective_cwd = wt_info.path.clone();
+                }
+            } else {
+                effective_cwd = wt_info.path.clone();
+            }
+        } else {
+            effective_cwd = wt_info.path.clone();
+        }
+
+        managed_worktree = Some(InteractiveManagedWorktree {
+            repo_root: repo_root_display.clone(),
+            run_id: run_id.to_string(),
+            agent_key: agent_key.to_string(),
+            path: wt_info.path.to_string_lossy().to_string(),
+            branch: wt_info.branch,
+        });
+    }
+
+    let effective_cwd_display = effective_cwd.to_string_lossy().to_string();
+
+    Ok(InteractiveLaunchPaths {
+        source_root,
+        repo_root,
+        effective_cwd,
+        source_root_display,
+        repo_root_display,
+        effective_cwd_display,
+        has_same_source_running,
+        worktree_path,
+        managed_worktree,
+    })
+}
+
 #[tauri::command]
 pub async fn start_interactive_session(
     state: State<'_, AppState>,
@@ -1028,38 +1125,25 @@ pub async fn start_interactive_session(
 
     drop(config);
 
-    let source_root = resolve_existing_directory(
-        request.cwd.as_deref(),
-        "Not inside a git repository; cannot start interactive session",
-    )
-    .map_err(|e| e.to_string())?;
-    let source_root = canonicalize_existing_directory(&source_root).map_err(|e| e.to_string())?;
-
-    let repo_root = resolve_repo_root_with_auto_init(
-        request.cwd.as_deref(),
-        "Not inside a git repository; cannot start interactive session",
-    )
-    .map_err(|e| e.to_string())?;
-    let repo_root = canonicalize_existing_directory(&repo_root).map_err(|e| e.to_string())?;
-
-    let source_root_display = source_root.to_string_lossy().to_string();
-    let repo_root_display = repo_root.to_string_lossy().to_string();
-
     let interactive = state.interactive.clone();
-    let has_same_source_running = interactive
-        .has_running_session_for_source(&source_root_display)
-        .await;
+    let launch_paths = resolve_interactive_launch_paths(
+        &interactive,
+        request.cwd.as_deref(),
+        &session_id,
+        &request.agent_key,
+    )
+    .await?;
 
     // M4.5: Working tree cleanliness check.
     // Skip this guard when we will launch in a dedicated worktree because
     // same-folder concurrent threads are intentionally isolated.
-    if !has_same_source_running {
-        let scope = if source_root != repo_root {
-            Some(source_root.clone())
+    if !launch_paths.has_same_source_running {
+        let scope = if launch_paths.source_root != launch_paths.repo_root {
+            Some(launch_paths.source_root.clone())
         } else {
             None
         };
-        let wt_status = read_working_tree_status(&repo_root, scope.as_deref());
+        let wt_status = read_working_tree_status(&launch_paths.repo_root, scope.as_deref());
         if !wt_status.clean {
             let detail = wt_status
                 .message
@@ -1070,59 +1154,11 @@ pub async fn start_interactive_session(
         }
     }
 
-    let mut effective_cwd = source_root.clone();
-    let mut worktree_path: Option<String> = None;
-    let mut managed_worktree: Option<InteractiveManagedWorktree> = None;
-
-    if has_same_source_running {
-        let run_id = uuid::Uuid::parse_str(&session_id)
-            .map_err(|e| IpcError::internal(format!("invalid session_id for run id: {e}")).to_string())?;
-        let wt_base = repo_root.join(".hydra").join("worktrees").join("interactive");
-        let wt_service = WorktreeService::new(repo_root.clone(), wt_base);
-        let wt_info = wt_service
-            .create(run_id, &request.agent_key, "HEAD")
-            .await
-            .map_err(|e| {
-                IpcError::launch_error(format!(
-                    "Failed to create interactive worktree for '{}': {}",
-                    request.agent_key, e
-                ))
-                .to_string()
-            })?;
-
-        worktree_path = Some(wt_info.path.to_string_lossy().to_string());
-
-        if let Ok(relative) = source_root.strip_prefix(&repo_root) {
-            if !relative.as_os_str().is_empty() {
-                let candidate = wt_info.path.join(relative);
-                if candidate.exists() {
-                    effective_cwd = candidate;
-                } else {
-                    effective_cwd = wt_info.path.clone();
-                }
-            } else {
-                effective_cwd = wt_info.path.clone();
-            }
-        } else {
-            effective_cwd = wt_info.path.clone();
-        }
-
-        managed_worktree = Some(InteractiveManagedWorktree {
-            repo_root: repo_root_display.clone(),
-            run_id: run_id.to_string(),
-            agent_key: request.agent_key.clone(),
-            path: wt_info.path.to_string_lossy().to_string(),
-            branch: wt_info.branch,
-        });
-    }
-
-    let effective_cwd_display = effective_cwd.to_string_lossy().to_string();
-
     let pty_config = hydra_core::supervisor::pty::PtySessionConfig {
         program: binary_path.to_string_lossy().to_string(),
         args: interactive_args,
         env: vec![],
-        cwd: effective_cwd.clone(),
+        cwd: launch_paths.effective_cwd.clone(),
         initial_cols: cols,
         initial_rows: rows,
     };
@@ -1131,7 +1167,7 @@ pub async fn start_interactive_session(
     let pty_session = match hydra_core::supervisor::pty::PtySession::spawn(pty_config, event_tx) {
         Ok(session) => session,
         Err(e) => {
-            if let Some(worktree) = &managed_worktree {
+            if let Some(worktree) = &launch_paths.managed_worktree {
                 cleanup_managed_worktree_on_launch_failure(worktree).await;
             }
             return Err(IpcError::launch_error(format!("PTY spawn failed: {e}")).to_string());
@@ -1139,14 +1175,14 @@ pub async fn start_interactive_session(
     };
 
     // M4.6: Initialize session artifact writer
-    let hydra_root = repo_root.join(".hydra");
+    let hydra_root = launch_paths.repo_root.join(".hydra");
     let is_experimental = adapter.tier() == hydra_core::adapter::AdapterTier::Experimental;
     let artifact_writer = match hydra_core::artifact::SessionArtifactWriter::init(
         &hydra_root,
         &session_id,
         &request.agent_key,
         &started_at,
-        &effective_cwd_display,
+        &launch_paths.effective_cwd_display,
         request.unsafe_mode,
         is_experimental,
     ) {
@@ -1163,11 +1199,11 @@ pub async fn start_interactive_session(
             &request.agent_key,
             &started_at,
             InteractiveSessionPaths {
-                source_root: source_root_display.clone(),
-                repo_root: repo_root_display.clone(),
-                effective_cwd: effective_cwd_display.clone(),
-                worktree_path: worktree_path.clone(),
-                managed_worktree,
+                source_root: launch_paths.source_root_display.clone(),
+                repo_root: launch_paths.repo_root_display.clone(),
+                effective_cwd: launch_paths.effective_cwd_display.clone(),
+                worktree_path: launch_paths.worktree_path.clone(),
+                managed_worktree: launch_paths.managed_worktree,
             },
             pty_session,
             artifact_writer,
@@ -1202,10 +1238,10 @@ pub async fn start_interactive_session(
         agent_key: request.agent_key,
         status: "running".to_string(),
         started_at,
-        source_root: source_root_display,
-        repo_root: repo_root_display,
-        effective_cwd: effective_cwd_display,
-        worktree_path,
+        source_root: launch_paths.source_root_display,
+        repo_root: launch_paths.repo_root_display,
+        effective_cwd: launch_paths.effective_cwd_display,
+        worktree_path: launch_paths.worktree_path,
     })
 }
 
@@ -2521,6 +2557,57 @@ fn build_interactive_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{InteractiveSessionRuntime, InteractiveStateHandle};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn new_interactive_state() -> InteractiveStateHandle {
+        InteractiveStateHandle {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn init_git_repo(path: &Path) {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .expect("git init");
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@hydra.dev"])
+            .current_dir(path)
+            .output()
+            .expect("git config email");
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Hydra Test"])
+            .current_dir(path)
+            .output()
+            .expect("git config name");
+    }
+
+    fn commit_all(path: &Path, message: &str) {
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .expect("git add");
+        std::process::Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(path)
+            .output()
+            .expect("git commit");
+    }
+
+    fn source_key_for_test(path: &str) -> String {
+        #[cfg(windows)]
+        {
+            path.to_ascii_lowercase()
+        }
+        #[cfg(not(windows))]
+        {
+            path.to_string()
+        }
+    }
 
     #[test]
     fn ipc_error_display_format() {
@@ -2661,6 +2748,181 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("Path does not exist"));
+    }
+
+    #[tokio::test]
+    async fn resolve_interactive_launch_paths_auto_inits_non_repo_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace_str = workspace.to_string_lossy().to_string();
+        let interactive = new_interactive_state();
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        let plan = resolve_interactive_launch_paths(
+            &interactive,
+            Some(&workspace_str),
+            &session_id,
+            "claude",
+        )
+        .await
+        .expect("launch path planning should succeed");
+
+        let canonical_workspace = workspace.canonicalize().unwrap();
+        assert_eq!(plan.source_root, canonical_workspace);
+        assert_eq!(plan.repo_root, canonical_workspace);
+        assert_eq!(plan.effective_cwd, canonical_workspace);
+        assert!(!plan.has_same_source_running);
+        assert!(plan.worktree_path.is_none());
+        assert!(plan.managed_worktree.is_none());
+        assert!(workspace.join(".git").exists());
+    }
+
+    #[tokio::test]
+    async fn resolve_interactive_launch_paths_creates_worktree_for_same_source_running_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let source_folder = repo.join("apps").join("api");
+        std::fs::create_dir_all(&source_folder).unwrap();
+        init_git_repo(&repo);
+        std::fs::write(repo.join("README.md"), "# test\n").unwrap();
+        std::fs::write(source_folder.join("main.py"), "print('hello')\n").unwrap();
+        commit_all(&repo, "init");
+
+        let interactive = new_interactive_state();
+        let source_root = source_folder.canonicalize().unwrap();
+        let source_root_display = source_root.to_string_lossy().to_string();
+        let repo_root_display = repo.canonicalize().unwrap().to_string_lossy().to_string();
+
+        {
+            let mut sessions = interactive.sessions.lock().await;
+            sessions.insert(
+                "existing".to_string(),
+                InteractiveSessionRuntime {
+                    session_id: "existing".to_string(),
+                    agent_key: "claude".to_string(),
+                    status: "running".to_string(),
+                    started_at: "2026-03-09T00:00:00Z".to_string(),
+                    source_root: source_root_display.clone(),
+                    source_root_key: source_key_for_test(&source_root_display),
+                    repo_root: repo_root_display.clone(),
+                    effective_cwd: source_root_display.clone(),
+                    worktree_path: None,
+                    managed_worktree: None,
+                    events: Vec::new(),
+                    event_base_cursor: 0,
+                    error: None,
+                    pty_session: None,
+                    artifact_writer: None,
+                    push_emit_error_count: 0,
+                    last_push_emit_error: None,
+                    last_push_emit_at: None,
+                },
+            );
+        }
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let plan = resolve_interactive_launch_paths(
+            &interactive,
+            Some(&source_root_display),
+            &session_id,
+            "claude",
+        )
+        .await
+        .expect("worktree launch path planning should succeed");
+
+        assert!(plan.has_same_source_running);
+        let worktree_path = plan
+            .worktree_path
+            .clone()
+            .expect("same-source launch should allocate worktree");
+        assert!(Path::new(&worktree_path).exists());
+        assert!(plan.managed_worktree.is_some());
+        assert_eq!(plan.repo_root, repo.canonicalize().unwrap());
+        assert!(
+            plan.effective_cwd.ends_with(Path::new("apps").join("api")),
+            "effective cwd should preserve source-folder relative path inside worktree"
+        );
+
+        if let Some(managed) = plan.managed_worktree.as_ref() {
+            cleanup_managed_worktree_on_launch_failure(managed).await;
+            assert!(!Path::new(&managed.path).exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_managed_worktree_on_launch_failure_removes_branch_and_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_git_repo(&repo);
+        std::fs::write(repo.join("README.md"), "# rollback-test\n").unwrap();
+        commit_all(&repo, "init");
+
+        let interactive = new_interactive_state();
+        let repo_root_display = repo.canonicalize().unwrap().to_string_lossy().to_string();
+
+        {
+            let mut sessions = interactive.sessions.lock().await;
+            sessions.insert(
+                "existing-root".to_string(),
+                InteractiveSessionRuntime {
+                    session_id: "existing-root".to_string(),
+                    agent_key: "claude".to_string(),
+                    status: "running".to_string(),
+                    started_at: "2026-03-09T00:00:00Z".to_string(),
+                    source_root: repo_root_display.clone(),
+                    source_root_key: source_key_for_test(&repo_root_display),
+                    repo_root: repo_root_display.clone(),
+                    effective_cwd: repo_root_display.clone(),
+                    worktree_path: None,
+                    managed_worktree: None,
+                    events: Vec::new(),
+                    event_base_cursor: 0,
+                    error: None,
+                    pty_session: None,
+                    artifact_writer: None,
+                    push_emit_error_count: 0,
+                    last_push_emit_error: None,
+                    last_push_emit_at: None,
+                },
+            );
+        }
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let plan = resolve_interactive_launch_paths(
+            &interactive,
+            Some(&repo_root_display),
+            &session_id,
+            "claude",
+        )
+        .await
+        .expect("worktree launch path planning should succeed");
+        let managed = plan
+            .managed_worktree
+            .as_ref()
+            .expect("expected managed worktree metadata")
+            .clone();
+
+        assert!(Path::new(&managed.path).exists());
+
+        cleanup_managed_worktree_on_launch_failure(&managed).await;
+
+        assert!(
+            !Path::new(&managed.path).exists(),
+            "rollback cleanup should remove worktree directory"
+        );
+
+        let branch_check = std::process::Command::new("git")
+            .args(["branch", "--list", &managed.branch])
+            .current_dir(&repo)
+            .output()
+            .expect("git branch --list");
+        let branch_output = String::from_utf8_lossy(&branch_check.stdout);
+        assert!(
+            branch_output.trim().is_empty(),
+            "rollback cleanup should remove worktree branch"
+        );
     }
 
     #[test]
