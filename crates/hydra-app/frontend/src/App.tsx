@@ -290,19 +290,59 @@ export default function App() {
 
   const leftRail = (
     <>
+      <div
+        style={{
+          fontSize: '8px',
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
+          color: 'var(--color-text-muted)',
+          marginBottom: 'var(--space-1)',
+        }}
+        data-testid="nav-group-orchestration-label"
+      >
+        Orch
+      </div>
+      <NavRailButton
+        icon="▸"
+        label="Orchestration"
+        active={activeView === 'orchestration'}
+        onClick={() => setActiveView('orchestration')}
+        data-testid="nav-orchestration"
+      />
+      <NavRailButton
+        icon="⊞"
+        label="Files"
+        active={activeView === 'files'}
+        onClick={() => setActiveView('files')}
+        data-testid="nav-files"
+      />
+
+      <div
+        style={{
+          width: 28,
+          borderTop: '1px solid var(--color-border-700)',
+          margin: 'var(--space-1) 0',
+        }}
+      />
+
+      <div
+        style={{
+          fontSize: '8px',
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
+          color: 'var(--color-text-muted)',
+          marginBottom: 'var(--space-1)',
+        }}
+        data-testid="nav-group-race-label"
+      >
+        Race
+      </div>
       <NavRailButton
         icon="⟁"
         label="Race"
         active={activeView === 'cockpit'}
         onClick={() => setActiveView('cockpit')}
         data-testid="nav-cockpit"
-      />
-      <NavRailButton
-        icon="◉"
-        label="Preflight"
-        active={activeView === 'preflight'}
-        onClick={() => setActiveView('preflight')}
-        data-testid="nav-preflight"
       />
       <NavRailButton
         icon="≡"
@@ -318,21 +358,15 @@ export default function App() {
         onClick={() => setActiveView('review')}
         data-testid="nav-review"
       />
-      <NavRailButton
-        icon="▸"
-        label="Orchestration"
-        active={activeView === 'orchestration'}
-        onClick={() => setActiveView('orchestration')}
-        data-testid="nav-orchestration"
-      />
-      <NavRailButton
-        icon="⊞"
-        label="Files"
-        active={activeView === 'files'}
-        onClick={() => setActiveView('files')}
-        data-testid="nav-files"
-      />
+
       <div style={{ flex: 1 }} />
+      <NavRailButton
+        icon="◉"
+        label={'Hydra\nDoctor'}
+        active={activeView === 'preflight'}
+        onClick={() => setActiveView('preflight')}
+        data-testid="nav-preflight"
+      />
       <NavRailButton
         icon="⚙"
         label="Settings"

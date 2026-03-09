@@ -119,10 +119,12 @@ export function NavRailButton({
 
   const labelStyle: CSSProperties = {
     fontSize: '9px',
-    lineHeight: 1,
+    lineHeight: 1.05,
     letterSpacing: '0.02em',
     textTransform: 'uppercase',
     fontWeight: 'var(--weight-medium)' as unknown as number,
+    textAlign: 'center',
+    whiteSpace: 'pre-line',
   };
 
   return (
