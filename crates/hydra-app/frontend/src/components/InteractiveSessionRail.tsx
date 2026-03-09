@@ -100,7 +100,7 @@ export function InteractiveSessionRail({
             letterSpacing: '0.05em',
           }}
         >
-          Lanes
+          Threads
         </span>
         {runningCount > 0 && (
           <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-marine-400)' }}>
@@ -120,7 +120,7 @@ export function InteractiveSessionRail({
             }}
             data-testid="empty-session-state"
           >
-            No lanes. Launch one from the create panel.
+            No threads. Launch one from the create panel.
           </div>
         )}
 
@@ -224,7 +224,7 @@ function LaneCard({
                 e.stopPropagation();
                 onStop();
               }}
-              title="Stop lane"
+              title="Stop thread"
               data-testid={`stop-session-${session.sessionId}`}
               style={{
                 background: 'none',

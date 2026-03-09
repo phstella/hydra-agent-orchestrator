@@ -941,7 +941,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
             marginBottom: 'var(--space-1)',
           }}
         >
-          New Lane
+          New Thread
         </div>
 
         {/* Agent selection */}
@@ -1051,7 +1051,7 @@ export function InteractiveWorkspace({ workspaceCwd }: InteractiveWorkspaceProps
             Workspace: {workspaceCwd ?? '(current repository)'}
           </div>
           <div style={{ marginBottom: 'var(--space-1)', fontSize: '10px', color: 'var(--color-text-muted)' }}>
-            Deploy creates the lane. Send normal prompts directly in the terminal.
+            Deploy creates the thread. Send normal prompts directly in the terminal.
           </div>
           {!showPromptComposer && (
             <button
