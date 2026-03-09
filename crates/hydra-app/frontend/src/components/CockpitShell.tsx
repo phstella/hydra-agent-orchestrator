@@ -179,7 +179,7 @@ export function TopStrip({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    height: 56,
+    height: 104,
     padding: '0 var(--space-4)',
     gap: 'var(--space-4)',
   };
@@ -211,8 +211,8 @@ export function TopStrip({
   };
 
   const brandIconStyle: CSSProperties = {
-    width: 48,
-    height: 48,
+    width: 96,
+    height: 96,
     objectFit: 'contain',
     flexShrink: 0,
   };
@@ -290,7 +290,7 @@ export function TopStrip({
       <style>{`@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
       <div style={leftStyle}>
         <span style={brandStyle}>
-          <img src="/hydra-icon.ico" alt="" aria-hidden="true" style={brandIconStyle} />
+          <img src="/hydra-icon.ico?v=2" alt="" aria-hidden="true" style={brandIconStyle} />
           <span>Hydra</span>
         </span>
         <span style={workspaceStyle} data-testid="strip-workspace">
