@@ -958,6 +958,9 @@ describe('Smoke Test 11: P4.9.5 terminal-only input model', () => {
       expect(screen.getByTestId('terminal-transport-mode')).toHaveTextContent('poll');
     });
     await waitFor(() => {
+      expect(screen.getByTestId('terminal-fallback-indicator')).toHaveTextContent('fallback active');
+    });
+    await waitFor(() => {
       expect(screen.getByText(/poll-fallback-line/)).toBeInTheDocument();
     });
     expect(screen.queryByTestId('terminal-transport-diagnostic')).not.toBeInTheDocument();

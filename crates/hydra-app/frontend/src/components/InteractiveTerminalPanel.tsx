@@ -116,7 +116,7 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
               color: streamTransport === 'push'
                 ? 'var(--color-green-400)'
                 : streamTransport === 'poll'
-                  ? 'var(--color-warning-400)'
+                  ? 'var(--color-text-secondary)'
                   : 'var(--color-text-muted)',
               fontFamily: 'var(--font-mono)',
             }}
@@ -124,6 +124,11 @@ export const InteractiveTerminalPanel = forwardRef<XTermRendererHandle, Interact
           >
             {streamTransport}
           </span>
+          {streamTransport === 'poll' && (
+            <span data-testid="terminal-fallback-indicator">
+              <Badge variant="neutral">fallback active</Badge>
+            </span>
+          )}
           {status && statusVariant && (
             <Badge variant={statusVariant as 'info' | 'success' | 'danger' | 'warning'} dot>{status}</Badge>
           )}
