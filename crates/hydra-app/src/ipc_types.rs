@@ -220,6 +220,14 @@ pub struct InteractiveStopResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct InteractiveRemoveResult {
+    pub session_id: String,
+    pub status: String,
+    pub removed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InteractiveSessionSummary {
     pub session_id: String,
     pub agent_key: String,

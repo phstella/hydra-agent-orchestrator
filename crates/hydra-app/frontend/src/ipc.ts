@@ -24,6 +24,7 @@ import type {
   InteractiveWriteAck,
   InteractiveResizeAck,
   InteractiveStopResult,
+  InteractiveRemoveResult,
   InteractiveSessionSummary,
   InteractiveTransportDiagnostics,
   DirectoryListing,
@@ -178,6 +179,13 @@ export async function stopInteractiveSession(
 ): Promise<InteractiveStopResult> {
   const invoke = await getInvoke();
   return invoke('stop_interactive_session', { sessionId });
+}
+
+export async function removeInteractiveSession(
+  sessionId: string,
+): Promise<InteractiveRemoveResult> {
+  const invoke = await getInvoke();
+  return invoke('remove_interactive_session', { sessionId });
 }
 
 export async function listInteractiveSessions(): Promise<InteractiveSessionSummary[]> {
@@ -798,6 +806,23 @@ async function mockInvoke<T>(cmd: string, _args?: Record<string, unknown>): Prom
       const wasRunning = session.status === 'running';
       session.status = 'stopped';
       return { sessionId, status: 'stopped', wasRunning } as T;
+    }
+    case 'remove_interactive_session': {
+      const args = _args as Record<string, unknown> | undefined;
+      const sessionId = args?.sessionId as string;
+      const session = mockInteractiveSessions.get(sessionId);
+      if (!session) {
+        throw new Error(`[not_found] session '${sessionId}' not found`);
+      }
+      if (session.status === 'running') {
+        throw new Error('[validation_error] session is running; stop it before removing');
+      }
+      mockInteractiveSessions.delete(sessionId);
+      return {
+        sessionId,
+        status: session.status,
+        removed: true,
+      } as T;
     }
     case 'list_interactive_sessions': {
       const summaries = Array.from(mockInteractiveSessions.values()).map((s) => ({

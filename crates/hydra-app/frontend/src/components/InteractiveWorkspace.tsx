@@ -12,6 +12,7 @@ import {
   writeInteractiveInput,
   resizeInteractiveTerminal,
   stopInteractiveSession,
+  removeInteractiveSession,
   listInteractiveSessions,
   listAdapters,
   type InteractivePushAttachReason,
@@ -367,7 +368,7 @@ export function InteractiveWorkspace({
   const [allowExperimental, setAllowExperimental] = useState(false);
   const [experimentalAcknowledged, setExperimentalAcknowledged] = useState(false);
   const [unsafeMode, setUnsafeMode] = useState(false);
-  const [threadRootInput, setThreadRootInput] = useState(workspaceCwd ?? '');
+  const [threadRootInput, setThreadRootInput] = useState('');
 
   // ---------------------------------------------------------------------------
   // Polling refs (session_id keyed — M4.8.2)
@@ -553,12 +554,6 @@ export function InteractiveWorkspace({
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (workspaceCwd && threadRootInput.trim().length === 0) {
-      setThreadRootInput(workspaceCwd);
-    }
-  }, [workspaceCwd, threadRootInput]);
 
   // ---------------------------------------------------------------------------
   // Transport selection — prefer push stream in Tauri, fallback to polling.
@@ -861,8 +856,8 @@ export function InteractiveWorkspace({
         allowExperimental: allowExperimental && experimentalAcknowledged,
         unsafeMode,
         cwd: targetThreadRoot,
-        cols: 120,
-        rows: 30,
+        cols: null,
+        rows: null,
       });
 
       const newSession: InteractiveSessionSummary = {
@@ -947,6 +942,54 @@ export function InteractiveWorkspace({
       // best-effort
     }
   }, []);
+
+  const handleRemoveSession = useCallback(async (sessionId: string) => {
+    try {
+      await removeInteractiveSession(sessionId);
+      const timer = pollTimers.current.get(sessionId);
+      if (timer) {
+        clearTimeout(timer);
+        pollTimers.current.delete(sessionId);
+      }
+      pollCursors.current.delete(sessionId);
+      pollingSessions.current.delete(sessionId);
+      terminalSizes.current.delete(sessionId);
+      sessionChunkStoreRef.current.delete(sessionId);
+      pendingTextBySession.current.delete(sessionId);
+      pendingPatchBySession.current.delete(sessionId);
+
+      setPollErrors((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
+      setSessionErrors((prev) => {
+        if (!prev.has(sessionId)) return prev;
+        const next = new Map(prev);
+        next.delete(sessionId);
+        return next;
+      });
+
+      const remaining = sessions.filter((entry) => entry.sessionId !== sessionId);
+      setSessions(remaining);
+      if (selectedSessionIdRef.current === sessionId) {
+        const nextSelected = remaining[0]?.sessionId ?? null;
+        selectedSessionIdRef.current = nextSelected;
+        setSelectedSessionId(nextSelected);
+        if (!nextSelected) {
+          terminalRef.current?.replaceChunks([]);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSessionErrors((prev) => {
+        const next = new Map(prev);
+        next.set(sessionId, msg);
+        return next;
+      });
+    }
+  }, [sessions]);
 
   // ---------------------------------------------------------------------------
   // Input — P4.9.5: terminal-direct via onData (no side InputComposer)
@@ -1281,26 +1324,28 @@ export function InteractiveWorkspace({
                 fontSize: 'var(--text-xs)',
               }}
             />
-            <button
-              type="button"
-              onClick={() => setThreadRootInput(workspaceCwd ?? '')}
-              data-testid="thread-root-use-workspace"
-              style={{
-                border: '1px solid var(--color-border-700)',
-                backgroundColor: 'var(--color-surface-800)',
-                color: 'var(--color-text-secondary)',
-                borderRadius: 'var(--radius-md)',
-                padding: 'var(--space-1) var(--space-2)',
-                cursor: 'pointer',
-                fontSize: 'var(--text-xs)',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Use Workspace
-            </button>
+            {workspaceCwd && (
+              <button
+                type="button"
+                onClick={() => setThreadRootInput(workspaceCwd)}
+                data-testid="thread-root-use-workspace"
+                style={{
+                  border: '1px solid var(--color-border-700)',
+                  backgroundColor: 'var(--color-surface-800)',
+                  color: 'var(--color-text-secondary)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: 'var(--space-1) var(--space-2)',
+                  cursor: 'pointer',
+                  fontSize: 'var(--text-xs)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Use Workspace
+              </button>
+            )}
           </div>
           <div style={{ marginBottom: 'var(--space-1)', fontSize: '10px', color: 'var(--color-text-muted)' }}>
-            Default workspace: {workspaceCwd ?? '(current repository)'}
+            {workspaceCwd ? `Workspace preset: ${workspaceCwd}` : 'No workspace preset.'}
           </div>
           <div style={{ marginBottom: 'var(--space-1)', fontSize: '10px', color: 'var(--color-text-muted)' }}>
             Deploy creates the thread. Send normal prompts directly in the terminal.
@@ -1477,6 +1522,7 @@ export function InteractiveWorkspace({
             }
           }}
           onStopSession={handleStopSession}
+          onRemoveSession={handleRemoveSession}
         />
       </div>
     </div>

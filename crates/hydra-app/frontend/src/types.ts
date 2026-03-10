@@ -240,6 +240,12 @@ export interface InteractiveStopResult {
   wasRunning: boolean;
 }
 
+export interface InteractiveRemoveResult {
+  sessionId: string;
+  status: string;
+  removed: boolean;
+}
+
 export interface InteractiveSessionSummary {
   sessionId: string;
   agentKey: string;

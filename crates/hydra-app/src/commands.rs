@@ -1319,6 +1319,28 @@ pub async fn stop_interactive_session(
 }
 
 #[tauri::command]
+pub async fn remove_interactive_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<InteractiveRemoveResult, String> {
+    let interactive = state.interactive.clone();
+    match interactive.remove_session(&session_id).await {
+        Ok(status) => Ok(InteractiveRemoveResult {
+            session_id,
+            status,
+            removed: true,
+        }),
+        Err(e) => {
+            if e.contains("not found") {
+                Err(IpcError::not_found(e).to_string())
+            } else {
+                Err(IpcError::validation(e).to_string())
+            }
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn list_interactive_sessions(
     state: State<'_, AppState>,
 ) -> Result<Vec<InteractiveSessionSummary>, String> {
@@ -2752,7 +2774,10 @@ mod tests {
         .expect("launch path planning should succeed");
 
         let canonical_workspace = workspace.canonicalize().unwrap();
-        assert_eq!(plan.source_root_display, canonical_workspace.to_string_lossy());
+        assert_eq!(
+            plan.source_root_display,
+            canonical_workspace.to_string_lossy()
+        );
         assert_eq!(plan.repo_root, canonical_workspace);
         assert_eq!(plan.effective_cwd, canonical_workspace);
         assert!(plan.worktree_path.is_none());
@@ -3456,6 +3481,18 @@ branch refs/heads/main
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("wasRunning"));
+        assert!(json.contains("\"status\":\"stopped\""));
+    }
+
+    #[test]
+    fn interactive_remove_result_serializes() {
+        let result = InteractiveRemoveResult {
+            session_id: "s1".to_string(),
+            status: "stopped".to_string(),
+            removed: true,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"removed\":true"));
         assert!(json.contains("\"status\":\"stopped\""));
     }
 

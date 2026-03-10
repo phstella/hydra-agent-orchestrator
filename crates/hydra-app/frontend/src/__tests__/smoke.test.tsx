@@ -29,6 +29,7 @@ import type {
   InteractiveWriteAck,
   InteractiveResizeAck,
   InteractiveStopResult,
+  InteractiveRemoveResult,
 } from '../types';
 
 vi.mock('../ipc');
@@ -282,6 +283,11 @@ function setupDefaultMocks() {
     status: 'stopped',
     wasRunning: true,
   } as InteractiveStopResult);
+  vi.mocked(ipc.removeInteractiveSession).mockResolvedValue({
+    sessionId: 'test-session-1',
+    status: 'stopped',
+    removed: true,
+  } as InteractiveRemoveResult);
   // File Explorer defaults (P4.9.2)
   vi.mocked(ipc.listDirectory).mockResolvedValue({
     path: '.',
@@ -788,6 +794,7 @@ describe('Smoke Test 9: Create and select orchestration session', () => {
       expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument();
       expect(screen.getByTestId('thread-root-input')).toBeInTheDocument();
     });
+    expect(screen.queryByTestId('thread-root-use-workspace')).not.toBeInTheDocument();
 
     await user.clear(screen.getByTestId('thread-root-input'));
     await user.type(screen.getByTestId('thread-root-input'), '/tmp/thread-root-a');
@@ -1188,6 +1195,60 @@ describe('Smoke Test 12: Stop session and lifecycle transition', () => {
       expect(screen.getByTestId('session-ended-indicator')).toHaveTextContent('Session stopped');
     });
     expect(screen.queryByTestId('stop-session-btn')).not.toBeInTheDocument();
+  });
+
+  it('allows removing a stopped thread from the rail', async () => {
+    let pollCount = 0;
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async () => {
+      pollCount++;
+      if (pollCount <= 2) {
+        return {
+          sessionId: 'test-session-1',
+          events: [
+            {
+              sessionId: 'test-session-1',
+              agentKey: 'claude',
+              eventType: 'output',
+              data: { text: 'Working...\n' },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          nextCursor: pollCount,
+          done: false,
+          status: 'running',
+          error: null,
+        } as InteractiveEventBatch;
+      }
+      return {
+        sessionId: 'test-session-1',
+        events: [],
+        nextCursor: pollCount,
+        done: true,
+        status: 'stopped',
+        error: null,
+      } as InteractiveEventBatch;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+    await user.type(screen.getByTestId('session-task-prompt'), 'Remove stopped thread');
+    await user.click(screen.getByTestId('confirm-create-session'));
+
+    await waitFor(() => expect(screen.getByTestId('stop-session-btn')).toBeInTheDocument());
+    await user.click(screen.getByTestId('stop-session-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('remove-session-test-session-1')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('remove-session-test-session-1'));
+
+    await waitFor(() => {
+      expect(ipc.removeInteractiveSession).toHaveBeenCalledWith('test-session-1');
+      expect(screen.queryByTestId('session-item-test-session-1')).not.toBeInTheDocument();
+    });
   });
 });
 

@@ -116,6 +116,7 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
   const droppedCharsRef = useRef(0);
   const writeInFlightRef = useRef(false);
   const flushFrameRef = useRef<number | null>(null);
+  const deferredFitTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const writtenRef = useRef(0);
   const resetKeyRef = useRef<string | null>(null);
   const firstChunkRef = useRef<string | null>(null);
@@ -140,6 +141,25 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
       cancelFrame(flushFrameRef.current);
       flushFrameRef.current = null;
     }
+  };
+
+  const clearDeferredFits = () => {
+    for (const timer of deferredFitTimersRef.current) {
+      clearTimeout(timer);
+    }
+    deferredFitTimersRef.current = [];
+  };
+
+  const scheduleDeferredFit = () => {
+    clearDeferredFits();
+    const runFit = () => {
+      const fit = fitRef.current;
+      if (!fit) return;
+      try { fit.fit(); } catch { /* layout may still be transitioning */ }
+      emitResize();
+    };
+    deferredFitTimersRef.current.push(setTimeout(runFit, 16));
+    deferredFitTimersRef.current.push(setTimeout(runFit, 120));
   };
 
   const emitResize = () => {
@@ -336,6 +356,7 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     // Initial fit after open
     try { fit.fit(); } catch { /* layout not ready */ }
     emitResize();
+    scheduleDeferredFit();
 
     // Optional GPU acceleration path. If unavailable, terminal keeps canvas renderer.
     importOptionalWebglAddon()
@@ -371,6 +392,7 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
         cancelFrame(flushFrameRef.current);
         flushFrameRef.current = null;
       }
+      clearDeferredFits();
       pendingQueueRef.current = [];
       pendingQueueCharsRef.current = 0;
       droppedCharsRef.current = 0;
@@ -423,6 +445,7 @@ export const XTermRenderer = forwardRef<XTermRendererHandle, XTermRendererProps>
     resetKeyRef.current = resetKey;
     resetTerminal();
     emitResize();
+    scheduleDeferredFit();
   }, [resetKey]);
 
   // ── Write new chunks ──────────────────────────────────────────────────

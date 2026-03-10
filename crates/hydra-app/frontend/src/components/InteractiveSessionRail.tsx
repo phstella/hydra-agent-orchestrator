@@ -12,6 +12,7 @@ interface InteractiveSessionRailProps {
   reduceMotion?: boolean;
   onSelectSession: (sessionId: string) => void;
   onStopSession: (sessionId: string) => void;
+  onRemoveSession: (sessionId: string) => void;
 }
 
 const lifecycleBadgeVariant: Record<SessionLifecycle, 'info' | 'success' | 'danger' | 'warning'> = {
@@ -54,6 +55,7 @@ export function InteractiveSessionRail({
   reduceMotion = false,
   onSelectSession,
   onStopSession,
+  onRemoveSession,
 }: InteractiveSessionRailProps) {
   // Build adapter instance index for lane labels (M4.8.2)
   const instanceIndex = useMemo(() => {
@@ -134,6 +136,7 @@ export function InteractiveSessionRail({
             reduceMotion={reduceMotion}
             onSelect={() => onSelectSession(session.sessionId)}
             onStop={() => onStopSession(session.sessionId)}
+            onRemove={() => onRemoveSession(session.sessionId)}
           />
         ))}
       </div>
@@ -149,6 +152,7 @@ function LaneCard({
   reduceMotion,
   onSelect,
   onStop,
+  onRemove,
 }: {
   session: InteractiveSessionSummary;
   instanceIndex: number | null;
@@ -157,6 +161,7 @@ function LaneCard({
   reduceMotion: boolean;
   onSelect: () => void;
   onStop: () => void;
+  onRemove: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
   const lifecycle = toLifecycle(session.status);
@@ -237,6 +242,28 @@ function LaneCard({
               }}
             >
               ■
+            </button>
+          )}
+          {!isRunning && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove();
+              }}
+              title="Remove thread"
+              data-testid={`remove-session-${session.sessionId}`}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--color-text-muted)',
+                cursor: 'pointer',
+                fontSize: 'var(--text-sm)',
+                padding: '2px',
+                lineHeight: 1,
+              }}
+            >
+              ✕
             </button>
           )}
         </div>

@@ -372,6 +372,25 @@ impl InteractiveStateHandle {
         Ok((was_running, status))
     }
 
+    /// Remove a non-running session from the registry. Returns final status.
+    pub async fn remove_session(&self, session_id: &str) -> Result<String, String> {
+        let removed = {
+            let mut sessions = self.sessions.lock().await;
+            let session = sessions
+                .get(session_id)
+                .ok_or_else(|| "session not found".to_string())?;
+            if session.status == "running" {
+                return Err("session is running; stop it before removing".to_string());
+            }
+            sessions.remove(session_id).expect("checked existence")
+        };
+
+        if let Some(worktree) = removed.managed_worktree {
+            cleanup_managed_worktree(worktree).await;
+        }
+        Ok(removed.status)
+    }
+
     pub async fn list_sessions(
         &self,
     ) -> Vec<(
@@ -1147,6 +1166,70 @@ mod tests {
             "second stop should report was_running=false"
         );
         assert_eq!(status_2, "stopped");
+    }
+
+    #[tokio::test]
+    async fn interactive_remove_session_rejects_running_session() {
+        let state = new_interactive_state();
+
+        let (tx, rx) = mpsc::channel(256);
+        let session = PtySession::spawn(sleep_pty_config(60), tx).unwrap();
+        state
+            .register_session(
+                "rm-running",
+                "claude",
+                "2026-02-24T00:00:00Z",
+                session,
+                None,
+            )
+            .await;
+        spawn_pty_event_bridge(
+            "rm-running".to_string(),
+            "claude".to_string(),
+            rx,
+            state.clone(),
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let err = state
+            .remove_session("rm-running")
+            .await
+            .expect_err("running sessions must not be removable");
+        assert!(err.contains("running"));
+
+        let _ = state.stop_session("rm-running").await;
+    }
+
+    #[tokio::test]
+    async fn interactive_remove_session_deletes_stopped_session() {
+        let state = new_interactive_state();
+
+        let (tx, rx) = mpsc::channel(256);
+        let session = PtySession::spawn(sleep_pty_config(60), tx).unwrap();
+        state
+            .register_session(
+                "rm-stopped",
+                "claude",
+                "2026-02-24T00:00:00Z",
+                session,
+                None,
+            )
+            .await;
+        spawn_pty_event_bridge(
+            "rm-stopped".to_string(),
+            "claude".to_string(),
+            rx,
+            state.clone(),
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        state.stop_session("rm-stopped").await.unwrap();
+        let status = state
+            .remove_session("rm-stopped")
+            .await
+            .expect("stopped session should be removable");
+        assert_eq!(status, "stopped");
+        assert!(state.poll_events("rm-stopped", 0, 16).await.is_none());
     }
 
     #[tokio::test]
