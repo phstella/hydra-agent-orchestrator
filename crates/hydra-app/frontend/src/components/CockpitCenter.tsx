@@ -13,8 +13,10 @@ interface CockpitCenterProps {
   onToggleAdapter: (key: string) => void;
   taskPrompt: string;
   onTaskPromptChange: (v: string) => void;
-  workspaceCwd: string | null;
-  onOpenSettings: () => void;
+  raceWorkspacePath: string;
+  raceWorkspaceCwd: string | null;
+  onRaceWorkspaceChange: (v: string) => void;
+  onRaceWorkspaceReset: () => void;
   onStartRace: () => void;
   runStatus: string;
   raceError: string | null;
@@ -37,8 +39,10 @@ export function CockpitCenter({
   onToggleAdapter,
   taskPrompt,
   onTaskPromptChange,
-  workspaceCwd,
-  onOpenSettings,
+  raceWorkspacePath,
+  raceWorkspaceCwd,
+  onRaceWorkspaceChange,
+  onRaceWorkspaceReset,
   onStartRace,
   runStatus,
   raceError,
@@ -84,8 +88,10 @@ export function CockpitCenter({
           onToggleAdapter={onToggleAdapter}
           taskPrompt={taskPrompt}
           onTaskPromptChange={onTaskPromptChange}
-          workspaceCwd={workspaceCwd}
-          onOpenSettings={onOpenSettings}
+          raceWorkspacePath={raceWorkspacePath}
+          raceWorkspaceCwd={raceWorkspaceCwd}
+          onRaceWorkspaceChange={onRaceWorkspaceChange}
+          onRaceWorkspaceReset={onRaceWorkspaceReset}
           onStartRace={onStartRace}
           raceError={raceError}
         />
@@ -161,8 +167,10 @@ interface RaceConfigPanelProps {
   onToggleAdapter: (key: string) => void;
   taskPrompt: string;
   onTaskPromptChange: (v: string) => void;
-  workspaceCwd: string | null;
-  onOpenSettings: () => void;
+  raceWorkspacePath: string;
+  raceWorkspaceCwd: string | null;
+  onRaceWorkspaceChange: (v: string) => void;
+  onRaceWorkspaceReset: () => void;
   onStartRace: () => void;
   raceError: string | null;
 }
@@ -174,8 +182,10 @@ function RaceConfigPanel({
   onToggleAdapter,
   taskPrompt,
   onTaskPromptChange,
-  workspaceCwd,
-  onOpenSettings,
+  raceWorkspacePath,
+  raceWorkspaceCwd,
+  onRaceWorkspaceChange,
+  onRaceWorkspaceReset,
   onStartRace,
   raceError,
 }: RaceConfigPanelProps) {
@@ -214,22 +224,38 @@ function RaceConfigPanel({
           borderRadius: 'var(--radius-md)',
           backgroundColor: 'var(--color-surface-800)',
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 'var(--space-3)',
+          flexDirection: 'column',
+          gap: 'var(--space-2)',
         }}
       >
-        <div>
-          <div style={{ marginBottom: 'var(--space-1)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-            Workspace
-          </div>
-          <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }} data-testid="workspace-current-value">
-            {workspaceCwd ?? '(current repository)'}
-          </div>
+        <div style={{ marginBottom: 'var(--space-1)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
+          Workspace
         </div>
-        <Button variant="secondary" size="sm" onClick={onOpenSettings}>
-          Configure
-        </Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <input
+            type="text"
+            value={raceWorkspacePath}
+            onChange={(event) => onRaceWorkspaceChange(event.target.value)}
+            placeholder="/absolute/path/to/workspace (optional)"
+            data-testid="race-workspace-input"
+            style={{
+              width: '100%',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-border-700)',
+              backgroundColor: 'var(--color-bg-900)',
+              color: 'var(--color-text-primary)',
+              padding: 'var(--space-2)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--text-sm)',
+            }}
+          />
+          <Button variant="secondary" size="sm" onClick={onRaceWorkspaceReset} data-testid="race-workspace-reset">
+            Current Repo
+          </Button>
+        </div>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }} data-testid="workspace-current-value">
+          {raceWorkspaceCwd ?? '(current repository)'}
+        </div>
       </div>
 
       <div>

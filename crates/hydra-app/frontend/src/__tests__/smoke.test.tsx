@@ -1371,15 +1371,10 @@ describe('Smoke Test 18: Workspace path is propagated to backend IPC', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByTestId('nav-settings'));
-    await waitFor(() => expect(screen.getByTestId('settings-workspace-input')).toBeInTheDocument());
-
-    const settingsInput = screen.getByTestId('settings-workspace-input');
-    await user.type(settingsInput, '/tmp/custom-hydra-workspace');
-    await user.click(screen.getByTestId('settings-save-workspace'));
-
     await user.click(screen.getByTestId('nav-cockpit'));
     await waitFor(() => expect(screen.getByText('claude')).toBeInTheDocument());
+    await user.clear(screen.getByTestId('race-workspace-input'));
+    await user.type(screen.getByTestId('race-workspace-input'), '/tmp/custom-hydra-workspace');
 
     const textarea = screen.getByPlaceholderText(/describe the task/i);
     await user.type(textarea, 'Run race with custom workspace');
@@ -1930,7 +1925,7 @@ describe('Smoke Test 38: Orchestration is the default landing view', () => {
 
     await user.click(screen.getByTestId('nav-settings'));
     await waitFor(() => {
-      expect(screen.getByTestId('settings-workspace-input')).toBeInTheDocument();
+      expect(screen.getByTestId('settings-info')).toBeInTheDocument();
     });
   });
 });

@@ -936,6 +936,7 @@ struct InteractiveLaunchPaths {
     repo_root_display: String,
     effective_cwd_display: String,
     has_same_source_running: bool,
+    repo_was_auto_initialized: bool,
     worktree_path: Option<String>,
     managed_worktree: Option<InteractiveManagedWorktree>,
 }
@@ -952,6 +953,7 @@ async fn resolve_interactive_launch_paths(
     )
     .map_err(|e| e.to_string())?;
     let source_root = canonicalize_existing_directory(&source_root).map_err(|e| e.to_string())?;
+    let source_was_in_git_repo = try_repo_root_from_dir(&source_root).is_ok();
 
     let repo_root = resolve_repo_root_with_auto_init(
         requested_cwd,
@@ -1020,6 +1022,7 @@ async fn resolve_interactive_launch_paths(
         repo_root_display,
         effective_cwd_display,
         has_same_source_running,
+        repo_was_auto_initialized: !source_was_in_git_repo,
         worktree_path,
         managed_worktree,
     })
@@ -1137,7 +1140,7 @@ pub async fn start_interactive_session(
     // M4.5: Working tree cleanliness check.
     // Skip this guard when we will launch in a dedicated worktree because
     // same-folder concurrent threads are intentionally isolated.
-    if !launch_paths.has_same_source_running {
+    if !launch_paths.has_same_source_running && !launch_paths.repo_was_auto_initialized {
         let scope = if launch_paths.source_root != launch_paths.repo_root {
             Some(launch_paths.source_root.clone())
         } else {
@@ -2773,6 +2776,10 @@ mod tests {
         assert_eq!(plan.repo_root, canonical_workspace);
         assert_eq!(plan.effective_cwd, canonical_workspace);
         assert!(!plan.has_same_source_running);
+        assert!(
+            plan.repo_was_auto_initialized,
+            "non-git folder launches should be marked as auto-initialized"
+        );
         assert!(plan.worktree_path.is_none());
         assert!(plan.managed_worktree.is_none());
         assert!(workspace.join(".git").exists());
@@ -2832,6 +2839,10 @@ mod tests {
         .expect("worktree launch path planning should succeed");
 
         assert!(plan.has_same_source_running);
+        assert!(
+            !plan.repo_was_auto_initialized,
+            "existing git repos should not be marked as auto-initialized"
+        );
         let worktree_path = plan
             .worktree_path
             .clone()

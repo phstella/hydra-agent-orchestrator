@@ -12,7 +12,7 @@ import {
   type InteractiveWorkspaceSessionSnapshot,
 } from './components/InteractiveWorkspace';
 import { FileExplorer } from './components/FileExplorer';
-import { Card, Button, Badge } from './components/design-system';
+import { Card } from './components/design-system';
 import { getRaceResult, listAdapters, pollRaceEvents, startRace } from './ipc';
 import type { AdapterInfo, RaceResult } from './types';
 import { isExperimental, isTier1 } from './types';
@@ -206,7 +206,6 @@ export default function App() {
   const [raceResult, setRaceResult] = useState<RaceResult | null>(null);
   const [selectedWinner, setSelectedWinner] = useState<string | null>(null);
   const [workspacePath, setWorkspacePath] = useState('');
-  const [workspaceDraft, setWorkspaceDraft] = useState('');
 
   const { events, push, clear, eventsByAgent } = useEventBuffer();
 
@@ -248,7 +247,6 @@ export default function App() {
   useEffect(() => {
     const stored = readWorkspaceFromStorage();
     setWorkspacePath(stored);
-    setWorkspaceDraft(stored);
   }, []);
 
   const selectedExperimentalCount = useMemo(() => {
@@ -262,13 +260,6 @@ export default function App() {
     const trimmed = workspacePath.trim();
     return trimmed.length > 0 ? trimmed : null;
   }, [workspacePath]);
-
-  const workspaceDraftCwd = useMemo(() => {
-    const trimmed = workspaceDraft.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  }, [workspaceDraft]);
-
-  const workspaceDirty = workspaceDraft.trim() !== workspacePath.trim();
   const activeThreadCount = useMemo(() => (
     orchestrationSessions.filter((session) => session.status === 'running').length
   ), [orchestrationSessions]);
@@ -399,15 +390,13 @@ export default function App() {
     setOrchestrationSelectionRequestId(sessionId);
   }, []);
 
-  const handleSaveWorkspaceSettings = useCallback(() => {
-    const normalized = workspaceDraft.trim();
-    setWorkspacePath(normalized);
-    writeWorkspaceToStorage(normalized);
-  }, [workspaceDraft]);
+  const handleRaceWorkspacePathChange = useCallback((value: string) => {
+    setWorkspacePath(value);
+    writeWorkspaceToStorage(value.trim());
+  }, []);
 
-  const handleResetWorkspaceSettings = useCallback(() => {
+  const handleRaceWorkspaceReset = useCallback(() => {
     setWorkspacePath('');
-    setWorkspaceDraft('');
     writeWorkspaceToStorage('');
   }, []);
 
@@ -574,8 +563,10 @@ export default function App() {
             onToggleAdapter={toggleAdapter}
             taskPrompt={taskPrompt}
             onTaskPromptChange={setTaskPrompt}
-            workspaceCwd={workspaceCwd}
-            onOpenSettings={() => setActiveView('settings')}
+            raceWorkspacePath={workspacePath}
+            raceWorkspaceCwd={workspaceCwd}
+            onRaceWorkspaceChange={handleRaceWorkspacePathChange}
+            onRaceWorkspaceReset={handleRaceWorkspaceReset}
             onStartRace={handleStartRace}
             runStatus={runStatus}
             raceError={raceError}
@@ -637,7 +628,7 @@ export default function App() {
       case 'orchestration':
         return (
           <InteractiveWorkspace
-            workspaceCwd={workspaceCwd}
+            workspaceCwd={null}
             selectedSessionIdOverride={orchestrationSelectionRequestId}
             onSessionSnapshotChange={handleOrchestrationSnapshotChange}
           />
@@ -660,49 +651,20 @@ export default function App() {
                 Settings
               </h2>
               <p style={{ marginBottom: 'var(--space-5)', color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
-                Configure default workspace and runtime behavior used by race, review/merge, and orchestration sessions.
+                Workspace selection is feature-scoped to avoid collisions:
               </p>
-
-              <div style={{ marginBottom: 'var(--space-4)' }}>
-                <div style={{ marginBottom: 'var(--space-2)', fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>
-                  Default Workspace Folder
-                </div>
-                <input
-                  value={workspaceDraft}
-                  onChange={(e) => setWorkspaceDraft(e.target.value)}
-                  placeholder="Leave empty to use current repository (or enter /absolute/path)"
-                  data-testid="settings-workspace-input"
-                  style={{
-                    width: '100%',
-                    borderRadius: 'var(--radius-md)',
-                    border: '1px solid var(--color-border-700)',
-                    backgroundColor: 'var(--color-bg-900)',
-                    color: 'var(--color-text-primary)',
-                    padding: 'var(--space-3)',
-                    fontFamily: 'var(--font-family)',
-                    fontSize: 'var(--text-sm)',
-                  }}
-                />
-                <div style={{ marginTop: 'var(--space-1)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-                  Current effective workspace: {workspaceCwd ?? '(current repository)'}
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                <Button
-                  variant="primary"
-                  onClick={handleSaveWorkspaceSettings}
-                  disabled={!workspaceDirty}
-                  data-testid="settings-save-workspace"
-                >
-                  Save Workspace
-                </Button>
-                <Button variant="ghost" onClick={handleResetWorkspaceSettings} data-testid="settings-reset-workspace">
-                  Reset to Current Repository
-                </Button>
-                <Badge variant={workspaceDraftCwd ? 'info' : 'neutral'}>
-                  {workspaceDraftCwd ?? '(current repository)'}
-                </Badge>
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 'var(--space-2)',
+                  fontSize: 'var(--text-sm)',
+                  color: 'var(--color-text-secondary)',
+                }}
+                data-testid="settings-info"
+              >
+                <div>Orchestration: choose folder per thread from the New Thread panel.</div>
+                <div>Race: configure workspace directly in Race Configuration.</div>
+                <div>Review/Merge: uses the Race workspace.</div>
               </div>
             </Card>
           </div>
