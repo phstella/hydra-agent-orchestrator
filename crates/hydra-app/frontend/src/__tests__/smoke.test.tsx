@@ -1198,10 +1198,20 @@ describe('Smoke Test 12: Stop session and lifecycle transition', () => {
   });
 
   it('allows removing a stopped thread from the rail', async () => {
+    let stopped = false;
+    vi.mocked(ipc.stopInteractiveSession).mockImplementation(async (sessionId) => {
+      stopped = true;
+      return {
+        sessionId,
+        status: 'stopped',
+        wasRunning: true,
+      } as InteractiveStopResult;
+    });
+
     let pollCount = 0;
     vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async () => {
       pollCount++;
-      if (pollCount <= 2) {
+      if (!stopped && pollCount <= 2) {
         return {
           sessionId: 'test-session-1',
           events: [
@@ -1248,6 +1258,109 @@ describe('Smoke Test 12: Stop session and lifecycle transition', () => {
     await waitFor(() => {
       expect(ipc.removeInteractiveSession).toHaveBeenCalledWith('test-session-1');
       expect(screen.queryByTestId('session-item-test-session-1')).not.toBeInTheDocument();
+    });
+  });
+
+  it('clears all stopped threads from the rail with one action', async () => {
+    vi.mocked(ipc.listInteractiveSessions).mockResolvedValue([
+      makeInteractiveSummary('done-thread-1', 'claude', { status: 'completed' }),
+      makeInteractiveSummary('done-thread-2', 'codex', { status: 'stopped' }),
+    ]);
+    vi.mocked(ipc.removeInteractiveSession).mockImplementation(async (sessionId) => ({
+      sessionId,
+      status: 'stopped',
+      removed: true,
+    } as InteractiveRemoveResult));
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('clear-stopped-sessions')).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId('clear-stopped-sessions'));
+
+    await waitFor(() => {
+      expect(ipc.removeInteractiveSession).toHaveBeenCalledWith('done-thread-1');
+      expect(ipc.removeInteractiveSession).toHaveBeenCalledWith('done-thread-2');
+      expect(screen.queryByTestId('session-item-done-thread-1')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('session-item-done-thread-2')).not.toBeInTheDocument();
+    });
+  });
+
+  it('replays only tail terminal history when switching to a heavy thread', async () => {
+    let sessionCounter = 0;
+    vi.mocked(ipc.startInteractiveSession).mockImplementation(async (req) => {
+      sessionCounter += 1;
+      return makeInteractiveStarted({
+        sessionId: `heavy-replay-${sessionCounter}`,
+        agentKey: req.agentKey,
+      });
+    });
+
+    const hugeOutput = `HEAVY:${'a'.repeat(260_000)}\n`;
+    const pollCounts = new Map<string, number>();
+    vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async (sessionId) => {
+      const count = (pollCounts.get(sessionId) ?? 0) + 1;
+      pollCounts.set(sessionId, count);
+
+      if (sessionId === 'heavy-replay-1' && count === 1) {
+        return {
+          sessionId,
+          events: [
+            {
+              sessionId,
+              agentKey: 'claude',
+              eventType: 'output',
+              data: { text: hugeOutput },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+          nextCursor: 1,
+          done: true,
+          status: 'stopped',
+          error: null,
+        } as InteractiveEventBatch;
+      }
+
+      return {
+        sessionId,
+        events: [],
+        nextCursor: count,
+        done: true,
+        status: 'stopped',
+        error: null,
+      } as InteractiveEventBatch;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByTestId('nav-orchestration'));
+    await waitFor(() => expect(screen.getByTestId('session-task-prompt')).toBeInTheDocument());
+
+    await user.type(screen.getByTestId('session-task-prompt'), 'first');
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-heavy-replay-1')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('agent-select-codex'));
+    await user.click(screen.getByTestId('confirm-create-session'));
+    await waitFor(() => expect(screen.getByTestId('session-item-heavy-replay-2')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('session-item-heavy-replay-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-lane-label')).toHaveTextContent(/heavy-re/);
+    });
+
+    const instances = (globalThis as Record<string, unknown>).__xtermInstances as XTermMockInstance[];
+    const term = instances[instances.length - 1];
+    expect(term).toBeDefined();
+
+    await waitFor(() => {
+      const replayed = term.__rawWrites.join('');
+      expect(replayed.length).toBeLessThan(230_000);
+      expect(replayed).not.toContain('HEAVY:');
     });
   });
 });
@@ -2583,13 +2696,15 @@ async function setupTerminalWithAnsiOutput(
   await user.type(screen.getByTestId('session-task-prompt'), 'ANSI fixture');
   await user.click(screen.getByTestId('confirm-create-session'));
 
+  const instances = (globalThis as Record<string, unknown>).__xtermInstances as XTermMockInstance[];
+  const term = instances[instances.length - 1];
+  expect(term).toBeDefined();
+
   await waitFor(() => {
-    const instances = (globalThis as Record<string, unknown>).__xtermInstances as XTermMockInstance[];
-    expect(instances.some((t) => t.__rawWrites.length > 0)).toBe(true);
+    expect(term.__rawWrites.length).toBeGreaterThan(0);
   });
 
-  const instances = (globalThis as Record<string, unknown>).__xtermInstances as XTermMockInstance[];
-  return instances.find((t) => t.__rawWrites.length > 0)!;
+  return term;
 }
 
 describe('P4.9.3 Fixture: 24-bit color ANSI sequences', () => {
@@ -2824,10 +2939,20 @@ describe('P4.9.5: Terminal-only input model', () => {
   });
 
   it('terminal toolbar shows session ended indicator after stop', async () => {
+    let stopped = false;
+    vi.mocked(ipc.stopInteractiveSession).mockImplementation(async (sessionId) => {
+      stopped = true;
+      return {
+        sessionId,
+        status: 'stopped',
+        wasRunning: true,
+      } as InteractiveStopResult;
+    });
+
     let pollCount = 0;
     vi.mocked(ipc.pollInteractiveEvents).mockImplementation(async () => {
       pollCount++;
-      if (pollCount <= 2) {
+      if (!stopped && pollCount <= 2) {
         return {
           sessionId: 'test-session-1',
           events: [],

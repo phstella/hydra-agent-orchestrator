@@ -13,6 +13,7 @@ interface InteractiveSessionRailProps {
   onSelectSession: (sessionId: string) => void;
   onStopSession: (sessionId: string) => void;
   onRemoveSession: (sessionId: string) => void;
+  onClearStoppedSessions: () => void;
 }
 
 const lifecycleBadgeVariant: Record<SessionLifecycle, 'info' | 'success' | 'danger' | 'warning'> = {
@@ -56,6 +57,7 @@ export function InteractiveSessionRail({
   onSelectSession,
   onStopSession,
   onRemoveSession,
+  onClearStoppedSessions,
 }: InteractiveSessionRailProps) {
   // Build adapter instance index for lane labels (M4.8.2)
   const instanceIndex = useMemo(() => {
@@ -82,6 +84,7 @@ export function InteractiveSessionRail({
   };
 
   const runningCount = sessions.filter((s) => s.status === 'running').length;
+  const stoppedCount = sessions.length - runningCount;
 
   return (
     <div style={containerStyle} data-testid="session-rail">
@@ -104,11 +107,32 @@ export function InteractiveSessionRail({
         >
           Threads
         </span>
-        {runningCount > 0 && (
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-marine-400)' }}>
-            {runningCount} active
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          {stoppedCount > 0 && (
+            <button
+              type="button"
+              onClick={onClearStoppedSessions}
+              data-testid="clear-stopped-sessions"
+              style={{
+                border: '1px solid var(--color-border-700)',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'var(--color-surface-800)',
+                color: 'var(--color-text-muted)',
+                fontSize: '10px',
+                padding: '2px var(--space-1)',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Clear stopped
+            </button>
+          )}
+          {runningCount > 0 && (
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-marine-400)' }}>
+              {runningCount} active
+            </span>
+          )}
+        </div>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>

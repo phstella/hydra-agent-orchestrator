@@ -25,6 +25,8 @@ import type {
 } from '../types';
 
 const MAX_CLIENT_CHUNKS_PER_SESSION = 2_000;
+const MAX_SESSION_REPLAY_CHARS = 220_000;
+const MAX_SESSION_REPLAY_CHUNKS = 600;
 const POLL_INTERVAL_ACTIVE_MS = 40;
 const POLL_INTERVAL_BACKGROUND_MS = 120;
 const POLL_RETRY_MS = 400;
@@ -50,6 +52,34 @@ function appendBoundedChunk(existing: string[] | undefined, incoming: string): s
     target.splice(0, target.length - MAX_CLIENT_CHUNKS_PER_SESSION);
   }
   return target;
+}
+
+function tailChunksForReplay(chunks: string[]): string[] {
+  if (chunks.length === 0) return chunks;
+
+  let charCount = 0;
+  const replayTail: string[] = [];
+
+  for (let i = chunks.length - 1; i >= 0; i -= 1) {
+    if (replayTail.length >= MAX_SESSION_REPLAY_CHUNKS) break;
+    if (charCount >= MAX_SESSION_REPLAY_CHARS) break;
+
+    const chunk = chunks[i] ?? '';
+    if (chunk.length === 0) continue;
+
+    const remaining = MAX_SESSION_REPLAY_CHARS - charCount;
+    if (chunk.length <= remaining) {
+      replayTail.push(chunk);
+      charCount += chunk.length;
+      continue;
+    }
+
+    replayTail.push(chunk.slice(chunk.length - remaining));
+    charCount = MAX_SESSION_REPLAY_CHARS;
+    break;
+  }
+
+  return replayTail.reverse();
 }
 
 function extractTerminalText(event: InteractiveStreamEvent): string {
@@ -416,7 +446,7 @@ export function InteractiveWorkspace({
       if (selectedReplayNeeded && selectedId) {
         setTimeout(() => {
           if (selectedSessionIdRef.current !== selectedId) return;
-          const replay = sessionChunkStoreRef.current.get(selectedId) ?? [];
+          const replay = tailChunksForReplay(sessionChunkStoreRef.current.get(selectedId) ?? []);
           terminalRef.current?.replaceChunks(replay);
         }, 0);
       }
@@ -991,6 +1021,99 @@ export function InteractiveWorkspace({
     }
   }, [sessions]);
 
+  const handleClearStoppedSessions = useCallback(async () => {
+    const stoppedSessions = sessions.filter((session) => session.status !== 'running');
+    if (stoppedSessions.length === 0) return;
+
+    const results = await Promise.allSettled(
+      stoppedSessions.map((session) => removeInteractiveSession(session.sessionId)),
+    );
+
+    const removedIds: string[] = [];
+    const failedMessages = new Map<string, string>();
+
+    for (let i = 0; i < results.length; i += 1) {
+      const sessionId = stoppedSessions[i]?.sessionId;
+      if (!sessionId) continue;
+      const result = results[i];
+      if (result.status === 'fulfilled') {
+        if (result.value.removed) {
+          removedIds.push(sessionId);
+        } else {
+          failedMessages.set(sessionId, 'Failed to remove thread.');
+        }
+      } else {
+        const message = result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason);
+        failedMessages.set(sessionId, message);
+      }
+    }
+
+    if (removedIds.length > 0) {
+      const removedSet = new Set(removedIds);
+      for (const sessionId of removedIds) {
+        const timer = pollTimers.current.get(sessionId);
+        if (timer) {
+          clearTimeout(timer);
+          pollTimers.current.delete(sessionId);
+        }
+        pollCursors.current.delete(sessionId);
+        pollingSessions.current.delete(sessionId);
+        terminalSizes.current.delete(sessionId);
+        sessionChunkStoreRef.current.delete(sessionId);
+        pendingTextBySession.current.delete(sessionId);
+        pendingPatchBySession.current.delete(sessionId);
+      }
+
+      setPollErrors((prev) => {
+        if (prev.size === 0) return prev;
+        let changed = false;
+        const next = new Map(prev);
+        for (const sessionId of removedIds) {
+          if (next.delete(sessionId)) {
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+      setSessionErrors((prev) => {
+        if (prev.size === 0) return prev;
+        let changed = false;
+        const next = new Map(prev);
+        for (const sessionId of removedIds) {
+          if (next.delete(sessionId)) {
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+
+      const remaining = sessions.filter((session) => !removedSet.has(session.sessionId));
+      setSessions(remaining);
+
+      const currentSelected = selectedSessionIdRef.current;
+      if (currentSelected && removedSet.has(currentSelected)) {
+        const nextSelected = remaining[0]?.sessionId ?? null;
+        selectedSessionIdRef.current = nextSelected;
+        setSelectedSessionId(nextSelected);
+        if (!nextSelected) {
+          terminalRef.current?.replaceChunks([]);
+        }
+      }
+    }
+
+    if (failedMessages.size > 0) {
+      setSessionErrors((prev) => {
+        const next = new Map(prev);
+        for (const [sessionId, message] of failedMessages.entries()) {
+          next.set(sessionId, message);
+        }
+        return next;
+      });
+    }
+  }, [sessions]);
+
   // ---------------------------------------------------------------------------
   // Input — P4.9.5: terminal-direct via onData (no side InputComposer)
   // ---------------------------------------------------------------------------
@@ -1021,7 +1144,7 @@ export function InteractiveWorkspace({
     selectedSessionIdRef.current = selectedSessionId;
     requestAnimationFrame(() => {
       const replay = selectedSessionId
-        ? (sessionChunkStoreRef.current.get(selectedSessionId) ?? [])
+        ? tailChunksForReplay(sessionChunkStoreRef.current.get(selectedSessionId) ?? [])
         : [];
       terminalRef.current?.replaceChunks(replay);
     });
@@ -1523,6 +1646,7 @@ export function InteractiveWorkspace({
           }}
           onStopSession={handleStopSession}
           onRemoveSession={handleRemoveSession}
+          onClearStoppedSessions={handleClearStoppedSessions}
         />
       </div>
     </div>
