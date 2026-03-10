@@ -559,7 +559,10 @@ fn cargo_hydra_cli_parts_without_binary() -> Vec<String> {
     ]
 }
 
-fn resolve_existing_directory(cwd: Option<&str>, context_message: &str) -> Result<PathBuf, IpcError> {
+fn resolve_existing_directory(
+    cwd: Option<&str>,
+    context_message: &str,
+) -> Result<PathBuf, IpcError> {
     let selected_cwd = cwd.and_then(|raw| {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -929,14 +932,11 @@ async fn emit_orchestrator_event(
 const MAX_INTERACTIVE_EVENTS_PER_POLL: usize = 512;
 
 struct InteractiveLaunchPaths {
-    source_root: PathBuf,
     repo_root: PathBuf,
     effective_cwd: PathBuf,
     source_root_display: String,
     repo_root_display: String,
     effective_cwd_display: String,
-    has_same_source_running: bool,
-    repo_was_auto_initialized: bool,
     worktree_path: Option<String>,
     managed_worktree: Option<InteractiveManagedWorktree>,
 }
@@ -953,7 +953,6 @@ async fn resolve_interactive_launch_paths(
     )
     .map_err(|e| e.to_string())?;
     let source_root = canonicalize_existing_directory(&source_root).map_err(|e| e.to_string())?;
-    let source_was_in_git_repo = try_repo_root_from_dir(&source_root).is_ok();
 
     let repo_root = resolve_repo_root_with_auto_init(
         requested_cwd,
@@ -974,17 +973,24 @@ async fn resolve_interactive_launch_paths(
     let mut managed_worktree: Option<InteractiveManagedWorktree> = None;
 
     if has_same_source_running {
-        let run_id = uuid::Uuid::parse_str(session_id)
-            .map_err(|e| IpcError::internal(format!("invalid session_id for run id: {e}")).to_string())?;
-        let wt_base = repo_root.join(".hydra").join("worktrees").join("interactive");
-        let wt_service = WorktreeService::new(repo_root.clone(), wt_base);
-        let wt_info = wt_service.create(run_id, agent_key, "HEAD").await.map_err(|e| {
-            IpcError::launch_error(format!(
-                "Failed to create interactive worktree for '{}': {}",
-                agent_key, e
-            ))
-            .to_string()
+        let run_id = uuid::Uuid::parse_str(session_id).map_err(|e| {
+            IpcError::internal(format!("invalid session_id for run id: {e}")).to_string()
         })?;
+        let wt_base = repo_root
+            .join(".hydra")
+            .join("worktrees")
+            .join("interactive");
+        let wt_service = WorktreeService::new(repo_root.clone(), wt_base);
+        let wt_info = wt_service
+            .create(run_id, agent_key, "HEAD")
+            .await
+            .map_err(|e| {
+                IpcError::launch_error(format!(
+                    "Failed to create interactive worktree for '{}': {}",
+                    agent_key, e
+                ))
+                .to_string()
+            })?;
 
         worktree_path = Some(wt_info.path.to_string_lossy().to_string());
 
@@ -1015,14 +1021,11 @@ async fn resolve_interactive_launch_paths(
     let effective_cwd_display = effective_cwd.to_string_lossy().to_string();
 
     Ok(InteractiveLaunchPaths {
-        source_root,
         repo_root,
         effective_cwd,
         source_root_display,
         repo_root_display,
         effective_cwd_display,
-        has_same_source_running,
-        repo_was_auto_initialized: !source_was_in_git_repo,
         worktree_path,
         managed_worktree,
     })
@@ -1136,26 +1139,6 @@ pub async fn start_interactive_session(
         &request.agent_key,
     )
     .await?;
-
-    // M4.5: Working tree cleanliness check.
-    // Skip this guard when we will launch in a dedicated worktree because
-    // same-folder concurrent threads are intentionally isolated.
-    if !launch_paths.has_same_source_running && !launch_paths.repo_was_auto_initialized {
-        let scope = if launch_paths.source_root != launch_paths.repo_root {
-            Some(launch_paths.source_root.clone())
-        } else {
-            None
-        };
-        let wt_status = read_working_tree_status(&launch_paths.repo_root, scope.as_deref());
-        if !wt_status.clean {
-            let detail = wt_status
-                .message
-                .unwrap_or_else(|| "Working tree has uncommitted changes.".to_string());
-            return Err(
-                IpcError::dirty_worktree(interactive_dirty_worktree_message(&detail)).to_string(),
-            );
-        }
-    }
 
     let pty_config = hydra_core::supervisor::pty::PtySessionConfig {
         program: binary_path.to_string_lossy().to_string(),
@@ -1344,7 +1327,17 @@ pub async fn list_interactive_sessions(
     Ok(entries
         .into_iter()
         .map(
-            |(sid, agent_key, status, started_at, event_count, source_root, repo_root, effective_cwd, worktree_path)| InteractiveSessionSummary {
+            |(
+                sid,
+                agent_key,
+                status,
+                started_at,
+                event_count,
+                source_root,
+                repo_root,
+                effective_cwd,
+                worktree_path,
+            )| InteractiveSessionSummary {
                 session_id: sid,
                 agent_key,
                 status,
@@ -2460,25 +2453,12 @@ pub async fn stop_file_watcher(
     }
 }
 
-fn interactive_dirty_worktree_message(detail: &str) -> String {
-    let normalized = detail.replace(
-        "before running Preview Merge",
-        "before starting an interactive session",
-    );
-
-    if normalized.to_lowercase().contains("commit or stash") {
-        normalized
-    } else {
-        format!(
-            "{}. Commit or stash changes before starting an interactive session.",
-            normalized.trim_end_matches('.')
-        )
-    }
-}
-
 async fn cleanup_managed_worktree_on_launch_failure(worktree: &InteractiveManagedWorktree) {
     let repo_root = PathBuf::from(&worktree.repo_root);
-    let wt_base = repo_root.join(".hydra").join("worktrees").join("interactive");
+    let wt_base = repo_root
+        .join(".hydra")
+        .join("worktrees")
+        .join("interactive");
     let run_id = uuid::Uuid::parse_str(&worktree.run_id).unwrap_or_else(|_| uuid::Uuid::nil());
     let info = hydra_core::worktree::WorktreeInfo {
         path: PathBuf::from(&worktree.path),
@@ -2772,14 +2752,9 @@ mod tests {
         .expect("launch path planning should succeed");
 
         let canonical_workspace = workspace.canonicalize().unwrap();
-        assert_eq!(plan.source_root, canonical_workspace);
+        assert_eq!(plan.source_root_display, canonical_workspace.to_string_lossy());
         assert_eq!(plan.repo_root, canonical_workspace);
         assert_eq!(plan.effective_cwd, canonical_workspace);
-        assert!(!plan.has_same_source_running);
-        assert!(
-            plan.repo_was_auto_initialized,
-            "non-git folder launches should be marked as auto-initialized"
-        );
         assert!(plan.worktree_path.is_none());
         assert!(plan.managed_worktree.is_none());
         assert!(workspace.join(".git").exists());
@@ -2838,11 +2813,6 @@ mod tests {
         .await
         .expect("worktree launch path planning should succeed");
 
-        assert!(plan.has_same_source_running);
-        assert!(
-            !plan.repo_was_auto_initialized,
-            "existing git repos should not be marked as auto-initialized"
-        );
         let worktree_path = plan
             .worktree_path
             .clone()
@@ -3347,21 +3317,6 @@ branch refs/heads/main
         let blocked =
             adapter_supports_interactive_unsafe_mode("cursor-agent", &["--force".to_string()]);
         assert!(!blocked);
-    }
-
-    #[test]
-    fn dirty_worktree_message_rewrites_preview_merge_context() {
-        let msg = interactive_dirty_worktree_message(
-            "Working tree has uncommitted changes in: src/main.rs. Commit or stash changes before running Preview Merge.",
-        );
-        assert!(msg.contains("interactive session"));
-        assert!(!msg.contains("Preview Merge"));
-    }
-
-    #[test]
-    fn dirty_worktree_message_adds_guidance_when_missing() {
-        let msg = interactive_dirty_worktree_message("Working tree has uncommitted changes");
-        assert!(msg.contains("Commit or stash changes"));
     }
 
     // P4.9.4: Direct CLI invocation tests

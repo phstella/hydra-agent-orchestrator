@@ -63,7 +63,11 @@ pub struct InteractiveSessionPaths {
 }
 
 impl InteractiveSessionPaths {
-    pub fn for_primary_checkout(source_root: String, repo_root: String, effective_cwd: String) -> Self {
+    pub fn for_primary_checkout(
+        source_root: String,
+        repo_root: String,
+        effective_cwd: String,
+    ) -> Self {
         Self {
             source_root,
             repo_root,
@@ -314,10 +318,7 @@ impl InteractiveStateHandle {
             .map_err(|e| format!("resize failed: {e}"))
     }
 
-    async fn take_managed_worktree(
-        &self,
-        session_id: &str,
-    ) -> Option<InteractiveManagedWorktree> {
+    async fn take_managed_worktree(&self, session_id: &str) -> Option<InteractiveManagedWorktree> {
         let mut sessions = self.sessions.lock().await;
         let session = sessions.get_mut(session_id)?;
         session.managed_worktree.take()
@@ -373,9 +374,29 @@ impl InteractiveStateHandle {
 
     pub async fn list_sessions(
         &self,
-    ) -> Vec<(String, String, String, String, u64, String, String, String, Option<String>)> {
+    ) -> Vec<(
+        String,
+        String,
+        String,
+        String,
+        u64,
+        String,
+        String,
+        String,
+        Option<String>,
+    )> {
         let sessions = self.sessions.lock().await;
-        let mut entries: Vec<(String, String, String, String, u64, String, String, String, Option<String>)> = sessions
+        let mut entries: Vec<(
+            String,
+            String,
+            String,
+            String,
+            u64,
+            String,
+            String,
+            String,
+            Option<String>,
+        )> = sessions
             .values()
             .map(|s| {
                 (
@@ -490,7 +511,10 @@ fn normalize_path_key(path: &str) -> String {
 async fn cleanup_managed_worktree(worktree: InteractiveManagedWorktree) {
     let repo_root = PathBuf::from(&worktree.repo_root);
     let worktree_path = PathBuf::from(&worktree.path);
-    let wt_base = repo_root.join(".hydra").join("worktrees").join("interactive");
+    let wt_base = repo_root
+        .join(".hydra")
+        .join("worktrees")
+        .join("interactive");
     let run_id = uuid::Uuid::parse_str(&worktree.run_id).unwrap_or_else(|_| uuid::Uuid::nil());
     let info = WorktreeInfo {
         path: worktree_path.clone(),
@@ -1218,7 +1242,10 @@ mod tests {
         assert_eq!(item.5, source_root.to_string_lossy());
         assert_eq!(item.6, repo_root.to_string_lossy());
         assert_eq!(item.7, worktree_path.to_string_lossy());
-        assert_eq!(item.8.as_deref(), Some(worktree_path.to_string_lossy().as_ref()));
+        assert_eq!(
+            item.8.as_deref(),
+            Some(worktree_path.to_string_lossy().as_ref())
+        );
 
         state.stop_session("meta-a").await.unwrap();
     }
