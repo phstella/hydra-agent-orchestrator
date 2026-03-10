@@ -1,0 +1,8 @@
+{"type":"start","task":"Fix the bug in main.rs","model":"o4-mini"}
+{"type":"message","role":"assistant","content":"I'll fix the bug in main.rs."}
+{"type":"tool_call","tool":"shell","input":{"command":"cat src/main.rs"}}
+{"type":"tool_result","tool":"shell","output":"fn main() {\n    println!(\"Hello\");\n}"}
+{"type":"message","role":"assistant","content":"Found the issue. Applying fix."}
+{"type":"tool_call","tool":"write","input":{"path":"src/main.rs","content":"fn main() {\n    println!(\"Hello, world!\");\n}"}}
+{"type":"tool_result","tool":"write","output":"File written successfully"}
+{"type":"completed","usage":{"input_tokens":800,"output_tokens":320},"cost_usd":0.002}

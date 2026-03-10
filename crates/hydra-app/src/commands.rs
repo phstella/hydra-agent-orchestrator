@@ -1,0 +1,3569 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+use tauri::{Emitter, State};
+use tokio::io::AsyncReadExt;
+use tokio::process::Command as TokioCommand;
+use tokio::time::{sleep, Duration};
+
+use hydra_core::artifact::{EventKind, RunEvent};
+use hydra_core::worktree::WorktreeService;
+
+use crate::ipc_types::*;
+use crate::state::{AppState, AppStateHandle, InteractiveManagedWorktree, InteractiveSessionPaths};
+
+const MAX_EVENTS_PER_POLL: usize = 512;
+const INTERACTIVE_STREAM_EVENT: &str = "hydra://interactive-event";
+
+// ---------------------------------------------------------------------------
+// Health check
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn health_check() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Preflight / Doctor
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn run_preflight(state: State<'_, AppState>) -> Result<PreflightResult, String> {
+    let report = state.run_probes().await;
+
+    let adapters: Vec<AdapterInfo> = report.results.iter().map(AdapterInfo::from).collect();
+
+    let mut checks = Vec::new();
+    let mut warnings = Vec::new();
+
+    // Check: Git repository
+    let git_repo_ok = std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    checks.push(DiagnosticCheck {
+        name: "Git Repository".to_string(),
+        description: if git_repo_ok {
+            "Working inside a valid git repository".to_string()
+        } else {
+            "Not inside a git repository".to_string()
+        },
+        status: if git_repo_ok {
+            CheckStatus::Passed
+        } else {
+            CheckStatus::Failed
+        },
+        evidence: None,
+    });
+
+    // Check: Environment variables
+    let has_env = std::env::var("HOME").is_ok() || std::env::var("USERPROFILE").is_ok();
+    checks.push(DiagnosticCheck {
+        name: "Environment Variables Check".to_string(),
+        description: "Found system configuration".to_string(),
+        status: if has_env {
+            CheckStatus::Passed
+        } else {
+            CheckStatus::Warning
+        },
+        evidence: None,
+    });
+
+    // Check: Adapter validation
+    let tier1_count = adapters
+        .iter()
+        .filter(|a| a.tier == hydra_core::adapter::AdapterTier::Tier1)
+        .count();
+    let tier1_ready = adapters
+        .iter()
+        .filter(|a| a.tier == hydra_core::adapter::AdapterTier::Tier1 && a.status.is_available())
+        .count();
+
+    checks.push(DiagnosticCheck {
+        name: "Validating Adapters".to_string(),
+        description: format!("{}/{} tier-1 adapters ready", tier1_ready, tier1_count),
+        status: if tier1_ready == tier1_count {
+            CheckStatus::Passed
+        } else if tier1_ready > 0 {
+            CheckStatus::Warning
+        } else {
+            CheckStatus::Failed
+        },
+        evidence: Some(format!(
+            "Connected to {} adapter(s)",
+            adapters.iter().filter(|a| a.status.is_available()).count()
+        )),
+    });
+
+    // Check: working tree cleanliness
+    let git_status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .output();
+    let (git_status_ok, worktree_clean) = match git_status {
+        Ok(output) if output.status.success() => (true, output.stdout.is_empty()),
+        _ => (false, false),
+    };
+
+    checks.push(DiagnosticCheck {
+        name: "Working Tree Cleanliness".to_string(),
+        description: if !git_status_ok {
+            "Unable to inspect working tree status".to_string()
+        } else if worktree_clean {
+            "Working tree is clean".to_string()
+        } else {
+            "Working tree has uncommitted changes".to_string()
+        },
+        status: if !git_status_ok {
+            CheckStatus::Warning
+        } else if worktree_clean {
+            CheckStatus::Passed
+        } else {
+            CheckStatus::Warning
+        },
+        evidence: None,
+    });
+
+    // Warnings for experimental adapters
+    for adapter in &adapters {
+        if adapter.tier == hydra_core::adapter::AdapterTier::Experimental
+            && adapter.status.is_available()
+        {
+            warnings.push(format!(
+                "{} adapter is experimental. Inference might be slow during race simulation.",
+                adapter.key
+            ));
+        }
+    }
+
+    let passed = checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Passed)
+        .count() as u32;
+    let failed = checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Failed)
+        .count() as u32;
+    let total = checks.len() as u32;
+    let health_score = if total > 0 {
+        (passed as f64 / total as f64) * 100.0
+    } else {
+        100.0
+    };
+
+    Ok(PreflightResult {
+        system_ready: failed == 0 && report.all_tier1_ready,
+        all_tier1_ready: report.all_tier1_ready,
+        passed_count: passed,
+        failed_count: failed,
+        total_count: total,
+        health_score,
+        checks,
+        adapters,
+        warnings,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// List adapters (runtime-driven, not hardcoded)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn list_adapters(state: State<'_, AppState>) -> Result<Vec<AdapterInfo>, String> {
+    let report = state.run_probes().await;
+    Ok(report.results.iter().map(AdapterInfo::from).collect())
+}
+
+#[tauri::command]
+pub async fn get_working_tree_status(cwd: Option<String>) -> Result<WorkingTreeStatus, String> {
+    let repo_root = resolve_repo_root(
+        cwd.as_deref(),
+        "Not inside a git repository; cannot inspect working tree",
+    )
+    .map_err(|e| e.to_string())?;
+    let scope = resolve_working_tree_scope(&repo_root, cwd.as_deref());
+    Ok(read_working_tree_status(&repo_root, scope.as_deref()))
+}
+
+// ---------------------------------------------------------------------------
+// Race commands (M3.2)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn start_race(
+    state: State<'_, AppState>,
+    request: RaceRequest,
+) -> Result<RaceStarted, String> {
+    if request.task_prompt.trim().is_empty() {
+        return Err(IpcError::validation("Task prompt cannot be empty").to_string());
+    }
+    if request.agents.is_empty() {
+        return Err(IpcError::validation("At least one agent must be selected").to_string());
+    }
+
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let agents = request.agents.clone();
+    let state_handle = state.handle();
+    state_handle.register_race(&run_id).await;
+
+    let run_id_for_task = run_id.clone();
+    tokio::spawn(async move {
+        execute_race(state_handle, request, run_id_for_task).await;
+    });
+
+    Ok(RaceStarted { run_id, agents })
+}
+
+#[tauri::command]
+pub async fn poll_race_events(
+    state: State<'_, AppState>,
+    run_id: String,
+    cursor: u64,
+) -> Result<RaceEventBatch, String> {
+    let cursor = usize::try_from(cursor)
+        .map_err(|_| IpcError::validation("Invalid event cursor").to_string())?;
+
+    let state_handle = state.handle();
+    let Some((events, next_cursor, done, status, error)) = state_handle
+        .poll_events(&run_id, cursor, MAX_EVENTS_PER_POLL)
+        .await
+    else {
+        return Err(IpcError::validation("Unknown run ID").to_string());
+    };
+
+    Ok(RaceEventBatch {
+        run_id,
+        events,
+        next_cursor: next_cursor as u64,
+        done,
+        status,
+        error,
+    })
+}
+
+#[tauri::command]
+pub async fn get_race_result(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Result<Option<RaceResult>, String> {
+    let state_handle = state.handle();
+    Ok(state_handle.race_result(&run_id).await)
+}
+
+async fn execute_race(state: AppStateHandle, request: RaceRequest, run_id: String) {
+    let repo_root = match resolve_repo_root_with_auto_init(
+        request.cwd.as_deref(),
+        "Not inside a git repository; cannot start race",
+    ) {
+        Ok(path) => path,
+        Err(err) => {
+            state.mark_failed(&run_id, err.message).await;
+            return;
+        }
+    };
+
+    let run_dir = repo_root.join(".hydra").join("runs").join(&run_id);
+    let events_path = run_dir.join("events.jsonl");
+    let agents_dir = run_dir.join("agents");
+
+    let mut cmd = build_race_command(&repo_root, &run_id, &request);
+    let stop_tail = Arc::new(AtomicBool::new(false));
+    let tail_handle = tokio::spawn(tail_run_events_file(
+        state.clone(),
+        run_id.clone(),
+        events_path,
+        agents_dir,
+        Arc::clone(&stop_tail),
+    ));
+
+    emit_orchestrator_event(
+        &state,
+        &run_id,
+        "race_process_started",
+        serde_json::json!({ "agents": request.agents }),
+    )
+    .await;
+
+    let output = cmd.output().await;
+
+    stop_tail.store(true, Ordering::Relaxed);
+    let _ = tail_handle.await;
+
+    match output {
+        Ok(output) if output.status.success() => match parse_cli_race_summary(&output.stdout) {
+            Ok(result) => {
+                state.mark_completed(&run_id, result).await;
+                emit_orchestrator_event(
+                    &state,
+                    &run_id,
+                    "race_process_completed",
+                    serde_json::json!({}),
+                )
+                .await;
+            }
+            Err(err) => {
+                state.mark_failed(&run_id, err.message.clone()).await;
+                emit_orchestrator_event(
+                    &state,
+                    &run_id,
+                    "race_process_failed",
+                    serde_json::json!({ "error": err.message }),
+                )
+                .await;
+            }
+        },
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let message = if stderr.is_empty() {
+                format!("race command exited with status {}", output.status)
+            } else {
+                format!("race command failed: {}", stderr)
+            };
+            state.mark_failed(&run_id, message.clone()).await;
+            emit_orchestrator_event(
+                &state,
+                &run_id,
+                "race_process_failed",
+                serde_json::json!({ "error": message }),
+            )
+            .await;
+        }
+        Err(err) => {
+            let message = format!("failed to execute race command: {err}");
+            state.mark_failed(&run_id, message.clone()).await;
+            emit_orchestrator_event(
+                &state,
+                &run_id,
+                "race_process_failed",
+                serde_json::json!({ "error": message }),
+            )
+            .await;
+        }
+    }
+}
+
+fn parse_cli_race_summary(stdout: &[u8]) -> Result<RaceResult, IpcError> {
+    let json: serde_json::Value = serde_json::from_slice(stdout)
+        .map_err(|e| IpcError::internal(format!("failed to parse race JSON output: {e}")))?;
+
+    let run_id = json
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| IpcError::internal("race JSON output missing run_id"))?
+        .to_string();
+
+    let status = json
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(normalize_status)
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let race_duration_ms = json
+        .get("duration_ms")
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            json.get("health")
+                .and_then(|h| h.get("duration_ms"))
+                .and_then(|v| v.as_u64())
+        });
+
+    let total_cost = json.get("total_cost").and_then(|v| v.as_f64()).or_else(|| {
+        json.get("cost")
+            .and_then(|c| c.get("estimated_cost_usd"))
+            .and_then(|v| v.as_f64())
+    });
+
+    let agents = json
+        .get("agents")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    let score_obj = item.get("score");
+
+                    let dimensions = score_obj
+                        .and_then(|s| s.get("dimensions"))
+                        .and_then(|d| d.as_array())
+                        .map(|dims| {
+                            dims.iter()
+                                .filter_map(|dim| {
+                                    let name = dim.get("name")?.as_str()?.to_string();
+                                    let score = dim.get("score")?.as_f64()?;
+                                    let evidence = dim
+                                        .get("evidence")
+                                        .cloned()
+                                        .unwrap_or(serde_json::json!({}));
+                                    Some(DimensionScoreIpc {
+                                        name,
+                                        score,
+                                        evidence,
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    let gate_failures = score_obj
+                        .and_then(|s| s.get("gate_failures"))
+                        .and_then(|g| g.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    AgentResult {
+                        agent_key: item
+                            .get("agent")
+                            .or_else(|| item.get("agent_key"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        status: item
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .map(normalize_status)
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        duration_ms: item.get("duration_ms").and_then(|v| v.as_u64()),
+                        score: score_obj
+                            .and_then(|v| v.get("composite"))
+                            .and_then(|v| v.as_f64()),
+                        mergeable: score_obj
+                            .and_then(|v| v.get("mergeable"))
+                            .and_then(|v| v.as_bool()),
+                        gate_failures,
+                        dimensions,
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(RaceResult {
+        run_id,
+        status,
+        agents,
+        duration_ms: race_duration_ms,
+        total_cost,
+    })
+}
+
+fn normalize_status(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "unknown".to_string();
+    }
+
+    let mut out = String::with_capacity(trimmed.len() + 4);
+    let mut prev_was_lower_or_digit = false;
+
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if ch.is_ascii_uppercase() && prev_was_lower_or_digit && !out.ends_with('_') {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+            prev_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        } else {
+            if !out.is_empty() && !out.ends_with('_') {
+                out.push('_');
+            }
+            prev_was_lower_or_digit = false;
+        }
+    }
+
+    while out.ends_with('_') {
+        out.pop();
+    }
+
+    if out.is_empty() {
+        "unknown".to_string()
+    } else {
+        out
+    }
+}
+
+fn build_race_command(repo_root: &Path, run_id: &str, request: &RaceRequest) -> TokioCommand {
+    let mut cmd = if let Ok(bin) = std::env::var("HYDRA_CLI_BIN") {
+        TokioCommand::new(bin)
+    } else if binary_available("hydra") {
+        TokioCommand::new("hydra")
+    } else {
+        let mut cargo = TokioCommand::new("cargo");
+        cargo.args(cargo_hydra_cli_parts_without_binary());
+        cargo
+    };
+
+    let mut args = vec![
+        "race".to_string(),
+        "--json".to_string(),
+        "--prompt".to_string(),
+        request.task_prompt.clone(),
+        "--base-ref".to_string(),
+        "HEAD".to_string(),
+        "--agents".to_string(),
+        request.agents.join(","),
+        "--run-id".to_string(),
+        run_id.to_string(),
+    ];
+    if request.allow_experimental {
+        args.push("--allow-experimental-adapters".to_string());
+    }
+
+    cmd.args(args);
+    cmd.current_dir(repo_root);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    cmd
+}
+
+fn binary_available(program: &str) -> bool {
+    std::process::Command::new(program)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn cargo_hydra_cli_manifest_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("Cargo.toml")
+}
+
+fn cargo_hydra_cli_parts_without_binary() -> Vec<String> {
+    vec![
+        "run".to_string(),
+        "--manifest-path".to_string(),
+        cargo_hydra_cli_manifest_path()
+            .to_string_lossy()
+            .to_string(),
+        "-p".to_string(),
+        "hydra-cli".to_string(),
+        "--".to_string(),
+    ]
+}
+
+fn resolve_existing_directory(
+    cwd: Option<&str>,
+    context_message: &str,
+) -> Result<PathBuf, IpcError> {
+    let selected_cwd = cwd.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+
+    let detail = selected_cwd
+        .map(|path| format!(" (path: {path})"))
+        .unwrap_or_default();
+
+    let target_dir = if let Some(path) = selected_cwd {
+        PathBuf::from(path)
+    } else {
+        std::env::current_dir()
+            .map_err(|e| IpcError::internal(format!("failed to resolve current directory: {e}")))?
+    };
+
+    if !target_dir.exists() {
+        return Err(IpcError::validation(format!(
+            "{context_message}{detail}. Path does not exist."
+        )));
+    }
+    if !target_dir.is_dir() {
+        return Err(IpcError::validation(format!(
+            "{context_message}{detail}. Path is not a directory."
+        )));
+    }
+
+    Ok(target_dir)
+}
+
+fn canonicalize_existing_directory(path: &Path) -> Result<PathBuf, IpcError> {
+    path.canonicalize().map_err(|e| {
+        IpcError::validation(format!(
+            "Unable to resolve workspace directory '{}' to an absolute path: {e}",
+            path.display()
+        ))
+    })
+}
+
+fn resolve_repo_root(cwd: Option<&str>, not_repo_message: &str) -> Result<PathBuf, IpcError> {
+    resolve_repo_root_internal(cwd, not_repo_message, false)
+}
+
+fn resolve_repo_root_with_auto_init(
+    cwd: Option<&str>,
+    not_repo_message: &str,
+) -> Result<PathBuf, IpcError> {
+    resolve_repo_root_internal(cwd, not_repo_message, true)
+}
+
+fn resolve_repo_root_internal(
+    cwd: Option<&str>,
+    not_repo_message: &str,
+    allow_auto_init: bool,
+) -> Result<PathBuf, IpcError> {
+    let selected_cwd = cwd.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+    let target_dir = resolve_existing_directory(cwd, not_repo_message)?;
+    let detail = selected_cwd
+        .map(|path| format!(" (path: {path})"))
+        .unwrap_or_default();
+
+    if let Ok(root) = try_repo_root_from_dir(&target_dir) {
+        return Ok(root);
+    }
+
+    // Only auto-init when the user explicitly selected a workspace path.
+    if allow_auto_init && selected_cwd.is_some() {
+        initialize_git_repository(&target_dir).map_err(|init_err| {
+            IpcError::validation(format!(
+                "{not_repo_message}{detail}. Auto-initialize failed: {init_err}"
+            ))
+        })?;
+
+        if let Ok(root) = try_repo_root_from_dir(&target_dir) {
+            return Ok(root);
+        }
+
+        return Err(IpcError::validation(format!(
+            "{not_repo_message}{detail}. Repository was initialized but root discovery still failed."
+        )));
+    }
+
+    Err(IpcError::validation(format!("{not_repo_message}{detail}")))
+}
+
+fn try_repo_root_from_dir(target_dir: &Path) -> Result<PathBuf, IpcError> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(target_dir)
+        .output()
+        .map_err(|e| IpcError::internal(format!("failed to execute git: {e}")))?;
+
+    if !output.status.success() {
+        return Err(IpcError::validation("not inside a git repository"));
+    }
+
+    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if root.is_empty() {
+        return Err(IpcError::internal("git returned empty repository root"));
+    }
+
+    Ok(PathBuf::from(root))
+}
+
+fn initialize_git_repository(target_dir: &Path) -> Result<(), String> {
+    let init_output = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(target_dir)
+        .output()
+        .map_err(|e| format!("failed to run git init: {e}"))?;
+
+    if !init_output.status.success() {
+        let stderr = String::from_utf8_lossy(&init_output.stderr)
+            .trim()
+            .to_string();
+        return Err(if stderr.is_empty() {
+            "git init failed".to_string()
+        } else {
+            stderr
+        });
+    }
+
+    ensure_hydra_gitignore(target_dir)?;
+
+    let head_exists = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(target_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("failed to verify git HEAD: {e}"))?
+        .success();
+
+    if head_exists {
+        return Ok(());
+    }
+
+    let add_gitignore = std::process::Command::new("git")
+        .args(["add", ".gitignore"])
+        .current_dir(target_dir)
+        .output()
+        .map_err(|e| format!("failed to stage .gitignore: {e}"))?;
+    if !add_gitignore.status.success() {
+        let stderr = String::from_utf8_lossy(&add_gitignore.stderr)
+            .trim()
+            .to_string();
+        return Err(if stderr.is_empty() {
+            "failed to stage .gitignore".to_string()
+        } else {
+            format!("failed to stage .gitignore: {stderr}")
+        });
+    }
+
+    let commit_output = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Hydra Auto Init",
+            "-c",
+            "user.email=hydra@local",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "chore: initialize hydra workspace",
+        ])
+        .env("GIT_AUTHOR_NAME", "Hydra Auto Init")
+        .env("GIT_AUTHOR_EMAIL", "hydra@local")
+        .env("GIT_COMMITTER_NAME", "Hydra Auto Init")
+        .env("GIT_COMMITTER_EMAIL", "hydra@local")
+        .current_dir(target_dir)
+        .output()
+        .map_err(|e| format!("failed to create initial commit: {e}"))?;
+
+    if !commit_output.status.success() {
+        let stderr = String::from_utf8_lossy(&commit_output.stderr)
+            .trim()
+            .to_string();
+        let stdout = String::from_utf8_lossy(&commit_output.stdout)
+            .trim()
+            .to_string();
+        return Err(if !stderr.is_empty() {
+            format!("initial commit failed: {stderr}")
+        } else if !stdout.is_empty() {
+            format!("initial commit failed: {stdout}")
+        } else {
+            "initial commit failed".to_string()
+        });
+    }
+
+    Ok(())
+}
+
+fn ensure_hydra_gitignore(target_dir: &Path) -> Result<(), String> {
+    let gitignore_path = target_dir.join(".gitignore");
+    let mut content = if gitignore_path.exists() {
+        std::fs::read_to_string(&gitignore_path)
+            .map_err(|e| format!("failed to read .gitignore: {e}"))?
+    } else {
+        String::new()
+    };
+
+    let has_hydra_line = content
+        .lines()
+        .map(str::trim)
+        .any(|line| line == ".hydra/" || line == ".hydra");
+    if has_hydra_line {
+        return Ok(());
+    }
+
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(".hydra/\n");
+
+    std::fs::write(&gitignore_path, content).map_err(|e| format!("failed to write .gitignore: {e}"))
+}
+
+async fn tail_run_events_file(
+    state: AppStateHandle,
+    run_id: String,
+    events_path: PathBuf,
+    agents_dir: PathBuf,
+    stop: Arc<AtomicBool>,
+) {
+    let mut consumed_lines = 0usize;
+    let mut consumed_agent_lines: HashMap<PathBuf, usize> = HashMap::new();
+
+    loop {
+        consumed_lines =
+            emit_new_events_from_file(&state, &run_id, &events_path, consumed_lines, false).await;
+        emit_new_agent_output_events_from_dir(
+            &state,
+            &run_id,
+            &agents_dir,
+            &mut consumed_agent_lines,
+        )
+        .await;
+
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+
+        sleep(Duration::from_millis(120)).await;
+    }
+
+    let _ = emit_new_events_from_file(&state, &run_id, &events_path, consumed_lines, false).await;
+    emit_new_agent_output_events_from_dir(&state, &run_id, &agents_dir, &mut consumed_agent_lines)
+        .await;
+}
+
+async fn emit_new_events_from_file(
+    state: &AppStateHandle,
+    run_id: &str,
+    events_path: &Path,
+    consumed_lines: usize,
+    output_only: bool,
+) -> usize {
+    let Ok(content) = tokio::fs::read_to_string(events_path).await else {
+        return consumed_lines;
+    };
+
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() <= consumed_lines {
+        return lines.len();
+    }
+
+    for line in lines.iter().skip(consumed_lines) {
+        if let Some(event) = parse_run_event_line(run_id, line, output_only) {
+            state.append_event(run_id, event).await;
+        }
+    }
+
+    lines.len()
+}
+
+async fn emit_new_agent_output_events_from_dir(
+    state: &AppStateHandle,
+    run_id: &str,
+    agents_dir: &Path,
+    consumed_lines_by_file: &mut HashMap<PathBuf, usize>,
+) {
+    let Ok(mut entries) = tokio::fs::read_dir(agents_dir).await else {
+        return;
+    };
+
+    let mut event_paths = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path().join("events.jsonl");
+        if tokio::fs::metadata(&path).await.is_ok() {
+            event_paths.push(path);
+        }
+    }
+    event_paths.sort();
+
+    for path in &event_paths {
+        let consumed = consumed_lines_by_file.get(path).copied().unwrap_or(0);
+        let next = emit_new_events_from_file(state, run_id, path, consumed, true).await;
+        consumed_lines_by_file.insert(path.clone(), next);
+    }
+
+    consumed_lines_by_file.retain(|path, _| event_paths.contains(path));
+}
+
+fn parse_run_event_line(run_id: &str, line: &str, output_only: bool) -> Option<AgentStreamEvent> {
+    if line.trim().is_empty() {
+        return None;
+    }
+
+    let event: RunEvent = serde_json::from_str(line).ok()?;
+    if output_only && !matches!(event.kind, EventKind::AgentStdout | EventKind::AgentStderr) {
+        return None;
+    }
+    let event_type = serde_json::to_value(&event.kind)
+        .ok()
+        .and_then(|v| v.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Some(AgentStreamEvent {
+        run_id: run_id.to_string(),
+        agent_key: event.agent_key.unwrap_or_else(|| "system".to_string()),
+        event_type,
+        data: event.data,
+        timestamp: event.timestamp.to_rfc3339(),
+    })
+}
+
+async fn emit_orchestrator_event(
+    state: &AppStateHandle,
+    run_id: &str,
+    event_type: &str,
+    data: serde_json::Value,
+) {
+    state
+        .append_event(
+            run_id,
+            AgentStreamEvent {
+                run_id: run_id.to_string(),
+                agent_key: "system".to_string(),
+                event_type: event_type.to_string(),
+                data,
+                timestamp: format!(
+                    "{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                ),
+            },
+        )
+        .await;
+}
+
+// ---------------------------------------------------------------------------
+// Interactive session commands (M4.2)
+// ---------------------------------------------------------------------------
+
+const MAX_INTERACTIVE_EVENTS_PER_POLL: usize = 512;
+
+struct InteractiveLaunchPaths {
+    repo_root: PathBuf,
+    effective_cwd: PathBuf,
+    source_root_display: String,
+    repo_root_display: String,
+    effective_cwd_display: String,
+    worktree_path: Option<String>,
+    managed_worktree: Option<InteractiveManagedWorktree>,
+}
+
+async fn resolve_interactive_launch_paths(
+    interactive: &crate::state::InteractiveStateHandle,
+    requested_cwd: Option<&str>,
+    session_id: &str,
+    agent_key: &str,
+) -> Result<InteractiveLaunchPaths, String> {
+    let source_root = resolve_existing_directory(
+        requested_cwd,
+        "Not inside a git repository; cannot start interactive session",
+    )
+    .map_err(|e| e.to_string())?;
+    let source_root = canonicalize_existing_directory(&source_root).map_err(|e| e.to_string())?;
+
+    let repo_root = resolve_repo_root_with_auto_init(
+        requested_cwd,
+        "Not inside a git repository; cannot start interactive session",
+    )
+    .map_err(|e| e.to_string())?;
+    let repo_root = canonicalize_existing_directory(&repo_root).map_err(|e| e.to_string())?;
+
+    let source_root_display = source_root.to_string_lossy().to_string();
+    let repo_root_display = repo_root.to_string_lossy().to_string();
+
+    let has_same_source_running = interactive
+        .has_running_session_for_source(&source_root_display)
+        .await;
+
+    let mut effective_cwd = source_root.clone();
+    let mut worktree_path: Option<String> = None;
+    let mut managed_worktree: Option<InteractiveManagedWorktree> = None;
+
+    if has_same_source_running {
+        let run_id = uuid::Uuid::parse_str(session_id).map_err(|e| {
+            IpcError::internal(format!("invalid session_id for run id: {e}")).to_string()
+        })?;
+        let wt_base = repo_root
+            .join(".hydra")
+            .join("worktrees")
+            .join("interactive");
+        let wt_service = WorktreeService::new(repo_root.clone(), wt_base);
+        let wt_info = wt_service
+            .create(run_id, agent_key, "HEAD")
+            .await
+            .map_err(|e| {
+                IpcError::launch_error(format!(
+                    "Failed to create interactive worktree for '{}': {}",
+                    agent_key, e
+                ))
+                .to_string()
+            })?;
+
+        worktree_path = Some(wt_info.path.to_string_lossy().to_string());
+
+        if let Ok(relative) = source_root.strip_prefix(&repo_root) {
+            if !relative.as_os_str().is_empty() {
+                let candidate = wt_info.path.join(relative);
+                if candidate.exists() {
+                    effective_cwd = candidate;
+                } else {
+                    effective_cwd = wt_info.path.clone();
+                }
+            } else {
+                effective_cwd = wt_info.path.clone();
+            }
+        } else {
+            effective_cwd = wt_info.path.clone();
+        }
+
+        managed_worktree = Some(InteractiveManagedWorktree {
+            repo_root: repo_root_display.clone(),
+            run_id: run_id.to_string(),
+            agent_key: agent_key.to_string(),
+            path: wt_info.path.to_string_lossy().to_string(),
+            branch: wt_info.branch,
+        });
+    }
+
+    let effective_cwd_display = effective_cwd.to_string_lossy().to_string();
+
+    Ok(InteractiveLaunchPaths {
+        repo_root,
+        effective_cwd,
+        source_root_display,
+        repo_root_display,
+        effective_cwd_display,
+        worktree_path,
+        managed_worktree,
+    })
+}
+
+#[tauri::command]
+pub async fn start_interactive_session(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    request: InteractiveSessionRequest,
+) -> Result<InteractiveSessionStarted, String> {
+    if request.agent_key.trim().is_empty() {
+        return Err(IpcError::validation("agent_key cannot be empty").to_string());
+    }
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let cols = request.cols.unwrap_or(120);
+    let rows = request.rows.unwrap_or(40);
+
+    let config = state.config.lock().await;
+    let registry = hydra_core::adapter::AdapterRegistry::from_config(&config.adapters);
+
+    // M4.5: Adapter tier/capability gating
+    let adapter = match registry.resolve(&request.agent_key, request.allow_experimental) {
+        Ok(a) => a,
+        Err(hydra_core::adapter::RegistryError::ExperimentalBlocked { key }) => {
+            return Err(IpcError::experimental_blocked(format!(
+                "Adapter '{}' is experimental. Enable 'Allow Experimental' and confirm the risk acknowledgment to use it in interactive mode.",
+                key
+            ))
+            .to_string());
+        }
+        Err(e) => {
+            return Err(IpcError::adapter_error(e.to_string()).to_string());
+        }
+    };
+
+    // M4.5: Check adapter detect status — block if not available
+    let detect = adapter.detect();
+    if !detect.status.is_available() {
+        let reason = detect
+            .error
+            .unwrap_or_else(|| format!("status is {:?}", detect.status));
+        return Err(IpcError::safety_gate(format!(
+            "Adapter '{}' is not available for interactive sessions: {}. Run 'hydra doctor' to diagnose.",
+            request.agent_key, reason
+        ))
+        .to_string());
+    }
+
+    let supported_flags = detect.supported_flags.clone();
+
+    // M4.5: Unsafe mode policy — block unless explicitly opted in
+    if request.unsafe_mode
+        && !adapter_supports_interactive_unsafe_mode(adapter.key(), &supported_flags)
+    {
+        return Err(IpcError::unsafe_blocked(format!(
+            "Adapter '{}' does not support interactive unsafe mode. {}",
+            request.agent_key,
+            unsafe_mode_requirement_hint(adapter.key())
+        ))
+        .to_string());
+    }
+
+    // P4.9.4: Direct external CLI invocation -- resolve binary and build
+    // minimal interactive args without race-mode flags.
+    let configured_path = {
+        let adapter_key = adapter.key();
+        match adapter_key {
+            "claude" => config.adapters.claude.clone(),
+            "codex" => config.adapters.codex.clone(),
+            "cursor-agent" => config.adapters.cursor.clone(),
+            _ => None,
+        }
+    };
+
+    let binary_candidates: &[&str] = match adapter.key() {
+        "claude" => &["claude"],
+        "codex" => &["codex"],
+        "cursor-agent" => &["cursor-agent", "cursor"],
+        _ => &[],
+    };
+
+    let binary_path = hydra_core::adapter::resolve_binary(
+        configured_path.as_deref(),
+        binary_candidates,
+    )
+    .ok_or_else(|| {
+        IpcError::binary_missing(format!(
+            "Adapter '{}' binary not found in PATH. Install it or configure the path in hydra.toml.",
+            request.agent_key
+        ))
+        .to_string()
+    })?;
+
+    let interactive_args = build_interactive_args(
+        adapter.key(),
+        &request.task_prompt,
+        request.unsafe_mode,
+        &supported_flags,
+    );
+
+    drop(config);
+
+    let interactive = state.interactive.clone();
+    let launch_paths = resolve_interactive_launch_paths(
+        &interactive,
+        request.cwd.as_deref(),
+        &session_id,
+        &request.agent_key,
+    )
+    .await?;
+
+    let pty_config = hydra_core::supervisor::pty::PtySessionConfig {
+        program: binary_path.to_string_lossy().to_string(),
+        args: interactive_args,
+        env: vec![],
+        cwd: launch_paths.effective_cwd.clone(),
+        initial_cols: cols,
+        initial_rows: rows,
+    };
+
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(1024);
+    let pty_session = match hydra_core::supervisor::pty::PtySession::spawn(pty_config, event_tx) {
+        Ok(session) => session,
+        Err(e) => {
+            if let Some(worktree) = &launch_paths.managed_worktree {
+                cleanup_managed_worktree_on_launch_failure(worktree).await;
+            }
+            return Err(IpcError::launch_error(format!("PTY spawn failed: {e}")).to_string());
+        }
+    };
+
+    // M4.6: Initialize session artifact writer
+    let hydra_root = launch_paths.repo_root.join(".hydra");
+    let is_experimental = adapter.tier() == hydra_core::adapter::AdapterTier::Experimental;
+    let artifact_writer = match hydra_core::artifact::SessionArtifactWriter::init(
+        &hydra_root,
+        &session_id,
+        &request.agent_key,
+        &started_at,
+        &launch_paths.effective_cwd_display,
+        request.unsafe_mode,
+        is_experimental,
+    ) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to initialize session artifact writer — session will proceed without artifact persistence");
+            None
+        }
+    };
+
+    interactive
+        .register_session_with_paths(
+            &session_id,
+            &request.agent_key,
+            &started_at,
+            InteractiveSessionPaths {
+                source_root: launch_paths.source_root_display.clone(),
+                repo_root: launch_paths.repo_root_display.clone(),
+                effective_cwd: launch_paths.effective_cwd_display.clone(),
+                worktree_path: launch_paths.worktree_path.clone(),
+                managed_worktree: launch_paths.managed_worktree,
+            },
+            pty_session,
+            artifact_writer,
+        )
+        .await;
+
+    let sink_session_id = session_id.clone();
+    let sink_state = interactive.clone();
+    let app_sink = Arc::new(move |event: &InteractiveStreamEvent| {
+        if let Err(e) = app.emit(INTERACTIVE_STREAM_EVENT, event) {
+            let sink_state = sink_state.clone();
+            let sink_session_id = sink_session_id.clone();
+            let error = e.to_string();
+            tauri::async_runtime::spawn(async move {
+                sink_state
+                    .record_push_emit_failure(&sink_session_id, &error)
+                    .await;
+            });
+        }
+    });
+
+    crate::state::spawn_pty_event_bridge_with_sink(
+        session_id.clone(),
+        request.agent_key.clone(),
+        event_rx,
+        interactive,
+        Some(app_sink),
+    );
+
+    Ok(InteractiveSessionStarted {
+        session_id,
+        agent_key: request.agent_key,
+        status: "running".to_string(),
+        started_at,
+        source_root: launch_paths.source_root_display,
+        repo_root: launch_paths.repo_root_display,
+        effective_cwd: launch_paths.effective_cwd_display,
+        worktree_path: launch_paths.worktree_path,
+    })
+}
+
+#[tauri::command]
+pub async fn poll_interactive_events(
+    state: State<'_, AppState>,
+    session_id: String,
+    cursor: u64,
+) -> Result<InteractiveEventBatch, String> {
+    let interactive = state.interactive.clone();
+    let Some((events, next_cursor, done, status, error)) = interactive
+        .poll_events(&session_id, cursor, MAX_INTERACTIVE_EVENTS_PER_POLL)
+        .await
+    else {
+        return Err(IpcError::not_found(format!("session '{session_id}' not found")).to_string());
+    };
+
+    Ok(InteractiveEventBatch {
+        session_id,
+        events,
+        next_cursor,
+        done,
+        status,
+        error,
+    })
+}
+
+#[tauri::command]
+pub async fn write_interactive_input(
+    state: State<'_, AppState>,
+    session_id: String,
+    input: String,
+) -> Result<InteractiveWriteAck, String> {
+    let interactive = state.interactive.clone();
+    match interactive.write_input(&session_id, input.as_bytes()).await {
+        Ok(()) => Ok(InteractiveWriteAck {
+            session_id,
+            success: true,
+            error: None,
+        }),
+        Err(e) => Ok(InteractiveWriteAck {
+            session_id,
+            success: false,
+            error: Some(e),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn resize_interactive_terminal(
+    state: State<'_, AppState>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<InteractiveResizeAck, String> {
+    let interactive = state.interactive.clone();
+    match interactive.resize(&session_id, cols, rows).await {
+        Ok(()) => Ok(InteractiveResizeAck {
+            session_id,
+            success: true,
+            cols,
+            rows,
+            error: None,
+        }),
+        Err(e) => Ok(InteractiveResizeAck {
+            session_id,
+            success: false,
+            cols,
+            rows,
+            error: Some(e),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn stop_interactive_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<InteractiveStopResult, String> {
+    let interactive = state.interactive.clone();
+    match interactive.stop_session(&session_id).await {
+        Ok((was_running, status)) => Ok(InteractiveStopResult {
+            session_id,
+            status,
+            was_running,
+        }),
+        Err(e) => Err(IpcError::not_found(e).to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn remove_interactive_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<InteractiveRemoveResult, String> {
+    let interactive = state.interactive.clone();
+    match interactive.remove_session(&session_id).await {
+        Ok(status) => Ok(InteractiveRemoveResult {
+            session_id,
+            status,
+            removed: true,
+        }),
+        Err(e) => {
+            if e.contains("not found") {
+                Err(IpcError::not_found(e).to_string())
+            } else {
+                Err(IpcError::validation(e).to_string())
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn list_interactive_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<InteractiveSessionSummary>, String> {
+    let interactive = state.interactive.clone();
+    let entries = interactive.list_sessions().await;
+    Ok(entries
+        .into_iter()
+        .map(
+            |(
+                sid,
+                agent_key,
+                status,
+                started_at,
+                event_count,
+                source_root,
+                repo_root,
+                effective_cwd,
+                worktree_path,
+            )| InteractiveSessionSummary {
+                session_id: sid,
+                agent_key,
+                status,
+                started_at,
+                event_count,
+                source_root,
+                repo_root,
+                effective_cwd,
+                worktree_path,
+            },
+        )
+        .collect())
+}
+
+#[tauri::command]
+pub async fn get_interactive_transport_diagnostics(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<InteractiveTransportDiagnostics, String> {
+    let interactive = state.interactive.clone();
+    let Some((push_emit_error_count, last_push_emit_error, last_push_emit_at)) =
+        interactive.push_transport_diagnostics(&session_id).await
+    else {
+        return Err(IpcError::not_found(format!("session '{session_id}' not found")).to_string());
+    };
+
+    Ok(InteractiveTransportDiagnostics {
+        session_id,
+        push_emit_error_count,
+        last_push_emit_error,
+        last_push_emit_at,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Diff review commands (P3-UI-05)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_candidate_diff(
+    run_id: String,
+    agent_key: String,
+    cwd: Option<String>,
+) -> Result<CandidateDiffPayload, String> {
+    let repo_root = resolve_repo_root(
+        cwd.as_deref(),
+        "Not inside a git repository; cannot load candidate diff",
+    )
+    .map_err(|e| e.to_string())?;
+    let hydra_root = repo_root.join(".hydra");
+    let run_uuid = uuid::Uuid::parse_str(&run_id)
+        .map_err(|e| format!("[validation_error] invalid run_id: {e}"))?;
+    let layout = hydra_core::artifact::RunLayout::new(&hydra_root, run_uuid);
+
+    if !layout.base_dir().exists() {
+        return Err(format!("[validation_error] run {} not found", run_id));
+    }
+
+    let manifest = hydra_core::artifact::RunManifest::read_from(&layout.manifest_path())
+        .map_err(|e| format!("[internal_error] failed to read manifest: {e}"))?;
+
+    let entry = manifest
+        .agents
+        .iter()
+        .find(|a| a.agent_key == agent_key)
+        .ok_or_else(|| {
+            format!(
+                "[validation_error] agent '{}' not found in run {}",
+                agent_key, run_id
+            )
+        })?;
+
+    let base_ref = manifest.base_ref.clone();
+    let branch = Some(entry.branch.clone());
+
+    let (mergeable, gate_failures) = load_agent_mergeability(&layout, &agent_key);
+
+    let diff_artifact = layout.agent_diff(&agent_key);
+    if diff_artifact.exists() {
+        let diff_text = std::fs::read_to_string(&diff_artifact)
+            .map_err(|e| format!("[internal_error] failed to read diff artifact: {e}"))?;
+        let files = parse_diff_numstat_from_patch(&diff_text);
+        return Ok(CandidateDiffPayload {
+            run_id,
+            agent_key,
+            base_ref,
+            branch,
+            mergeable,
+            gate_failures,
+            diff_text: diff_text.clone(),
+            files,
+            diff_available: true,
+            source: "artifact".to_string(),
+            warning: None,
+        });
+    }
+
+    if let Some(branch_name) = &branch {
+        if let Some(worktree_path) = find_worktree_path_for_branch(&repo_root, branch_name) {
+            match generate_worktree_diff(&worktree_path, &base_ref) {
+                Ok(diff_text) => {
+                    let files = parse_diff_numstat_from_patch(&diff_text);
+                    return Ok(CandidateDiffPayload {
+                        run_id,
+                        agent_key,
+                        base_ref,
+                        branch,
+                        mergeable,
+                        gate_failures,
+                        diff_text,
+                        files,
+                        diff_available: true,
+                        source: "git".to_string(),
+                        warning: Some(
+                            "Diff generated live from retained worktree (artifact was not persisted)"
+                                .to_string(),
+                        ),
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "worktree live diff generation failed");
+                }
+            }
+        }
+
+        if branch_exists(&repo_root, branch_name) {
+            match generate_branch_diff(&repo_root, branch_name, &base_ref) {
+                Ok(diff_text) => {
+                    let files = parse_diff_numstat_from_patch(&diff_text);
+                    return Ok(CandidateDiffPayload {
+                        run_id,
+                        agent_key,
+                        base_ref,
+                        branch,
+                        mergeable,
+                        gate_failures,
+                        diff_text,
+                        files,
+                        diff_available: true,
+                        source: "git".to_string(),
+                        warning: Some(
+                            "Diff generated live from branch (artifact was not persisted)"
+                                .to_string(),
+                        ),
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "live diff generation failed");
+                }
+            }
+        }
+    }
+
+    Ok(CandidateDiffPayload {
+        run_id,
+        agent_key,
+        base_ref,
+        branch,
+        mergeable,
+        gate_failures,
+        diff_text: String::new(),
+        files: Vec::new(),
+        diff_available: false,
+        source: "none".to_string(),
+        warning: Some(
+            "Diff unavailable: artifact not persisted and branch no longer exists".to_string(),
+        ),
+    })
+}
+
+#[tauri::command]
+pub async fn preview_merge(
+    run_id: String,
+    agent_key: String,
+    force: bool,
+    cwd: Option<String>,
+) -> Result<MergePreviewPayload, String> {
+    let (cli_parts, repo_root) = resolve_cli_and_repo(cwd.as_deref())?;
+
+    let mut args: Vec<String> = cli_parts[1..].to_vec();
+    args.extend([
+        "merge".to_string(),
+        "--run-id".to_string(),
+        run_id,
+        "--agent".to_string(),
+        agent_key.clone(),
+        "--dry-run".to_string(),
+        "--json".to_string(),
+    ]);
+    if force {
+        args.push("--force".to_string());
+    }
+
+    let output = std::process::Command::new(&cli_parts[0])
+        .args(&args)
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| format!("[internal_error] failed to execute merge command: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    parse_merge_preview_payload(output.status.success(), &agent_key, &stdout, &stderr)
+}
+
+#[tauri::command]
+pub async fn execute_merge(
+    run_id: String,
+    agent_key: String,
+    force: bool,
+    cwd: Option<String>,
+) -> Result<MergeExecutionPayload, String> {
+    let (cli_parts, repo_root) = resolve_cli_and_repo(cwd.as_deref())?;
+
+    let mut args: Vec<String> = cli_parts[1..].to_vec();
+    args.extend([
+        "merge".to_string(),
+        "--run-id".to_string(),
+        run_id,
+        "--agent".to_string(),
+        agent_key.clone(),
+        "--confirm".to_string(),
+        "--json".to_string(),
+    ]);
+    if force {
+        args.push("--force".to_string());
+    }
+
+    let output = std::process::Command::new(&cli_parts[0])
+        .args(&args)
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| format!("[internal_error] failed to execute merge command: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stderr_clean = strip_cli_wrapper_noise(&stderr);
+
+    if output.status.success() {
+        let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
+        let branch_val = parsed
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let message = parsed
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Merge completed successfully")
+            .to_string();
+        Ok(MergeExecutionPayload {
+            agent_key,
+            branch: branch_val,
+            success: true,
+            message,
+            stdout: Some(stdout),
+            stderr: if stderr_clean.trim().is_empty() {
+                None
+            } else {
+                Some(stderr_clean)
+            },
+        })
+    } else {
+        let payload_error = serde_json::from_str::<serde_json::Value>(&stdout)
+            .ok()
+            .and_then(|parsed| {
+                parsed
+                    .get("stderr")
+                    .and_then(|v| v.as_str())
+                    .filter(|v| !v.trim().is_empty())
+                    .map(|v| v.trim().to_string())
+                    .or_else(|| {
+                        parsed
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .filter(|v| !v.trim().is_empty())
+                            .map(|v| v.trim().to_string())
+                    })
+                    .or_else(|| {
+                        parsed
+                            .get("stdout")
+                            .and_then(|v| v.as_str())
+                            .filter(|v| !v.trim().is_empty())
+                            .map(|v| v.trim().to_string())
+                    })
+            });
+
+        Ok(MergeExecutionPayload {
+            agent_key,
+            branch: String::new(),
+            success: false,
+            message: payload_error.unwrap_or_else(|| {
+                let err = stderr_clean.trim();
+                if err.is_empty() {
+                    format!("merge exited with status {}", output.status)
+                } else {
+                    err.to_string()
+                }
+            }),
+            stdout: if stdout.is_empty() {
+                None
+            } else {
+                Some(stdout)
+            },
+            stderr: if stderr_clean.trim().is_empty() {
+                None
+            } else {
+                Some(stderr_clean)
+            },
+        })
+    }
+}
+
+fn resolve_cli_and_repo(cwd: Option<&str>) -> Result<(Vec<String>, PathBuf), String> {
+    let repo_root = resolve_repo_root(cwd, "Not inside a git repository; cannot run merge")
+        .map_err(|e| e.to_string())?;
+
+    if let Ok(bin) = std::env::var("HYDRA_CLI_BIN") {
+        Ok((vec![bin], repo_root))
+    } else if binary_available("hydra") {
+        Ok((vec!["hydra".to_string()], repo_root))
+    } else {
+        let mut parts = vec!["cargo".to_string()];
+        parts.extend(cargo_hydra_cli_parts_without_binary());
+        Ok((parts, repo_root))
+    }
+}
+
+fn parse_merge_preview_payload(
+    status_success: bool,
+    agent_key: &str,
+    stdout: &str,
+    stderr: &str,
+) -> Result<MergePreviewPayload, String> {
+    if let Some(payload) = try_parse_merge_preview_payload(agent_key, stdout, stderr) {
+        if status_success || payload.has_conflicts {
+            return Ok(payload);
+        }
+
+        let payload_stderr = payload.stderr.trim();
+        if !payload_stderr.is_empty() {
+            return Err(format!("[validation_error] {payload_stderr}"));
+        }
+
+        let payload_stdout = payload.stdout.trim();
+        if !payload_stdout.is_empty() {
+            return Err(format!("[validation_error] {payload_stdout}"));
+        }
+
+        return Err(format!(
+            "[validation_error] {}",
+            best_merge_error_message(stderr, stdout)
+        ));
+    }
+
+    if status_success {
+        return Err(
+            "[internal_error] merge preview did not return expected JSON payload".to_string(),
+        );
+    }
+
+    Err(format!(
+        "[validation_error] {}",
+        best_merge_error_message(stderr, stdout)
+    ))
+}
+
+fn resolve_working_tree_scope(repo_root: &Path, cwd: Option<&str>) -> Option<PathBuf> {
+    let selected = cwd
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)?;
+
+    let absolute_selected = if selected.is_absolute() {
+        selected
+    } else {
+        std::env::current_dir().ok()?.join(selected)
+    };
+
+    let canonical_root = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
+    let canonical_selected = absolute_selected
+        .canonicalize()
+        .unwrap_or(absolute_selected);
+
+    if !canonical_selected.starts_with(&canonical_root) || canonical_selected == canonical_root {
+        return None;
+    }
+
+    Some(canonical_selected)
+}
+
+fn read_working_tree_status(repo_root: &Path, scope: Option<&Path>) -> WorkingTreeStatus {
+    let canonical_root = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
+    let relative_scope = scope.and_then(|scope_path| {
+        let canonical_scope = scope_path
+            .canonicalize()
+            .unwrap_or_else(|_| scope_path.to_path_buf());
+        canonical_scope
+            .strip_prefix(&canonical_root)
+            .ok()
+            .filter(|path| !path.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+    });
+
+    let mut command = std::process::Command::new("git");
+    command
+        .args(["status", "--porcelain"])
+        .current_dir(repo_root);
+    if let Some(pathspec) = &relative_scope {
+        command.arg("--").arg(pathspec);
+    }
+
+    let output = command.output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let raw = String::from_utf8_lossy(&output.stdout);
+            let files: Vec<String> = raw
+                .lines()
+                .filter_map(parse_porcelain_path)
+                .filter(|path| !is_hydra_artifact_path(path))
+                .collect();
+            if files.is_empty() {
+                WorkingTreeStatus {
+                    clean: true,
+                    message: None,
+                }
+            } else {
+                let shown: Vec<&str> = files.iter().take(5).map(|s| s.as_str()).collect();
+                let extra = files.len().saturating_sub(shown.len());
+                let suffix = if extra > 0 {
+                    format!(" (+{extra} more)")
+                } else {
+                    String::new()
+                };
+                WorkingTreeStatus {
+                    clean: false,
+                    message: Some(format!(
+                        "Working tree has uncommitted changes in: {}{}. Commit or stash changes before running Preview Merge.",
+                        shown.join(", "),
+                        suffix
+                    )),
+                }
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let message = if stderr.is_empty() {
+                "Unable to inspect working tree status.".to_string()
+            } else {
+                format!("Unable to inspect working tree status: {stderr}")
+            };
+            WorkingTreeStatus {
+                clean: false,
+                message: Some(message),
+            }
+        }
+        Err(err) => WorkingTreeStatus {
+            clean: false,
+            message: Some(format!(
+                "Unable to inspect working tree status: failed to run git status: {err}"
+            )),
+        },
+    }
+}
+
+fn is_hydra_artifact_path(path: &str) -> bool {
+    let normalized = path.trim().trim_start_matches("./").replace('\\', "/");
+    normalized == ".hydra" || normalized.starts_with(".hydra/")
+}
+
+fn parse_porcelain_path(line: &str) -> Option<String> {
+    let path = line.get(3..)?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    if let Some((_, new_path)) = path.rsplit_once(" -> ") {
+        Some(new_path.to_string())
+    } else {
+        Some(path.to_string())
+    }
+}
+
+fn try_parse_merge_preview_payload(
+    agent_key: &str,
+    stdout: &str,
+    stderr: &str,
+) -> Option<MergePreviewPayload> {
+    let parsed: serde_json::Value = serde_json::from_str(stdout).ok()?;
+    let has_conflicts = parsed
+        .get("has_conflicts")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let success = parsed
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(!has_conflicts);
+
+    Some(MergePreviewPayload {
+        agent_key: parsed
+            .get("agent")
+            .and_then(|v| v.as_str())
+            .unwrap_or(agent_key)
+            .to_string(),
+        branch: parsed
+            .get("branch")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        success,
+        has_conflicts,
+        stdout: parsed
+            .get("stdout")
+            .and_then(|v| v.as_str())
+            .unwrap_or(stdout)
+            .to_string(),
+        stderr: parsed
+            .get("stderr")
+            .and_then(|v| v.as_str())
+            .unwrap_or(stderr)
+            .to_string(),
+        report_path: parsed
+            .get("report_path")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    })
+}
+
+fn best_merge_error_message(stderr: &str, stdout: &str) -> String {
+    let stderr = strip_cli_wrapper_noise(stderr);
+    let stderr = stderr.trim();
+    if !stderr.is_empty() {
+        return stderr.to_string();
+    }
+
+    let stdout = stdout.trim();
+    if !stdout.is_empty() {
+        return stdout.to_string();
+    }
+
+    "merge preview command failed".to_string()
+}
+
+fn strip_cli_wrapper_noise(text: &str) -> String {
+    let mut cleaned: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("Finished `")
+            || trimmed.starts_with("Compiling ")
+            || trimmed.starts_with("Running `")
+            || trimmed.starts_with("Blocking waiting for file lock on ")
+        {
+            continue;
+        }
+        cleaned.push(line);
+    }
+    cleaned.join("\n")
+}
+
+fn load_agent_mergeability(
+    layout: &hydra_core::artifact::RunLayout,
+    agent_key: &str,
+) -> (Option<bool>, Vec<String>) {
+    let score_path = layout.agent_score(agent_key);
+    if !score_path.exists() {
+        return (None, Vec::new());
+    }
+    let Ok(data) = std::fs::read_to_string(&score_path) else {
+        return (None, Vec::new());
+    };
+    let Ok(score) = serde_json::from_str::<serde_json::Value>(&data) else {
+        return (None, Vec::new());
+    };
+    let mergeable = score.get("mergeable").and_then(|v| v.as_bool());
+    let gate_failures = score
+        .get("gate_failures")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    (mergeable, gate_failures)
+}
+
+fn parse_diff_numstat_from_patch(patch: &str) -> Vec<DiffFile> {
+    let mut files: Vec<DiffFile> = Vec::new();
+    for line in patch.lines() {
+        if let Some(path) = line.strip_prefix("diff --git a/") {
+            if let Some(bpath) = path.split(" b/").nth(1) {
+                if !files.iter().any(|f| f.path == bpath) {
+                    files.push(DiffFile {
+                        path: bpath.to_string(),
+                        added: 0,
+                        removed: 0,
+                    });
+                }
+            }
+        }
+        if line.starts_with("@@") {
+            continue;
+        }
+        if let Some(last) = files.last_mut() {
+            if line.starts_with('+') && !line.starts_with("+++") {
+                last.added += 1;
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                last.removed += 1;
+            }
+        }
+    }
+    files
+}
+
+fn branch_exists(repo_root: &Path, branch: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--verify", &format!("refs/heads/{branch}")])
+        .current_dir(repo_root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn generate_branch_diff(repo_root: &Path, branch: &str, base_ref: &str) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args([
+            "diff",
+            "--no-color",
+            "--patch",
+            &format!("{base_ref}..{branch}"),
+        ])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|e| format!("failed to run git diff: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("git diff failed: {stderr}"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn generate_worktree_diff(worktree_path: &Path, base_ref: &str) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            &worktree_path.to_string_lossy(),
+            "diff",
+            "--no-color",
+            "--patch",
+            base_ref,
+        ])
+        .output()
+        .map_err(|e| format!("failed to run git diff: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("git diff failed: {stderr}"));
+    }
+
+    let mut patch = String::from_utf8_lossy(&output.stdout).to_string();
+
+    let untracked = std::process::Command::new("git")
+        .args([
+            "-C",
+            &worktree_path.to_string_lossy(),
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+        ])
+        .output()
+        .map_err(|e| format!("failed to list untracked files: {e}"))?;
+
+    if !untracked.status.success() {
+        let stderr = String::from_utf8_lossy(&untracked.stderr)
+            .trim()
+            .to_string();
+        return Err(format!("git ls-files failed: {stderr}"));
+    }
+
+    for rel_path in String::from_utf8_lossy(&untracked.stdout).lines() {
+        let rel_path = rel_path.trim();
+        if rel_path.is_empty() {
+            continue;
+        }
+
+        let extra = std::process::Command::new("git")
+            .args([
+                "-C",
+                &worktree_path.to_string_lossy(),
+                "diff",
+                "--no-color",
+                "--patch",
+                "--no-index",
+                "--",
+                "/dev/null",
+                rel_path,
+            ])
+            .output()
+            .map_err(|e| format!("failed to diff untracked file: {e}"))?;
+
+        if !extra.status.success() && extra.status.code() != Some(1) {
+            let stderr = String::from_utf8_lossy(&extra.stderr).trim().to_string();
+            return Err(format!("git diff --no-index failed: {stderr}"));
+        }
+
+        let text = String::from_utf8_lossy(&extra.stdout);
+        if !text.trim().is_empty() {
+            if !patch.is_empty() && !patch.ends_with('\n') {
+                patch.push('\n');
+            }
+            patch.push_str(&text);
+        }
+    }
+
+    Ok(patch)
+}
+
+fn find_worktree_path_for_branch(repo_root: &Path, branch: &str) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_worktree_path_for_branch(&String::from_utf8_lossy(&output.stdout), branch)
+}
+
+fn parse_worktree_path_for_branch(porcelain: &str, branch: &str) -> Option<PathBuf> {
+    let target_ref = format!("refs/heads/{branch}");
+    let mut current_worktree: Option<PathBuf> = None;
+    let mut current_branch: Option<String> = None;
+
+    for line in porcelain.lines().chain(std::iter::once("")) {
+        if line.is_empty() {
+            if current_branch.as_deref() == Some(target_ref.as_str()) {
+                return current_worktree;
+            }
+            current_worktree = None;
+            current_branch = None;
+            continue;
+        }
+
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_worktree = Some(PathBuf::from(path));
+            continue;
+        }
+
+        if let Some(found_branch) = line.strip_prefix("branch ") {
+            current_branch = Some(found_branch.to_string());
+        }
+    }
+
+    None
+}
+
+fn adapter_supports_interactive_unsafe_mode(adapter_key: &str, supported_flags: &[String]) -> bool {
+    match adapter_key {
+        // Codex uses explicit dangerous bypass flag for unsafe mode.
+        "codex" => supported_flags
+            .iter()
+            .any(|f| f == "--dangerously-bypass-approvals-and-sandbox"),
+        // Claude uses permission-mode bypass in force-edit flows.
+        "claude" => supported_flags.iter().any(|f| f == "--permission-mode"),
+        _ => false,
+    }
+}
+
+fn unsafe_mode_requirement_hint(adapter_key: &str) -> &'static str {
+    match adapter_key {
+        "codex" => "Expected flag: --dangerously-bypass-approvals-and-sandbox.",
+        "claude" => "Expected flag: --permission-mode.",
+        _ => "Unsafe mode is only supported for adapters with explicit sandbox-bypass controls.",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File Explorer (P4.9.2)
+// ---------------------------------------------------------------------------
+
+const MAX_FILE_WATCH_EVENTS_PER_POLL: usize = 512;
+const DEFAULT_FILE_PREVIEW_BYTES: usize = 128 * 1024;
+const MAX_FILE_PREVIEW_BYTES: usize = 1024 * 1024;
+
+fn file_watch_event_type(kind: &notify::EventKind) -> Option<&'static str> {
+    use notify::event::ModifyKind;
+
+    match kind {
+        notify::EventKind::Create(_) => Some("create"),
+        notify::EventKind::Modify(ModifyKind::Name(_)) => Some("rename"),
+        notify::EventKind::Modify(_) => Some("modify"),
+        notify::EventKind::Remove(_) => Some("delete"),
+        _ => None,
+    }
+}
+
+fn is_probably_binary(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    if bytes.iter().any(|b| *b == 0) {
+        return true;
+    }
+
+    let sample = &bytes[..bytes.len().min(4096)];
+    let mut control_count = 0usize;
+
+    for &b in sample {
+        let is_text = matches!(b, b'\t' | b'\n' | b'\r' | b' '..=b'~') || b >= 0x80;
+        if !is_text {
+            control_count += 1;
+        }
+    }
+
+    (control_count * 100) / sample.len() > 30
+}
+
+#[tauri::command]
+pub async fn list_directory(path: String) -> Result<DirectoryListing, String> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Ok(DirectoryListing {
+            path: path.clone(),
+            entries: Vec::new(),
+            error: Some(format!("Path is not a directory: {path}")),
+        });
+    }
+
+    let mut entries = Vec::new();
+    let mut read_dir = tokio::fs::read_dir(&dir)
+        .await
+        .map_err(|e| format!("Failed to read directory {path}: {e}"))?;
+
+    while let Ok(Some(entry)) = read_dir.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_path = entry.path();
+        let metadata = entry.metadata().await.ok();
+
+        let entry_type = if let Some(ref md) = metadata {
+            if md.is_dir() {
+                "directory"
+            } else if md.is_symlink() {
+                "symlink"
+            } else {
+                "file"
+            }
+        } else {
+            "file"
+        };
+
+        let size = metadata
+            .as_ref()
+            .filter(|md| md.is_file())
+            .map(|md| md.len());
+
+        let modified_at = metadata
+            .as_ref()
+            .and_then(|md| md.modified().ok())
+            .and_then(|mt| {
+                mt.duration_since(std::time::UNIX_EPOCH).ok().map(|d| {
+                    chrono::DateTime::from_timestamp(d.as_secs() as i64, d.subsec_nanos())
+                        .map(|dt| dt.to_rfc3339())
+                })
+            })
+            .flatten();
+
+        entries.push(FileTreeEntry {
+            name,
+            path: entry_path.to_string_lossy().to_string(),
+            entry_type: entry_type.to_string(),
+            size,
+            modified_at,
+        });
+    }
+
+    // Sort: directories first, then alphabetically
+    entries.sort_by(|a, b| {
+        let a_is_dir = a.entry_type == "directory";
+        let b_is_dir = b.entry_type == "directory";
+        b_is_dir
+            .cmp(&a_is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    Ok(DirectoryListing {
+        path,
+        entries,
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn read_file_preview(
+    path: String,
+    max_bytes: Option<usize>,
+) -> Result<FilePreview, String> {
+    let file_path = PathBuf::from(&path);
+    if !file_path.is_file() {
+        return Ok(FilePreview {
+            path,
+            content: None,
+            truncated: false,
+            is_binary: false,
+            size: None,
+            error: Some("Path is not a file".to_string()),
+        });
+    }
+
+    let preview_limit = max_bytes
+        .unwrap_or(DEFAULT_FILE_PREVIEW_BYTES)
+        .clamp(1024, MAX_FILE_PREVIEW_BYTES);
+
+    let metadata = tokio::fs::metadata(&file_path)
+        .await
+        .map_err(|e| format!("Failed to read metadata for {}: {e}", file_path.display()))?;
+    let size = Some(metadata.len());
+
+    let file = tokio::fs::File::open(&file_path)
+        .await
+        .map_err(|e| format!("Failed to open file {}: {e}", file_path.display()))?;
+
+    let mut buf = Vec::with_capacity(preview_limit + 1);
+    let bytes_read = file
+        .take((preview_limit + 1) as u64)
+        .read_to_end(&mut buf)
+        .await
+        .map_err(|e| format!("Failed to read file {}: {e}", file_path.display()))?;
+
+    let truncated = bytes_read > preview_limit;
+    if truncated {
+        buf.truncate(preview_limit);
+    }
+
+    let is_binary = is_probably_binary(&buf);
+    if is_binary {
+        return Ok(FilePreview {
+            path,
+            content: None,
+            truncated,
+            is_binary: true,
+            size,
+            error: None,
+        });
+    }
+
+    let content = String::from_utf8_lossy(&buf).into_owned();
+
+    Ok(FilePreview {
+        path,
+        content: Some(content),
+        truncated,
+        is_binary: false,
+        size,
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn start_file_watcher(
+    state: State<'_, AppState>,
+    root: String,
+) -> Result<FileWatcherStarted, String> {
+    let root_path = PathBuf::from(&root);
+    if !root_path.is_dir() {
+        return Err(IpcError::validation(format!("Path is not a directory: {root}")).to_string());
+    }
+
+    let watcher_id = uuid::Uuid::new_v4().to_string();
+    let stop_flag = Arc::new(AtomicBool::new(false));
+
+    state
+        .file_watcher
+        .register_watcher(&watcher_id, &root, Arc::clone(&stop_flag))
+        .await;
+
+    let handle = state.file_watcher.clone();
+    let wid = watcher_id.clone();
+    let stop = Arc::clone(&stop_flag);
+    let runtime = tokio::runtime::Handle::current();
+
+    // Spawn watcher on a dedicated OS thread (notify requires it on some platforms)
+    std::thread::spawn(move || {
+        use notify::{Config, RecursiveMode, Watcher};
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = match notify::RecommendedWatcher::new(tx, Config::default()) {
+            Ok(w) => w,
+            Err(e) => {
+                let handle_clone = handle.clone();
+                let wid_clone = wid.clone();
+                runtime.block_on(async {
+                    handle_clone
+                        .mark_error(&wid_clone, format!("Failed to create watcher: {e}"))
+                        .await;
+                    handle_clone.mark_inactive(&wid_clone).await;
+                });
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(&root_path, RecursiveMode::Recursive) {
+            let handle_clone = handle.clone();
+            let wid_clone = wid.clone();
+            runtime.block_on(async {
+                handle_clone
+                    .mark_error(&wid_clone, format!("Failed to watch path: {e}"))
+                    .await;
+                handle_clone.mark_inactive(&wid_clone).await;
+            });
+            return;
+        }
+
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+                Ok(Ok(event)) => {
+                    let event_type = match file_watch_event_type(&event.kind) {
+                        Some(value) => value,
+                        None => continue,
+                    };
+                    let timestamp = chrono::Utc::now().to_rfc3339();
+
+                    for path in &event.paths {
+                        let watch_event = FileWatchEvent {
+                            event_type: event_type.to_string(),
+                            path: path.to_string_lossy().to_string(),
+                            timestamp: timestamp.clone(),
+                        };
+                        let handle_clone = handle.clone();
+                        let wid_clone = wid.clone();
+                        runtime.block_on(async {
+                            handle_clone
+                                .append_watch_event(&wid_clone, watch_event)
+                                .await;
+                        });
+                    }
+                }
+                Ok(Err(e)) => {
+                    let handle_clone = handle.clone();
+                    let wid_clone = wid.clone();
+                    runtime.block_on(async {
+                        handle_clone
+                            .mark_error(&wid_clone, format!("Watcher error: {e}"))
+                            .await;
+                    });
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        let handle_clone = handle.clone();
+        let wid_clone = wid.clone();
+        runtime.block_on(async {
+            handle_clone.mark_inactive(&wid_clone).await;
+        });
+    });
+
+    Ok(FileWatcherStarted { watcher_id, root })
+}
+
+#[tauri::command]
+pub async fn poll_file_watch_events(
+    state: State<'_, AppState>,
+    watcher_id: String,
+    cursor: u64,
+) -> Result<FileWatchEventBatch, String> {
+    let result = state
+        .file_watcher
+        .poll_events(&watcher_id, cursor, MAX_FILE_WATCH_EVENTS_PER_POLL)
+        .await;
+
+    match result {
+        Some((events, next_cursor, active, error)) => Ok(FileWatchEventBatch {
+            watcher_id,
+            events,
+            next_cursor,
+            active,
+            error,
+        }),
+        None => Err(IpcError::not_found(format!("Watcher not found: {watcher_id}")).to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn stop_file_watcher(
+    state: State<'_, AppState>,
+    watcher_id: String,
+) -> Result<FileWatcherStopped, String> {
+    match state.file_watcher.stop_watcher(&watcher_id).await {
+        Some(was_active) => Ok(FileWatcherStopped {
+            watcher_id,
+            was_active,
+        }),
+        None => Err(IpcError::not_found(format!("Watcher not found: {watcher_id}")).to_string()),
+    }
+}
+
+async fn cleanup_managed_worktree_on_launch_failure(worktree: &InteractiveManagedWorktree) {
+    let repo_root = PathBuf::from(&worktree.repo_root);
+    let wt_base = repo_root
+        .join(".hydra")
+        .join("worktrees")
+        .join("interactive");
+    let run_id = uuid::Uuid::parse_str(&worktree.run_id).unwrap_or_else(|_| uuid::Uuid::nil());
+    let info = hydra_core::worktree::WorktreeInfo {
+        path: PathBuf::from(&worktree.path),
+        branch: worktree.branch.clone(),
+        run_id,
+        agent_key: worktree.agent_key.clone(),
+    };
+    let service = WorktreeService::new(repo_root.clone(), wt_base);
+    if let Err(err) = service.force_cleanup(&info).await {
+        tracing::warn!(
+            session_run_id = %worktree.run_id,
+            agent_key = %worktree.agent_key,
+            repo_root = %worktree.repo_root,
+            worktree_path = %worktree.path,
+            branch = %worktree.branch,
+            error = %err,
+            "failed to cleanup interactive worktree after PTY launch failure"
+        );
+    }
+}
+
+/// P4.9.4: Build minimal interactive CLI args for direct external tool invocation.
+/// No race-mode flags (--output-format json, --verbose, --stream-json, etc.).
+fn build_interactive_args(
+    adapter_key: &str,
+    task_prompt: &str,
+    unsafe_mode: bool,
+    supported_flags: &[String],
+) -> Vec<String> {
+    match adapter_key {
+        "claude" => {
+            // Keep interactive launches tool-native: no print/headless flags.
+            let mut args = Vec::new();
+            if unsafe_mode && supported_flags.iter().any(|f| f == "--permission-mode") {
+                args.extend([
+                    "--permission-mode".to_string(),
+                    "bypassPermissions".to_string(),
+                ]);
+            }
+            if !task_prompt.trim().is_empty() {
+                args.push(task_prompt.to_string());
+            }
+            args
+        }
+        "codex" => {
+            // Empty prompt launches native interactive mode; non-empty prompt
+            // keeps one-shot bootstrap behavior via `exec`.
+            let mut args = if task_prompt.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec!["exec".to_string(), task_prompt.to_string()]
+            };
+            if unsafe_mode
+                && supported_flags
+                    .iter()
+                    .any(|f| f == "--dangerously-bypass-approvals-and-sandbox")
+            {
+                args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+            }
+            args
+        }
+        "cursor-agent" => {
+            if task_prompt.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![task_prompt.to_string()]
+            }
+        }
+        _ => {
+            if task_prompt.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![task_prompt.to_string()]
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{InteractiveSessionRuntime, InteractiveStateHandle};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn new_interactive_state() -> InteractiveStateHandle {
+        InteractiveStateHandle {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn init_git_repo(path: &Path) {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .expect("git init");
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@hydra.dev"])
+            .current_dir(path)
+            .output()
+            .expect("git config email");
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Hydra Test"])
+            .current_dir(path)
+            .output()
+            .expect("git config name");
+    }
+
+    fn commit_all(path: &Path, message: &str) {
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .expect("git add");
+        std::process::Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(path)
+            .output()
+            .expect("git commit");
+    }
+
+    fn source_key_for_test(path: &str) -> String {
+        #[cfg(windows)]
+        {
+            path.to_ascii_lowercase()
+        }
+        #[cfg(not(windows))]
+        {
+            path.to_string()
+        }
+    }
+
+    #[test]
+    fn ipc_error_display_format() {
+        let err = IpcError::validation("bad input");
+        assert_eq!(err.to_string(), "[validation_error] bad input");
+    }
+
+    #[test]
+    fn ipc_error_serializes() {
+        let err = IpcError::internal("something broke");
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(json.contains("internal_error"));
+        assert!(json.contains("something broke"));
+    }
+
+    #[test]
+    fn check_status_serde_roundtrip() {
+        let statuses = vec![
+            CheckStatus::Passed,
+            CheckStatus::Failed,
+            CheckStatus::Warning,
+            CheckStatus::Running,
+        ];
+        for s in statuses {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: CheckStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, s);
+        }
+    }
+
+    #[test]
+    fn adapter_info_from_probe_result() {
+        use hydra_core::adapter::*;
+        let probe = ProbeResult {
+            adapter_key: "claude".to_string(),
+            tier: AdapterTier::Tier1,
+            detect: DetectResult {
+                status: DetectStatus::Ready,
+                binary_path: Some("/usr/bin/claude".into()),
+                version: Some("1.0.0".to_string()),
+                supported_flags: vec!["--json".to_string()],
+                confidence: CapabilityConfidence::Verified,
+                error: None,
+            },
+            capabilities: CapabilitySet {
+                json_stream: CapabilityEntry::verified(true),
+                plain_text: CapabilityEntry::verified(true),
+                force_edit_mode: CapabilityEntry::verified(false),
+                sandbox_controls: CapabilityEntry::unknown(),
+                approval_controls: CapabilityEntry::unknown(),
+                session_resume: CapabilityEntry::unknown(),
+                emits_usage: CapabilityEntry::unknown(),
+            },
+        };
+        let info = AdapterInfo::from(&probe);
+        assert_eq!(info.key, "claude");
+        assert_eq!(info.tier, AdapterTier::Tier1);
+        assert_eq!(info.status, DetectStatus::Ready);
+    }
+
+    #[test]
+    fn preflight_result_serializes() {
+        let result = PreflightResult {
+            system_ready: true,
+            all_tier1_ready: true,
+            passed_count: 4,
+            failed_count: 0,
+            total_count: 4,
+            health_score: 100.0,
+            checks: vec![DiagnosticCheck {
+                name: "Test".to_string(),
+                description: "Test check".to_string(),
+                status: CheckStatus::Passed,
+                evidence: None,
+            }],
+            adapters: vec![],
+            warnings: vec![],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("systemReady"));
+        assert!(json.contains("healthScore"));
+    }
+
+    #[test]
+    fn race_request_deserializes() {
+        let json = r#"{"taskPrompt":"fix bug","agents":["claude"],"allowExperimental":false}"#;
+        let req: RaceRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.task_prompt, "fix bug");
+        assert_eq!(req.agents, vec!["claude"]);
+        assert!(!req.allow_experimental);
+        assert!(req.cwd.is_none());
+    }
+
+    #[test]
+    fn resolve_repo_root_with_auto_init_initializes_selected_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace_str = workspace.to_string_lossy().to_string();
+
+        let resolved = resolve_repo_root_with_auto_init(
+            Some(&workspace_str),
+            "Not inside a git repository; cannot start race",
+        )
+        .unwrap();
+
+        assert_eq!(resolved, workspace);
+        assert!(workspace.join(".git").exists());
+
+        let head_status = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", "HEAD"])
+            .current_dir(&workspace)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(
+            head_status.success(),
+            "auto-init should create initial HEAD"
+        );
+        let gitignore = std::fs::read_to_string(workspace.join(".gitignore")).unwrap();
+        assert!(
+            gitignore.lines().any(|line| line.trim() == ".hydra/"),
+            "auto-init should ensure .hydra/ is ignored"
+        );
+    }
+
+    #[test]
+    fn resolve_repo_root_with_auto_init_rejects_missing_workspace_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing-workspace");
+        let missing_str = missing.to_string_lossy().to_string();
+
+        let err = resolve_repo_root_with_auto_init(
+            Some(&missing_str),
+            "Not inside a git repository; cannot start race",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("Path does not exist"));
+    }
+
+    #[tokio::test]
+    async fn resolve_interactive_launch_paths_auto_inits_non_repo_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace_str = workspace.to_string_lossy().to_string();
+        let interactive = new_interactive_state();
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        let plan = resolve_interactive_launch_paths(
+            &interactive,
+            Some(&workspace_str),
+            &session_id,
+            "claude",
+        )
+        .await
+        .expect("launch path planning should succeed");
+
+        let canonical_workspace = workspace.canonicalize().unwrap();
+        assert_eq!(
+            plan.source_root_display,
+            canonical_workspace.to_string_lossy()
+        );
+        assert_eq!(plan.repo_root, canonical_workspace);
+        assert_eq!(plan.effective_cwd, canonical_workspace);
+        assert!(plan.worktree_path.is_none());
+        assert!(plan.managed_worktree.is_none());
+        assert!(workspace.join(".git").exists());
+    }
+
+    #[tokio::test]
+    async fn resolve_interactive_launch_paths_creates_worktree_for_same_source_running_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let source_folder = repo.join("apps").join("api");
+        std::fs::create_dir_all(&source_folder).unwrap();
+        init_git_repo(&repo);
+        std::fs::write(repo.join("README.md"), "# test\n").unwrap();
+        std::fs::write(source_folder.join("main.py"), "print('hello')\n").unwrap();
+        commit_all(&repo, "init");
+
+        let interactive = new_interactive_state();
+        let source_root = source_folder.canonicalize().unwrap();
+        let source_root_display = source_root.to_string_lossy().to_string();
+        let repo_root_display = repo.canonicalize().unwrap().to_string_lossy().to_string();
+
+        {
+            let mut sessions = interactive.sessions.lock().await;
+            sessions.insert(
+                "existing".to_string(),
+                InteractiveSessionRuntime {
+                    session_id: "existing".to_string(),
+                    agent_key: "claude".to_string(),
+                    status: "running".to_string(),
+                    started_at: "2026-03-09T00:00:00Z".to_string(),
+                    source_root: source_root_display.clone(),
+                    source_root_key: source_key_for_test(&source_root_display),
+                    repo_root: repo_root_display.clone(),
+                    effective_cwd: source_root_display.clone(),
+                    worktree_path: None,
+                    managed_worktree: None,
+                    events: Vec::new(),
+                    event_base_cursor: 0,
+                    error: None,
+                    pty_session: None,
+                    artifact_writer: None,
+                    push_emit_error_count: 0,
+                    last_push_emit_error: None,
+                    last_push_emit_at: None,
+                },
+            );
+        }
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let plan = resolve_interactive_launch_paths(
+            &interactive,
+            Some(&source_root_display),
+            &session_id,
+            "claude",
+        )
+        .await
+        .expect("worktree launch path planning should succeed");
+
+        let worktree_path = plan
+            .worktree_path
+            .clone()
+            .expect("same-source launch should allocate worktree");
+        assert!(Path::new(&worktree_path).exists());
+        assert!(plan.managed_worktree.is_some());
+        assert_eq!(plan.repo_root, repo.canonicalize().unwrap());
+        assert!(
+            plan.effective_cwd.ends_with(Path::new("apps").join("api")),
+            "effective cwd should preserve source-folder relative path inside worktree"
+        );
+
+        if let Some(managed) = plan.managed_worktree.as_ref() {
+            cleanup_managed_worktree_on_launch_failure(managed).await;
+            assert!(!Path::new(&managed.path).exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_managed_worktree_on_launch_failure_removes_branch_and_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        init_git_repo(&repo);
+        std::fs::write(repo.join("README.md"), "# rollback-test\n").unwrap();
+        commit_all(&repo, "init");
+
+        let interactive = new_interactive_state();
+        let repo_root_display = repo.canonicalize().unwrap().to_string_lossy().to_string();
+
+        {
+            let mut sessions = interactive.sessions.lock().await;
+            sessions.insert(
+                "existing-root".to_string(),
+                InteractiveSessionRuntime {
+                    session_id: "existing-root".to_string(),
+                    agent_key: "claude".to_string(),
+                    status: "running".to_string(),
+                    started_at: "2026-03-09T00:00:00Z".to_string(),
+                    source_root: repo_root_display.clone(),
+                    source_root_key: source_key_for_test(&repo_root_display),
+                    repo_root: repo_root_display.clone(),
+                    effective_cwd: repo_root_display.clone(),
+                    worktree_path: None,
+                    managed_worktree: None,
+                    events: Vec::new(),
+                    event_base_cursor: 0,
+                    error: None,
+                    pty_session: None,
+                    artifact_writer: None,
+                    push_emit_error_count: 0,
+                    last_push_emit_error: None,
+                    last_push_emit_at: None,
+                },
+            );
+        }
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let plan = resolve_interactive_launch_paths(
+            &interactive,
+            Some(&repo_root_display),
+            &session_id,
+            "claude",
+        )
+        .await
+        .expect("worktree launch path planning should succeed");
+        let managed = plan
+            .managed_worktree
+            .as_ref()
+            .expect("expected managed worktree metadata")
+            .clone();
+
+        assert!(Path::new(&managed.path).exists());
+
+        cleanup_managed_worktree_on_launch_failure(&managed).await;
+
+        assert!(
+            !Path::new(&managed.path).exists(),
+            "rollback cleanup should remove worktree directory"
+        );
+
+        let branch_check = std::process::Command::new("git")
+            .args(["branch", "--list", &managed.branch])
+            .current_dir(&repo)
+            .output()
+            .expect("git branch --list");
+        let branch_output = String::from_utf8_lossy(&branch_check.stdout);
+        assert!(
+            branch_output.trim().is_empty(),
+            "rollback cleanup should remove worktree branch"
+        );
+    }
+
+    #[test]
+    fn ensure_hydra_gitignore_appends_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join(".gitignore"), "node_modules/\n").unwrap();
+
+        ensure_hydra_gitignore(&workspace).unwrap();
+        ensure_hydra_gitignore(&workspace).unwrap();
+
+        let content = std::fs::read_to_string(workspace.join(".gitignore")).unwrap();
+        let hydra_lines = content
+            .lines()
+            .filter(|line| line.trim() == ".hydra/")
+            .count();
+        assert_eq!(hydra_lines, 1, ".hydra/ should only be added once");
+    }
+
+    #[test]
+    fn cargo_cli_parts_include_manifest_path_for_workspace_independent_execution() {
+        let parts = cargo_hydra_cli_parts_without_binary();
+
+        assert_eq!(
+            parts.first().map(String::as_str),
+            Some("run"),
+            "cargo fallback should start with `run` so command-specific flags are accepted"
+        );
+        assert_eq!(
+            parts.get(1).map(String::as_str),
+            Some("--manifest-path"),
+            "manifest-path must be passed to `cargo run`, not cargo top-level"
+        );
+        assert!(
+            parts.contains(&"--manifest-path".to_string()),
+            "cargo fallback must include --manifest-path so non-Rust workspaces can run hydra-cli"
+        );
+        assert!(
+            parts.contains(&"hydra-cli".to_string()),
+            "cargo fallback must target hydra-cli package"
+        );
+    }
+
+    #[test]
+    fn cargo_cli_manifest_path_exists() {
+        let manifest = cargo_hydra_cli_manifest_path();
+        assert!(
+            manifest.exists(),
+            "expected hydra workspace Cargo.toml to exist at {}",
+            manifest.display()
+        );
+    }
+
+    #[test]
+    fn parse_cli_summary_extracts_agents() {
+        let payload = serde_json::json!({
+            "run_id": "abc",
+            "status": "Completed",
+            "duration_ms": 5000,
+            "total_cost": 0.42,
+            "agents": [
+                {
+                    "agent": "claude",
+                    "status": "Completed",
+                    "duration_ms": 42,
+                    "score": {
+                        "composite": 95.1,
+                        "mergeable": true,
+                        "gate_failures": [],
+                        "dimensions": [
+                            { "name": "build", "score": 100.0, "evidence": {} },
+                            { "name": "tests", "score": 90.0, "evidence": { "passed": 14, "failed": 0 } }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let parsed = parse_cli_race_summary(payload.to_string().as_bytes()).unwrap();
+        assert_eq!(parsed.run_id, "abc");
+        assert_eq!(parsed.status, "completed");
+        assert_eq!(parsed.duration_ms, Some(5000));
+        assert_eq!(parsed.total_cost, Some(0.42));
+        assert_eq!(parsed.agents.len(), 1);
+        assert_eq!(parsed.agents[0].agent_key, "claude");
+        assert_eq!(parsed.agents[0].score, Some(95.1));
+        assert_eq!(parsed.agents[0].mergeable, Some(true));
+        assert!(parsed.agents[0].gate_failures.is_empty());
+        assert_eq!(parsed.agents[0].dimensions.len(), 2);
+        assert_eq!(parsed.agents[0].dimensions[0].name, "build");
+        assert!((parsed.agents[0].dimensions[0].score - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_cli_summary_supports_nested_cost_and_camel_statuses() {
+        let payload = serde_json::json!({
+            "run_id": "run-2",
+            "status": "TimedOut",
+            "duration_ms": 2200,
+            "cost": {
+                "estimated_cost_usd": 1.25
+            },
+            "agents": [
+                {
+                    "agent": "codex",
+                    "status": "TimedOut",
+                    "duration_ms": 2200,
+                    "score": {
+                        "composite": 0.0,
+                        "mergeable": false,
+                        "gate_failures": ["timed_out"],
+                        "dimensions": []
+                    }
+                }
+            ]
+        });
+
+        let parsed = parse_cli_race_summary(payload.to_string().as_bytes()).unwrap();
+        assert_eq!(parsed.status, "timed_out");
+        assert_eq!(parsed.duration_ms, Some(2200));
+        assert_eq!(parsed.total_cost, Some(1.25));
+        assert_eq!(parsed.agents[0].status, "timed_out");
+    }
+
+    #[test]
+    fn normalize_status_handles_mixed_delimiters_and_camel_case() {
+        assert_eq!(normalize_status("TimedOut"), "timed_out");
+        assert_eq!(normalize_status("timed-out"), "timed_out");
+        assert_eq!(normalize_status("Already Fine"), "already_fine");
+    }
+
+    #[test]
+    fn parse_diff_numstat_from_patch_counts_added_removed_per_file() {
+        let patch = r#"diff --git a/src/a.rs b/src/a.rs
+index 1111111..2222222 100644
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,2 +1,3 @@
+ fn a() {
+-  old
++  new
++  more
+ }
+diff --git a/src/b.rs b/src/b.rs
+index 3333333..4444444 100644
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -1,3 +1,2 @@
+-removed
+ stay
+"#;
+        let files = parse_diff_numstat_from_patch(patch);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path, "src/a.rs");
+        assert_eq!(files[0].added, 2);
+        assert_eq!(files[0].removed, 1);
+        assert_eq!(files[1].path, "src/b.rs");
+        assert_eq!(files[1].added, 0);
+        assert_eq!(files[1].removed, 1);
+    }
+
+    #[test]
+    fn parse_merge_preview_payload_conflict_json_is_not_clean() {
+        let payload_json = serde_json::json!({
+            "agent": "claude",
+            "branch": "hydra/test/agent/claude",
+            "success": false,
+            "has_conflicts": true,
+            "stdout": "",
+            "stderr": "CONFLICT in src/main.rs",
+            "report_path": ".hydra/runs/test/merge_report.json"
+        })
+        .to_string();
+
+        let payload = parse_merge_preview_payload(true, "claude", &payload_json, "").unwrap();
+        assert!(!payload.success);
+        assert!(payload.has_conflicts);
+    }
+
+    #[test]
+    fn parse_merge_preview_payload_non_conflict_failure_returns_error() {
+        let err = parse_merge_preview_payload(
+            false,
+            "claude",
+            "",
+            "working tree has uncommitted changes",
+        )
+        .unwrap_err();
+        assert!(err.contains("validation_error"));
+        assert!(err.contains("working tree has uncommitted changes"));
+    }
+
+    #[test]
+    fn parse_merge_preview_payload_prefers_payload_error_over_wrapper_noise() {
+        let payload_json = serde_json::json!({
+            "agent": "claude",
+            "branch": "hydra/test/agent/claude",
+            "success": false,
+            "has_conflicts": false,
+            "stdout": "",
+            "stderr": "branch missing for this run"
+        })
+        .to_string();
+
+        let err = parse_merge_preview_payload(
+            false,
+            "claude",
+            &payload_json,
+            "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s\nRunning `/repo/target/debug/hydra merge --dry-run --json`",
+        )
+        .unwrap_err();
+
+        assert!(err.contains("branch missing for this run"));
+        assert!(!err.contains("Finished `dev` profile"));
+    }
+
+    #[test]
+    fn strip_cli_wrapper_noise_removes_cargo_run_lines() {
+        let stderr = "Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s\nRunning `/repo/target/debug/hydra merge --json`\nerror: patch failed at src/main.rs";
+        let cleaned = strip_cli_wrapper_noise(stderr);
+        assert_eq!(cleaned, "error: patch failed at src/main.rs");
+    }
+
+    #[test]
+    fn parse_run_event_line_output_only_filters_lifecycle_events() {
+        let lifecycle_line = serde_json::json!({
+            "timestamp": "2026-02-23T20:40:59.440503361Z",
+            "kind": "agent_completed",
+            "agent_key": "claude",
+            "data": { "status": "Completed" }
+        })
+        .to_string();
+
+        assert!(parse_run_event_line("run-1", &lifecycle_line, true).is_none());
+        let passthrough = parse_run_event_line("run-1", &lifecycle_line, false).unwrap();
+        assert_eq!(passthrough.event_type, "agent_completed");
+        assert_eq!(passthrough.agent_key, "claude");
+    }
+
+    #[test]
+    fn parse_run_event_line_output_only_keeps_stdout_lines() {
+        let stdout_line = serde_json::json!({
+            "timestamp": "2026-02-23T20:40:20.589821238Z",
+            "kind": "agent_stdout",
+            "agent_key": "codex",
+            "data": { "line": "hello world" }
+        })
+        .to_string();
+
+        let parsed = parse_run_event_line("run-2", &stdout_line, true).unwrap();
+        assert_eq!(parsed.run_id, "run-2");
+        assert_eq!(parsed.agent_key, "codex");
+        assert_eq!(parsed.event_type, "agent_stdout");
+        assert_eq!(parsed.data["line"], "hello world");
+    }
+
+    #[test]
+    fn parse_porcelain_path_extracts_modified_added_and_renamed_paths() {
+        assert_eq!(
+            parse_porcelain_path(" M crates/hydra-app/src/main.rs"),
+            Some("crates/hydra-app/src/main.rs".to_string())
+        );
+        assert_eq!(
+            parse_porcelain_path("?? crates/hydra-app/src/new_file.rs"),
+            Some("crates/hydra-app/src/new_file.rs".to_string())
+        );
+        assert_eq!(
+            parse_porcelain_path("R  src/old.rs -> src/new.rs"),
+            Some("src/new.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn file_watch_event_type_maps_rename_create_modify_delete() {
+        use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
+        use notify::EventKind;
+
+        assert_eq!(
+            file_watch_event_type(&EventKind::Create(CreateKind::Any)),
+            Some("create")
+        );
+        assert_eq!(
+            file_watch_event_type(&EventKind::Modify(ModifyKind::Any)),
+            Some("modify")
+        );
+        assert_eq!(
+            file_watch_event_type(&EventKind::Modify(ModifyKind::Name(RenameMode::Any,))),
+            Some("rename")
+        );
+        assert_eq!(
+            file_watch_event_type(&EventKind::Remove(RemoveKind::Any)),
+            Some("delete")
+        );
+    }
+
+    #[test]
+    fn binary_detection_flags_nul_bytes() {
+        let data = b"hello\0world";
+        assert!(is_probably_binary(data));
+    }
+
+    #[test]
+    fn binary_detection_allows_utf8_text() {
+        let data = "fn main() {\n  println!(\"olá\");\n}\n".as_bytes();
+        assert!(!is_probably_binary(data));
+    }
+
+    #[test]
+    fn hydra_artifact_paths_are_ignored_for_worktree_cleanliness_checks() {
+        assert!(is_hydra_artifact_path(".hydra"));
+        assert!(is_hydra_artifact_path(".hydra/runs/run-id/events.jsonl"));
+        assert!(is_hydra_artifact_path("./.hydra/worktrees/abc"));
+        assert!(is_hydra_artifact_path(".hydra\\runs\\run-id\\events.jsonl"));
+
+        assert!(!is_hydra_artifact_path("src/main.rs"));
+        assert!(!is_hydra_artifact_path("docs/.hydra-notes.md"));
+    }
+
+    #[test]
+    fn resolve_working_tree_scope_returns_subpath_within_repo_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        let workspace = repo_root.join("packages").join("ui");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let scope =
+            resolve_working_tree_scope(&repo_root, Some(workspace.to_string_lossy().as_ref()))
+                .expect("scope should resolve for nested workspace");
+        assert_eq!(scope, workspace);
+    }
+
+    #[test]
+    fn resolve_working_tree_scope_returns_none_for_repo_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo_root).unwrap();
+
+        let scope =
+            resolve_working_tree_scope(&repo_root, Some(repo_root.to_string_lossy().as_ref()));
+        assert!(scope.is_none());
+    }
+
+    #[test]
+    fn resolve_working_tree_scope_returns_none_for_outside_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&repo_root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let scope =
+            resolve_working_tree_scope(&repo_root, Some(outside.to_string_lossy().as_ref()));
+        assert!(scope.is_none());
+    }
+
+    #[test]
+    fn parse_worktree_path_for_branch_finds_matching_entry() {
+        let porcelain = r#"worktree /repo
+HEAD 1111111
+branch refs/heads/main
+
+worktree /repo/.hydra/worktrees/run/claude
+HEAD 2222222
+branch refs/heads/hydra/run/agent/claude
+"#;
+        let found = parse_worktree_path_for_branch(porcelain, "hydra/run/agent/claude")
+            .expect("expected worktree path");
+        assert_eq!(found, PathBuf::from("/repo/.hydra/worktrees/run/claude"));
+    }
+
+    #[test]
+    fn parse_worktree_path_for_branch_returns_none_when_missing() {
+        let porcelain = r#"worktree /repo
+HEAD 1111111
+branch refs/heads/main
+"#;
+        assert!(parse_worktree_path_for_branch(porcelain, "hydra/run/agent/codex").is_none());
+    }
+
+    #[test]
+    fn unsafe_mode_support_for_codex_requires_dangerous_flag() {
+        let ok = adapter_supports_interactive_unsafe_mode(
+            "codex",
+            &[
+                "--json".to_string(),
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            ],
+        );
+        let blocked = adapter_supports_interactive_unsafe_mode(
+            "codex",
+            &["--json".to_string(), "--permission-mode".to_string()],
+        );
+        assert!(ok);
+        assert!(!blocked);
+    }
+
+    #[test]
+    fn unsafe_mode_support_for_claude_requires_permission_mode() {
+        let ok = adapter_supports_interactive_unsafe_mode(
+            "claude",
+            &["--print".to_string(), "--permission-mode".to_string()],
+        );
+        let blocked = adapter_supports_interactive_unsafe_mode("claude", &["--print".to_string()]);
+        assert!(ok);
+        assert!(!blocked);
+    }
+
+    #[test]
+    fn unsafe_mode_support_rejects_unknown_adapters() {
+        let blocked =
+            adapter_supports_interactive_unsafe_mode("cursor-agent", &["--force".to_string()]);
+        assert!(!blocked);
+    }
+
+    // P4.9.4: Direct CLI invocation tests
+    #[test]
+    fn build_interactive_args_claude_basic() {
+        let args = build_interactive_args("claude", "fix the bug", false, &[]);
+        assert_eq!(args, vec!["fix the bug"]);
+    }
+
+    #[test]
+    fn build_interactive_args_claude_unsafe_with_permission_mode() {
+        let flags = vec!["--permission-mode".to_string()];
+        let args = build_interactive_args("claude", "fix it", true, &flags);
+        assert_eq!(
+            args,
+            vec!["--permission-mode", "bypassPermissions", "fix it"]
+        );
+    }
+
+    #[test]
+    fn build_interactive_args_claude_unsafe_without_permission_mode() {
+        let args = build_interactive_args("claude", "fix it", true, &[]);
+        assert_eq!(args, vec!["fix it"]);
+    }
+
+    #[test]
+    fn build_interactive_args_codex_basic() {
+        let args = build_interactive_args("codex", "refactor the module", false, &[]);
+        assert_eq!(args, vec!["exec", "refactor the module"]);
+    }
+
+    #[test]
+    fn build_interactive_args_codex_unsafe_with_dangerous_flag() {
+        let flags = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
+        let args = build_interactive_args("codex", "fix", true, &flags);
+        assert_eq!(
+            args,
+            vec!["exec", "fix", "--dangerously-bypass-approvals-and-sandbox"]
+        );
+    }
+
+    #[test]
+    fn build_interactive_args_cursor_agent() {
+        let args = build_interactive_args("cursor-agent", "do it", false, &[]);
+        assert_eq!(args, vec!["do it"]);
+    }
+
+    #[test]
+    fn build_interactive_args_unknown_adapter() {
+        let args = build_interactive_args("unknown", "task", false, &[]);
+        assert_eq!(args, vec!["task"]);
+    }
+
+    #[test]
+    fn build_interactive_args_empty_prompt_launches_interactive_shell() {
+        let claude = build_interactive_args("claude", "", false, &[]);
+        let codex = build_interactive_args("codex", "", false, &[]);
+        let cursor = build_interactive_args("cursor-agent", "", false, &[]);
+        assert!(claude.is_empty());
+        assert!(codex.is_empty());
+        assert!(cursor.is_empty());
+    }
+
+    #[test]
+    fn build_interactive_args_codex_empty_prompt_with_unsafe_flag() {
+        let flags = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
+        let codex = build_interactive_args("codex", "", true, &flags);
+        assert_eq!(codex, vec!["--dangerously-bypass-approvals-and-sandbox"]);
+    }
+
+    #[test]
+    fn ipc_error_binary_missing_variant() {
+        let err = IpcError::binary_missing("claude not found");
+        assert_eq!(err.code, "binary_missing");
+        assert_eq!(err.to_string(), "[binary_missing] claude not found");
+    }
+
+    #[test]
+    fn ipc_error_launch_error_variant() {
+        let err = IpcError::launch_error("PTY spawn failed");
+        assert_eq!(err.code, "launch_error");
+        assert_eq!(err.to_string(), "[launch_error] PTY spawn failed");
+    }
+
+    #[test]
+    fn interactive_session_started_serializes_camel_case() {
+        let started = InteractiveSessionStarted {
+            session_id: "s1".to_string(),
+            agent_key: "claude".to_string(),
+            status: "running".to_string(),
+            started_at: "2026-02-24T00:00:00Z".to_string(),
+            source_root: "/repo".to_string(),
+            repo_root: "/repo".to_string(),
+            effective_cwd: "/repo".to_string(),
+            worktree_path: None,
+        };
+        let json = serde_json::to_string(&started).unwrap();
+        assert!(json.contains("sessionId"));
+        assert!(json.contains("agentKey"));
+        assert!(json.contains("startedAt"));
+        assert!(json.contains("sourceRoot"));
+        assert!(json.contains("effectiveCwd"));
+    }
+
+    #[test]
+    fn interactive_write_ack_serializes() {
+        let ack = InteractiveWriteAck {
+            session_id: "s1".to_string(),
+            success: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&ack).unwrap();
+        assert!(json.contains("sessionId"));
+        assert!(json.contains("\"success\":true"));
+    }
+
+    #[test]
+    fn interactive_resize_ack_serializes() {
+        let ack = InteractiveResizeAck {
+            session_id: "s1".to_string(),
+            success: true,
+            cols: 132,
+            rows: 50,
+            error: None,
+        };
+        let json = serde_json::to_string(&ack).unwrap();
+        assert!(json.contains("\"cols\":132"));
+        assert!(json.contains("\"rows\":50"));
+    }
+
+    #[test]
+    fn interactive_stop_result_serializes() {
+        let result = InteractiveStopResult {
+            session_id: "s1".to_string(),
+            status: "stopped".to_string(),
+            was_running: true,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("wasRunning"));
+        assert!(json.contains("\"status\":\"stopped\""));
+    }
+
+    #[test]
+    fn interactive_remove_result_serializes() {
+        let result = InteractiveRemoveResult {
+            session_id: "s1".to_string(),
+            status: "stopped".to_string(),
+            removed: true,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"removed\":true"));
+        assert!(json.contains("\"status\":\"stopped\""));
+    }
+
+    #[test]
+    fn interactive_session_summary_serializes() {
+        let summary = InteractiveSessionSummary {
+            session_id: "s1".to_string(),
+            agent_key: "claude".to_string(),
+            status: "running".to_string(),
+            started_at: "2026-02-24T00:00:00Z".to_string(),
+            event_count: 42,
+            source_root: "/repo".to_string(),
+            repo_root: "/repo".to_string(),
+            effective_cwd: "/repo".to_string(),
+            worktree_path: None,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("eventCount"));
+        assert!(json.contains("\"eventCount\":42"));
+        assert!(json.contains("sourceRoot"));
+        assert!(json.contains("effectiveCwd"));
+    }
+
+    #[test]
+    fn interactive_transport_diagnostics_serializes() {
+        let diagnostics = InteractiveTransportDiagnostics {
+            session_id: "s1".to_string(),
+            push_emit_error_count: 2,
+            last_push_emit_error: Some("emit denied".to_string()),
+            last_push_emit_at: Some("2026-03-03T00:00:00Z".to_string()),
+        };
+        let json = serde_json::to_string(&diagnostics).unwrap();
+        assert!(json.contains("pushEmitErrorCount"));
+        assert!(json.contains("\"pushEmitErrorCount\":2"));
+        assert!(json.contains("lastPushEmitError"));
+        assert!(json.contains("lastPushEmitAt"));
+    }
+
+    #[test]
+    fn ipc_error_not_found_variant() {
+        let err = IpcError::not_found("session not found");
+        assert_eq!(err.code, "not_found");
+        assert_eq!(err.to_string(), "[not_found] session not found");
+    }
+
+    // M4.5: Safety and capability gating error variant tests
+    #[test]
+    fn ipc_error_safety_gate_variant() {
+        let err = IpcError::safety_gate("adapter not available");
+        assert_eq!(err.code, "safety_gate");
+        assert_eq!(err.to_string(), "[safety_gate] adapter not available");
+    }
+
+    #[test]
+    fn ipc_error_experimental_blocked_variant() {
+        let err = IpcError::experimental_blocked("cursor-agent requires confirmation");
+        assert_eq!(err.code, "experimental_blocked");
+        assert!(err.to_string().contains("experimental_blocked"));
+    }
+
+    #[test]
+    fn ipc_error_dirty_worktree_variant() {
+        let err = IpcError::dirty_worktree("uncommitted changes found");
+        assert_eq!(err.code, "dirty_worktree");
+        assert!(err.to_string().contains("dirty_worktree"));
+    }
+
+    #[test]
+    fn ipc_error_unsafe_blocked_variant() {
+        let err = IpcError::unsafe_blocked("adapter lacks dangerous flag");
+        assert_eq!(err.code, "unsafe_blocked");
+        assert!(err.to_string().contains("unsafe_blocked"));
+    }
+}

@@ -1,0 +1,14 @@
+Claude Code CLI v1.0.42
+
+Usage: claude [options] [prompt]
+
+Options:
+  -p, --print                    Print response and exit (non-interactive)
+  --output-format <format>       Output format: text, json, stream-json
+  --input-format <format>        Input format: text, stream-json
+  --permission-mode <mode>       Permission mode: default, bypassPermissions
+  --allowedTools <tools>         Comma-separated list of allowed tools
+  --disallowedTools <tools>      Comma-separated list of disallowed tools
+  --max-turns <n>                Maximum conversation turns
+  -v, --version                  Show version
+  -h, --help                     Show this help

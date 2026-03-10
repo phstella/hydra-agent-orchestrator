@@ -1,0 +1,4 @@
+{"type":"init","version":"0.45.2"}
+{"type":"message","content":"Working on the task..."}
+{"type":"tool_call","tool":"edit","input":{"file":"src/lib.rs","changes":[{"line":5,"text":"// fixed"}]}}
+{"type":"completed","summary":"Task completed successfully"}

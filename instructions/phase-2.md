@@ -53,3 +53,17 @@ Two major streams after Phase 1:
 - Acceptance criteria: `planning/implementation-checklist.md` section 5
 - Scoring formulas: `docs/scoring-engine.md`
 - Issue bodies: `planning/issues/phase-2.md`
+
+## Validation Notes (2026-02-23)
+
+- Live adapter validation confirmed doctor readiness for Tier-1 adapters (`claude`, `codex`).
+- Codex JSON runtime event compatibility was updated to parse current envelopes:
+  `thread.started`, `item.completed`, `turn.completed`, and `turn.failed`.
+- Claude runtime command compatibility was updated to pass `--verbose` when supported,
+  matching current CLI requirements for `--print --output-format stream-json`.
+- Budget-stop path is now live-validated from real token usage:
+  `run_id=5021b0e3-9848-464f-91ef-6e14a92cc092` with
+  `[scoring.budget] max_tokens_total = 1` produced an interrupted run with
+  `budget.stop_triggered=true` and a persisted stop reason.
+- Shared budget-stop was also validated in a two-agent live race
+  (`claude,codex`, `run_id=31032e95-dad2-4d83-a18e-151a80bcd8f5`).

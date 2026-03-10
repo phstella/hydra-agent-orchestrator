@@ -1,0 +1,881 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Command;
+
+use super::error::AdapterError;
+use super::types::*;
+use super::{parse_version_string, resolve_binary, AgentAdapter};
+
+/// OpenAI Codex adapter: probe + runtime implementation.
+pub struct CodexAdapter {
+    configured_path: Option<String>,
+}
+
+impl CodexAdapter {
+    pub fn new(configured_path: Option<String>) -> Self {
+        Self { configured_path }
+    }
+
+    fn probe_help(binary: &PathBuf) -> Result<String, String> {
+        let output = Command::new(binary)
+            .args(["exec", "--help"])
+            .output()
+            .map_err(|e| format!("failed to run exec --help: {e}"))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "exec --help exited with status {}",
+                output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".to_string())
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Ok(format!("{stdout}{stderr}"))
+    }
+
+    fn probe_top_help(binary: &PathBuf) -> Result<String, String> {
+        let output = Command::new(binary)
+            .arg("--help")
+            .output()
+            .map_err(|e| format!("failed to run --help: {e}"))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "--help exited with status {}",
+                output
+                    .status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".to_string())
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Ok(format!("{stdout}{stderr}"))
+    }
+
+    fn probe_version(binary: &PathBuf) -> Option<String> {
+        let output = Command::new(binary).arg("--version").output().ok()?;
+        parse_version_string(&String::from_utf8_lossy(&output.stdout))
+    }
+
+    /// Parse help text to determine supported flags.
+    pub fn parse_help_flags(top_help: &str, exec_help: &str) -> Vec<String> {
+        let mut flags = Vec::new();
+        let combined = format!("{top_help}\n{exec_help}");
+
+        if combined.contains("exec") {
+            flags.push("exec".to_string());
+        }
+        if combined.contains("--json") {
+            flags.push("--json".to_string());
+        }
+        if combined.contains("--full-auto") {
+            flags.push("--full-auto".to_string());
+        }
+        if combined.contains("--sandbox") {
+            flags.push("--sandbox".to_string());
+        }
+        if combined.contains("--ask-for-approval") {
+            flags.push("--ask-for-approval".to_string());
+        }
+        if combined.contains("--dangerously-bypass")
+            || combined.contains("dangerously-bypass-approvals-and-sandbox")
+        {
+            flags.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+        }
+        if combined.contains("-C") || combined.contains("--cd") {
+            flags.push("--cd".to_string());
+        }
+
+        flags
+    }
+
+    /// Parse a single line of Codex `--json` JSONL output into an `AgentEvent`.
+    ///
+    /// Supports both legacy and current Codex JSON event envelopes.
+    pub fn parse_json_line(line: &str) -> Option<AgentEvent> {
+        let v: serde_json::Value = serde_json::from_str(line).ok()?;
+        let obj = v.as_object()?;
+
+        match obj.get("type")?.as_str()? {
+            "start" => {
+                let task = obj
+                    .get("task")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("unknown");
+                let model = obj
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown");
+                Some(AgentEvent::Progress {
+                    message: format!("started: {task} (model: {model})"),
+                    percent: Some(0.0),
+                })
+            }
+            "thread.started" => Some(AgentEvent::Progress {
+                message: "thread started".to_string(),
+                percent: Some(0.0),
+            }),
+            "turn.started" => Some(AgentEvent::Progress {
+                message: "turn started".to_string(),
+                percent: None,
+            }),
+            "message" => {
+                let content = obj
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if content.is_empty() {
+                    return None;
+                }
+                Some(AgentEvent::Message { content })
+            }
+            "item.completed" => {
+                let item = obj.get("item").and_then(|i| i.as_object())?;
+                let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                match item_type {
+                    "agent_message" | "reasoning" => {
+                        let content = item
+                            .get("text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if content.is_empty() {
+                            return None;
+                        }
+                        Some(AgentEvent::Message { content })
+                    }
+                    "tool_call" => {
+                        let tool = item
+                            .get("name")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let input = item
+                            .get("input")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        Some(AgentEvent::ToolCall { tool, input })
+                    }
+                    "tool_result" => {
+                        let tool = item
+                            .get("name")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let output = item
+                            .get("output")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        Some(AgentEvent::ToolResult { tool, output })
+                    }
+                    _ => None,
+                }
+            }
+            "tool_call" => {
+                let tool = obj
+                    .get("tool")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let input = obj.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                Some(AgentEvent::ToolCall { tool, input })
+            }
+            "tool_result" => {
+                let tool = obj
+                    .get("tool")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let output = obj
+                    .get("output")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                Some(AgentEvent::ToolResult { tool, output })
+            }
+            "completed" | "turn.completed" => {
+                if let Some(usage) = obj.get("usage").and_then(|u| u.as_object()) {
+                    let input_tokens = usage
+                        .get("input_tokens")
+                        .or_else(|| usage.get("prompt_tokens"))
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0);
+                    let output_tokens = usage
+                        .get("output_tokens")
+                        .or_else(|| usage.get("completion_tokens"))
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0);
+                    let mut extra = HashMap::new();
+                    if let Some(cost) = obj.get("cost_usd").and_then(|c| c.as_f64()) {
+                        extra.insert("cost_usd".to_string(), serde_json::Value::from(cost));
+                    }
+                    if let Some(cached) = usage.get("cached_input_tokens").and_then(|t| t.as_u64())
+                    {
+                        extra.insert(
+                            "cached_input_tokens".to_string(),
+                            serde_json::Value::from(cached),
+                        );
+                    }
+                    return Some(AgentEvent::Usage {
+                        input_tokens,
+                        output_tokens,
+                        extra,
+                    });
+                }
+                let summary = obj
+                    .get("cost_usd")
+                    .and_then(|c| c.as_f64())
+                    .map(|c| format!("cost: ${c:.4}"));
+                Some(AgentEvent::Completed { summary })
+            }
+            "turn.failed" => {
+                let error = obj
+                    .get("error")
+                    .and_then(|e| e.as_object())
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .or_else(|| obj.get("message").and_then(|m| m.as_str()))
+                    .unwrap_or("turn failed")
+                    .to_string();
+                Some(AgentEvent::Failed { error })
+            }
+            "error" => {
+                let error = obj
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("codex error")
+                    .to_string();
+                Some(AgentEvent::Failed { error })
+            }
+            _ => None,
+        }
+    }
+
+    fn has_flag(flags: &[String], name: &str) -> bool {
+        flags.iter().any(|f| f == name)
+    }
+
+    fn runtime_control_args(req: &SpawnRequest) -> Result<Vec<String>, AdapterError> {
+        if !req.force_edit {
+            return Ok(Vec::new());
+        }
+
+        if req.unsafe_mode {
+            if Self::has_flag(
+                &req.supported_flags,
+                "--dangerously-bypass-approvals-and-sandbox",
+            ) {
+                return Ok(vec![
+                    "--dangerously-bypass-approvals-and-sandbox".to_string()
+                ]);
+            }
+            return Err(AdapterError::UnsupportedFlag {
+                adapter: "codex".to_string(),
+                flag: "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            });
+        }
+
+        if req.supported_flags.is_empty() || Self::has_flag(&req.supported_flags, "--full-auto") {
+            return Ok(vec!["--full-auto".to_string()]);
+        }
+
+        let mut args = Vec::new();
+        if Self::has_flag(&req.supported_flags, "--ask-for-approval") {
+            args.push("--ask-for-approval".to_string());
+            args.push("never".to_string());
+        }
+        if Self::has_flag(&req.supported_flags, "--sandbox") {
+            args.push("--sandbox".to_string());
+            args.push("workspace-write".to_string());
+        }
+
+        if args.is_empty() {
+            return Err(AdapterError::UnsupportedFlag {
+                adapter: "codex".to_string(),
+                flag: "--full-auto or --sandbox/--ask-for-approval".to_string(),
+            });
+        }
+        Ok(args)
+    }
+}
+
+impl AgentAdapter for CodexAdapter {
+    fn key(&self) -> &'static str {
+        "codex"
+    }
+
+    fn tier(&self) -> AdapterTier {
+        AdapterTier::Tier1
+    }
+
+    fn detect(&self) -> DetectResult {
+        let binary = resolve_binary(self.configured_path.as_deref(), &["codex"]);
+
+        let Some(binary_path) = binary else {
+            return DetectResult {
+                status: DetectStatus::Missing,
+                binary_path: None,
+                version: None,
+                supported_flags: vec![],
+                confidence: CapabilityConfidence::Verified,
+                error: Some("codex binary not found in PATH".to_string()),
+            };
+        };
+
+        let version = Self::probe_version(&binary_path);
+
+        let top_help = match Self::probe_top_help(&binary_path) {
+            Ok(text) => text,
+            Err(e) => {
+                return DetectResult {
+                    status: DetectStatus::Blocked,
+                    binary_path: Some(binary_path),
+                    version,
+                    supported_flags: vec![],
+                    confidence: CapabilityConfidence::Unknown,
+                    error: Some(e),
+                };
+            }
+        };
+
+        let exec_help = match Self::probe_help(&binary_path) {
+            Ok(text) => text,
+            Err(e) => {
+                return DetectResult {
+                    status: DetectStatus::Blocked,
+                    binary_path: Some(binary_path),
+                    version,
+                    supported_flags: vec![],
+                    confidence: CapabilityConfidence::Unknown,
+                    error: Some(e),
+                };
+            }
+        };
+        let flags = Self::parse_help_flags(&top_help, &exec_help);
+
+        let has_exec = flags.iter().any(|f| f == "exec");
+        let has_json = flags.iter().any(|f| f == "--json");
+        let has_runtime_controls = flags.is_empty()
+            || flags.iter().any(|f| f == "--full-auto")
+            || (flags.iter().any(|f| f == "--ask-for-approval")
+                && flags.iter().any(|f| f == "--sandbox"));
+
+        let status = if has_exec && has_json && has_runtime_controls {
+            DetectStatus::Ready
+        } else {
+            DetectStatus::Blocked
+        };
+
+        let error = if status == DetectStatus::Blocked {
+            let mut missing = Vec::new();
+            if !has_exec {
+                missing.push("exec subcommand");
+            }
+            if !has_json {
+                missing.push("--json flag");
+            }
+            if !has_runtime_controls {
+                missing.push("runtime control flags (--full-auto or --sandbox/--ask-for-approval)");
+            }
+            Some(format!("missing required: {}", missing.join(", ")))
+        } else {
+            None
+        };
+
+        DetectResult {
+            status,
+            binary_path: Some(binary_path),
+            version,
+            supported_flags: flags,
+            confidence: CapabilityConfidence::Verified,
+            error,
+        }
+    }
+
+    fn capabilities(&self) -> CapabilitySet {
+        CapabilitySet {
+            json_stream: CapabilityEntry::verified(true),
+            plain_text: CapabilityEntry::verified(true),
+            force_edit_mode: CapabilityEntry::verified(true),
+            sandbox_controls: CapabilityEntry::verified(true),
+            approval_controls: CapabilityEntry::verified(true),
+            session_resume: CapabilityEntry::unknown(),
+            emits_usage: CapabilityEntry::verified(true),
+        }
+    }
+
+    fn build_command(&self, req: &SpawnRequest) -> Result<BuiltCommand, AdapterError> {
+        let binary = resolve_binary(self.configured_path.as_deref(), &["codex"]).ok_or(
+            AdapterError::BinaryMissing {
+                adapter: "codex".to_string(),
+            },
+        )?;
+
+        let mut args = vec![
+            "exec".to_string(),
+            req.task_prompt.clone(),
+            "--json".to_string(),
+        ];
+
+        args.extend(Self::runtime_control_args(req)?);
+
+        Ok(BuiltCommand {
+            program: binary.display().to_string(),
+            args,
+            env: vec![],
+            cwd: req.worktree_path.clone(),
+        })
+    }
+
+    fn parse_line(&self, line: &str) -> Option<AgentEvent> {
+        Self::parse_json_line(line)
+    }
+
+    fn parse_raw(&self, chunk: &[u8]) -> Vec<AgentEvent> {
+        let text = match std::str::from_utf8(chunk) {
+            Ok(t) => t,
+            Err(_) => return Vec::new(),
+        };
+        text.lines().filter_map(Self::parse_json_line).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    const FIXTURE_HELP: &str = include_str!("../../tests/fixtures/adapters/codex/help.txt");
+    const FIXTURE_JSON: &str =
+        include_str!("../../tests/fixtures/adapters/codex/exec-json.ok.jsonl");
+
+    #[test]
+    fn parse_help_finds_exec_and_json() {
+        let flags = CodexAdapter::parse_help_flags(FIXTURE_HELP, FIXTURE_HELP);
+        assert!(flags.contains(&"exec".to_string()));
+        assert!(flags.contains(&"--json".to_string()));
+    }
+
+    #[test]
+    fn parse_help_finds_approval_flags() {
+        let flags = CodexAdapter::parse_help_flags(FIXTURE_HELP, FIXTURE_HELP);
+        assert!(flags.contains(&"--full-auto".to_string()));
+        assert!(flags.contains(&"--sandbox".to_string()));
+        assert!(flags.contains(&"--ask-for-approval".to_string()));
+        assert!(flags.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+    }
+
+    #[test]
+    fn parse_help_empty_returns_empty() {
+        let flags = CodexAdapter::parse_help_flags("", "");
+        assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn codex_adapter_is_tier1() {
+        let adapter = CodexAdapter::new(None);
+        assert_eq!(adapter.tier(), AdapterTier::Tier1);
+        assert_eq!(adapter.key(), "codex");
+    }
+
+    #[test]
+    fn codex_capabilities_sandbox_verified() {
+        let adapter = CodexAdapter::new(None);
+        let caps = adapter.capabilities();
+        assert!(caps.sandbox_controls.supported);
+        assert_eq!(
+            caps.sandbox_controls.confidence,
+            CapabilityConfidence::Verified
+        );
+    }
+
+    #[test]
+    fn detect_returns_missing_when_binary_absent() {
+        let adapter = CodexAdapter::new(Some("/nonexistent/codex".to_string()));
+        let result = adapter.detect();
+        assert_eq!(result.status, DetectStatus::Missing);
+    }
+
+    #[test]
+    fn parse_version_codex_format() {
+        assert_eq!(
+            parse_version_string("codex v0.1.2025062"),
+            Some("0.1.2025062".to_string())
+        );
+    }
+
+    // --- M1.6: build_command tests ---
+
+    #[test]
+    fn build_command_produces_correct_flags() {
+        let adapter = CodexAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "Fix the bug in main.rs".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: false,
+            force_edit: true,
+            output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "--full-auto".to_string(),
+            ],
+        };
+        let cmd = adapter.build_command(&req).unwrap();
+        assert_eq!(cmd.program, "/usr/bin/echo");
+        assert_eq!(cmd.args[0], "exec");
+        assert_eq!(cmd.args[1], "Fix the bug in main.rs");
+        assert!(cmd.args.contains(&"--json".to_string()));
+        assert!(cmd.args.contains(&"--full-auto".to_string()));
+        assert_eq!(cmd.cwd, PathBuf::from("/tmp/wt"));
+    }
+
+    #[test]
+    fn build_command_omits_full_auto_when_not_force_edit() {
+        let adapter = CodexAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "describe".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: false,
+            force_edit: false,
+            output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec!["exec".to_string(), "--json".to_string()],
+        };
+        let cmd = adapter.build_command(&req).unwrap();
+        assert!(!cmd.args.contains(&"--full-auto".to_string()));
+    }
+
+    #[test]
+    fn build_command_fails_when_binary_missing() {
+        let adapter = CodexAdapter::new(Some("/nonexistent/codex".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "test".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: false,
+            force_edit: true,
+            output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "--full-auto".to_string(),
+            ],
+        };
+        let err = adapter.build_command(&req).unwrap_err();
+        assert!(matches!(err, AdapterError::BinaryMissing { .. }));
+    }
+
+    #[test]
+    fn build_command_falls_back_when_full_auto_missing() {
+        let adapter = CodexAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "fix".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: false,
+            force_edit: true,
+            output_json_stream: true,
+            unsafe_mode: false,
+            supported_flags: vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "--ask-for-approval".to_string(),
+                "--sandbox".to_string(),
+            ],
+        };
+        let cmd = adapter.build_command(&req).unwrap();
+        assert!(!cmd.args.contains(&"--full-auto".to_string()));
+        assert!(cmd.args.contains(&"--ask-for-approval".to_string()));
+        assert!(cmd.args.contains(&"never".to_string()));
+        assert!(cmd.args.contains(&"--sandbox".to_string()));
+        assert!(cmd.args.contains(&"workspace-write".to_string()));
+    }
+
+    #[test]
+    fn build_command_unsafe_mode_requires_dangerous_flag() {
+        let adapter = CodexAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "fix".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: true,
+            force_edit: true,
+            output_json_stream: true,
+            unsafe_mode: true,
+            supported_flags: vec!["exec".to_string(), "--json".to_string()],
+        };
+        let err = adapter.build_command(&req).unwrap_err();
+        assert!(matches!(err, AdapterError::UnsupportedFlag { .. }));
+    }
+
+    #[test]
+    fn build_command_unsafe_mode_uses_dangerous_flag_when_supported() {
+        let adapter = CodexAdapter::new(Some("/usr/bin/echo".to_string()));
+        let req = SpawnRequest {
+            task_prompt: "fix".to_string(),
+            worktree_path: PathBuf::from("/tmp/wt"),
+            timeout_seconds: 300,
+            allow_network: true,
+            force_edit: true,
+            output_json_stream: true,
+            unsafe_mode: true,
+            supported_flags: vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            ],
+        };
+        let cmd = adapter.build_command(&req).unwrap();
+        assert!(cmd
+            .args
+            .contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
+    }
+
+    // --- M1.6: parse_line / parse_raw tests ---
+
+    #[test]
+    fn parse_line_start_event() {
+        let line = r#"{"type":"start","task":"Fix the bug in main.rs","model":"o4-mini"}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("start event fixture should parse into an AgentEvent");
+        match evt {
+            AgentEvent::Progress { message, percent } => {
+                assert!(message.contains("Fix the bug"));
+                assert!(message.contains("o4-mini"));
+                assert_eq!(percent, Some(0.0));
+            }
+            other => assert!(
+                matches!(other, AgentEvent::Progress { .. }),
+                "expected Progress, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_line_message_event() {
+        let line =
+            r#"{"type":"message","role":"assistant","content":"I'll fix the bug in main.rs."}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("message event fixture should parse into an AgentEvent");
+        match evt {
+            AgentEvent::Message { content } => {
+                assert_eq!(content, "I'll fix the bug in main.rs.");
+            }
+            other => assert!(
+                matches!(other, AgentEvent::Message { .. }),
+                "expected Message, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_line_tool_call_event() {
+        let line = r#"{"type":"tool_call","tool":"shell","input":{"command":"cat src/main.rs"}}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("tool_call fixture should parse into an AgentEvent");
+        match evt {
+            AgentEvent::ToolCall { tool, input } => {
+                assert_eq!(tool, "shell");
+                let command = input["command"]
+                    .as_str()
+                    .expect("tool_call command should be a string");
+                assert!(command.contains("main.rs"));
+            }
+            other => assert!(
+                matches!(other, AgentEvent::ToolCall { .. }),
+                "expected ToolCall, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_line_tool_result_event() {
+        let line = r#"{"type":"tool_result","tool":"shell","output":"fn main() {\n    println!(\"Hello\");\n}"}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("tool_result fixture should parse into an AgentEvent");
+        match evt {
+            AgentEvent::ToolResult { tool, output } => {
+                assert_eq!(tool, "shell");
+                let output_text = output
+                    .as_str()
+                    .expect("tool_result output should be a string");
+                assert!(output_text.contains("fn main"));
+            }
+            other => assert!(
+                matches!(other, AgentEvent::ToolResult { .. }),
+                "expected ToolResult, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_line_completed_with_usage() {
+        let line = r#"{"type":"completed","usage":{"input_tokens":800,"output_tokens":320},"cost_usd":0.002}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("completed fixture should parse into an AgentEvent");
+        match evt {
+            AgentEvent::Usage {
+                input_tokens,
+                output_tokens,
+                extra,
+            } => {
+                assert_eq!(input_tokens, 800);
+                assert_eq!(output_tokens, 320);
+                assert!(extra.contains_key("cost_usd"));
+            }
+            other => assert!(
+                matches!(other, AgentEvent::Usage { .. }),
+                "expected Usage, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_line_completed_without_usage() {
+        let line = r#"{"type":"completed"}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("completed fixture should parse into an AgentEvent");
+        assert!(matches!(evt, AgentEvent::Completed { .. }));
+    }
+
+    #[test]
+    fn parse_line_turn_completed_with_usage() {
+        let line = r#"{"type":"turn.completed","usage":{"input_tokens":7645,"cached_input_tokens":6656,"output_tokens":42}}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("turn.completed fixture should parse into an AgentEvent");
+        match evt {
+            AgentEvent::Usage {
+                input_tokens,
+                output_tokens,
+                extra,
+            } => {
+                assert_eq!(input_tokens, 7645);
+                assert_eq!(output_tokens, 42);
+                assert_eq!(
+                    extra
+                        .get("cached_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .expect("cached_input_tokens should be present in usage payload"),
+                    6656
+                );
+            }
+            other => assert!(
+                matches!(other, AgentEvent::Usage { .. }),
+                "expected Usage, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_line_item_completed_agent_message() {
+        let line = r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"codex ok"}}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("item.completed fixture should parse into an AgentEvent");
+        match evt {
+            AgentEvent::Message { content } => {
+                assert_eq!(content, "codex ok");
+            }
+            other => assert!(
+                matches!(other, AgentEvent::Message { .. }),
+                "expected Message, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_line_turn_failed_event() {
+        let line =
+            r#"{"type":"turn.failed","error":{"message":"stream disconnected before completion"}}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("turn.failed fixture should parse into an AgentEvent");
+        match evt {
+            AgentEvent::Failed { error } => {
+                assert!(error.contains("stream disconnected"));
+            }
+            other => assert!(
+                matches!(other, AgentEvent::Failed { .. }),
+                "expected Failed, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_line_error_event() {
+        let line = r#"{"type":"error","message":"reconnecting"}"#;
+        let evt = CodexAdapter::parse_json_line(line)
+            .expect("error fixture should parse into an AgentEvent");
+        match evt {
+            AgentEvent::Failed { error } => {
+                assert_eq!(error, "reconnecting");
+            }
+            other => assert!(
+                matches!(other, AgentEvent::Failed { .. }),
+                "expected Failed, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn parse_line_ignores_unknown_type() {
+        let line = r#"{"type":"future_event","data":{}}"#;
+        assert!(CodexAdapter::parse_json_line(line).is_none());
+    }
+
+    #[test]
+    fn parse_line_handles_invalid_json() {
+        assert!(CodexAdapter::parse_json_line("not json").is_none());
+        assert!(CodexAdapter::parse_json_line("").is_none());
+    }
+
+    #[test]
+    fn parse_line_empty_message_returns_none() {
+        let line = r#"{"type":"message","role":"assistant","content":""}"#;
+        assert!(CodexAdapter::parse_json_line(line).is_none());
+    }
+
+    #[test]
+    fn parse_raw_processes_fixture_lines() {
+        let adapter = CodexAdapter::new(None);
+        let events = adapter.parse_raw(FIXTURE_JSON.as_bytes());
+        assert!(
+            events.len() >= 3,
+            "fixture should produce at least 3 events, got {}",
+            events.len()
+        );
+
+        let has_message = events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Message { .. }));
+        let has_tool_call = events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolCall { .. }));
+        let has_usage = events.iter().any(|e| matches!(e, AgentEvent::Usage { .. }));
+        assert!(has_message, "should parse at least one Message");
+        assert!(has_tool_call, "should parse at least one ToolCall");
+        assert!(has_usage, "should parse Usage from completed event");
+    }
+
+    #[test]
+    fn parse_line_fixture_lines_individually() {
+        let adapter = CodexAdapter::new(None);
+        for line in FIXTURE_JSON.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let _ = adapter.parse_line(line);
+        }
+    }
+}

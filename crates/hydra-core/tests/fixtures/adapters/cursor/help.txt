@@ -1,0 +1,10 @@
+Cursor Agent CLI v0.45.2
+
+Usage: cursor [options] [prompt]
+
+Options:
+  -p, --print              Print mode (headless)
+  --output-format <fmt>    Output format: text, json, stream-json
+  -f, --force              Apply changes without approval
+  -v, --version            Show version
+  -h, --help               Show help

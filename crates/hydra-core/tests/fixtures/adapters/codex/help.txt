@@ -1,0 +1,18 @@
+codex v0.1.2025062
+
+Usage: codex [command] [options]
+
+Commands:
+  exec            Execute a task non-interactively
+  completion      Generate shell completions
+
+Options:
+  --json                         Output events as JSON
+  -C, --cd <dir>                 Change working directory
+  --sandbox <mode>               Sandbox mode: permissive, strict
+  --ask-for-approval <policy>    Approval policy: always, never, auto
+  --full-auto                    Auto approvals + sandbox
+  --dangerously-bypass-approvals-and-sandbox
+                                 Bypass all safety controls
+  -v, --version                  Show version
+  -h, --help                     Show this help

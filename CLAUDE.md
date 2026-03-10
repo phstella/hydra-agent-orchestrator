@@ -18,7 +18,8 @@ PROGRESS.md            <- living state file (update every session)
 research.md            <- research index and product summary
 docs/                  <- reference documentation (architecture, adapters, scoring, etc.)
 planning/              <- project management (roadmap, checklist, issues, sprints)
-  issues/              <- per-phase issue packs
+  issues/              <- optional per-phase issue packs (sync only)
+  *-local-*.md         <- local execution packs/checklists (primary execution tracking)
 instructions/          <- per-phase implementation guidance for agents
 ```
 
@@ -64,8 +65,9 @@ crates/
 
 ## Milestone ID Format
 
-`M<phase>.<sequence>` - e.g., `M0.1`, `M2.11`, `M5.6`.
+`M<phase>.<sequence>` - e.g., `M0.1`, `M2.11`, `M6.6`.
 Use as commit prefix and issue title prefix.
+Use as local task/checklist prefix when operating without GitHub tickets.
 
 ## PROGRESS.md Protocol
 
@@ -81,6 +83,6 @@ Use as commit prefix and issue title prefix.
 - Adapter contracts: `docs/agent-adapters.md`
 - Scoring formulas: `docs/scoring-engine.md`
 - Roadmap & phases: `planning/roadmap.md`
-- Full checklist (47 milestones): `planning/implementation-checklist.md`
+- Full checklist (53 milestones): `planning/implementation-checklist.md`
 - Sprint 1 cut (10 tickets): `planning/sprint-1-cut.md`
-- Phase instructions: `instructions/phase-0.md` through `phase-5.md`
+- Phase instructions: `instructions/phase-0.md` through `phase-6.md`
