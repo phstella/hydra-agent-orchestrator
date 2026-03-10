@@ -1,6 +1,6 @@
 # Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity) Issue Bodies
 
-Last updated: 2026-03-03
+Last updated: 2026-03-10
 
 Generated from `planning/implementation-checklist.md`.
 Local-first execution is tracked in `planning/m4.7-local-execution-pack.md`;
@@ -11,6 +11,7 @@ Global label prefix: `hydra`
 Implementation guides:
 - `planning/p4-interactive-session-implementation-guide.md`
 - `planning/p4-race-cockpit-convergence-implementation-guide.md`
+- `planning/p4.9.9-branch-compare-review-pack.md`
 
 ## [M4.1] PTY Supervisor Path for Interactive Sessions
 
@@ -593,8 +594,54 @@ Transport encryption changes, remote push brokers, telemetry backend integration
 - `planning/p4.9.6-streaming-performance-pack.md`
 ```
 
+## [P4.9.9] Orchestration Branch Compare Pane + Reviewer Agent Analysis
+
+- Phase: Phase 4 Tickets (Interactive Session Mode + Orchestration UX/Parity)
+- Labels: hydra, phase-4, area-ui, area-core, area-adapter, type-feature
+- Estimate: L
+- Dependencies: P4.9.2, P4.9.4, P4.9.5, M1.3
+
+### Issue Body (Markdown)
+
+```md
+## Problem
+Orchestration now supports multiple concurrent threads/worktrees, but operators still lack an in-app way to compare multiple worktree branches for a selected repo and request agent-driven review without leaving orchestration.
+
+## Scope
+Add an orchestration compare pane that supports:
+- selecting a repository root
+- selecting one base ref and multiple target refs (including worktree-backed refs)
+- rendering diff summaries per target
+- launching `Analyze with Agent` from the selected CLI tool using a predefined Hydra compare-review prompt
+
+Reviewer compare-analysis runs must execute from repo root (`repo_root`) so all compared refs/worktrees are visible to the tool.
+
+## Acceptance Criteria
+- [ ] Compare pane is available in orchestration and supports one base ref + multiple target refs.
+- [ ] Ref picker includes local branch refs and worktree-associated refs for the selected repo root.
+- [ ] Backend compare IPC returns deterministic per-target summary payloads (changed file count, insertions/deletions, merge-base metadata).
+- [ ] `Analyze with Agent` launches selected adapter CLI (`claude`/`codex`) with predefined compare-review prompt template.
+- [ ] Reviewer run executes with `cwd=repo_root` (not thread worktree path) and this is visible in run/session metadata.
+- [ ] GUI renders formatted reviewer output (summary, risks, recommendations) with raw-text fallback.
+- [ ] Existing race/review/merge semantics remain unchanged.
+
+## Out of Scope
+Workflow DAG presets, automatic merge/refinement from reviewer results, semantic code comments.
+
+## Dependencies
+- P4.9.2, P4.9.4, P4.9.5, M1.3
+
+## Notes
+- Keep this as orchestration-native analysis tooling, separate from Phase 5 workflow preset execution.
+- Prompt template should be versioned and deterministic to keep reviewer output shape stable.
+
+## Implementation Reference
+- `planning/roadmap.md` (Section 18, `P4.9.9`)
+- `planning/p4.9.9-branch-compare-review-pack.md`
+```
+
 
 ## Coverage Check
 
-- Total issues generated: 15
-- Expected range: `M4.1` through `M4.8`, plus `P4.9.1` through `P4.9.7`
+- Total issues generated: 16
+- Expected range: `M4.1` through `M4.8`, plus `P4.9.1` through `P4.9.7` and `P4.9.9`

@@ -1,6 +1,6 @@
 # Product Roadmap
 
-Last updated: 2026-03-03
+Last updated: 2026-03-10
 
 ## 1. Planning Assumptions
 
@@ -250,6 +250,7 @@ Implementation goals update:
 3. Upgrade orchestration terminal rendering to high-fidelity ANSI parity (colors + formatting + cursor behavior), aligned with native terminal workflows.
 4. Prefer wrapping existing external coding CLIs (Codex / Claude Code) for advanced capabilities instead of re-implementing feature parity inside Hydra UI.
 5. Adopt terminal-only input in orchestration to match native Claude Code/Codex CLI usage, with a simplified deploy trigger that launches external tools.
+6. Add an orchestration-native branch compare pane for multi-worktree branch analysis, including optional reviewer-agent critique runs.
 
 Execution sequence (P4.9):
 1. `P4.9.1` IA and navigation update: `Interactive` -> `Orchestration`; set as default tab.
@@ -259,6 +260,7 @@ Execution sequence (P4.9):
 5. `P4.9.5` Input architecture convergence: terminal-only interaction model.
 6. `P4.9.6` Streaming transport + render pipeline optimization for low-latency terminal responsiveness.
 7. `P4.9.7` Push transport attach reliability + diagnostics for environments that fall back to polling.
+8. `P4.9.9` Branch compare pane + reviewer-agent analysis flow (repo-root execution).
 
 ### 18.2 Technical Requirements Expansion
 
@@ -357,6 +359,30 @@ Current implementation status:
 6. `P4.9.7` is implemented: attach-cause diagnostics, bounded retry hardening, backend emit-failure diagnostics IPC, and attach-failure smoke coverage are in place.
 7. Remaining validation: manual release-build stress QA for sustained real CLI/TUI workloads.
 
+#### E. Orchestration Branch Compare + Reviewer Agent Pane
+
+Scope:
+1. Add a dedicated compare pane inside `Orchestration` for branch/worktree branch review.
+2. Allow selecting one repository root, one base ref, and multiple target refs (including refs backed by worktrees).
+3. Show diff summaries and per-target change stats directly in GUI.
+4. Add an `Analyze with Agent` action that launches a reviewer run using the selected adapter CLI.
+
+Technical requirements:
+1. Add backend IPC to enumerate compare refs for a repo (`local branches` + `worktree-associated refs`) and validate repo-root selection.
+2. Add backend IPC to compute compare summaries for `base_ref` vs `target_ref[]` (changed files, insertions/deletions, merge-base, and optional patch excerpt metadata).
+3. Keep compare state lane/session-safe so concurrent orchestration threads do not overwrite compare context.
+4. Add reviewer launch path that sends a predefined prompt template to the selected CLI tool and records the originating compare context.
+5. Reviewer runs from the repository root checkout (`repo_root`) rather than an isolated thread worktree, so branch/worktree refs are all visible.
+6. Parse reviewer output into a structured GUI presentation (summary, risks, recommendations) with raw-text fallback when parsing fails.
+7. Preserve explicit separation from race scoring/merge semantics (this is orchestration-only analysis tooling).
+
+Acceptance targets:
+1. User can select a repo root and compare multiple target refs against one base ref from the orchestration pane.
+2. Compare pane renders deterministic per-target change summaries without requiring race mode.
+3. `Analyze with Agent` uses the selected orchestration adapter CLI and launches with repo-root working directory.
+4. GUI surfaces formatted reviewer output with clear fallback when structure is missing.
+5. Existing race and review flows remain behaviorally unchanged.
+
 ### 18.3 Integration Decisions (Locked)
 
 1. Tool invocation model: direct binary wrapping only (no normalization layer).
@@ -366,3 +392,5 @@ Current implementation status:
 5. Explorer visibility policy: show full tree, no default hiding.
 6. App landing behavior: always open `Orchestration` by default.
 7. Input convergence target: terminal-only, native CLI-like interaction in orchestration.
+8. Reviewer compare-analysis runs execute from repository root (`repo_root`) to ensure access to all relevant refs/worktrees.
+9. Reviewer agent prompt for compare-analysis is predefined and versioned (user can choose tool, but prompt shape is Hydra-owned).

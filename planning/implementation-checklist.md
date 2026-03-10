@@ -747,6 +747,22 @@ Local-first note:
 - Out of Scope: telemetry backend integration, remote push brokers, transport encryption redesign.
 - Execution Note: This milestone closes the open poll-fallback follow-up tracked from `P4.9.6`.
 
+### P4.9.9 Orchestration Branch Compare Pane + Reviewer Agent Analysis
+
+- Labels: `phase-4`, `area-ui`, `area-core`, `area-adapter`, `type-feature`
+- Estimate: `L`
+- Dependencies: `P4.9.2`, `P4.9.4`, `P4.9.5`, `M1.3`
+- Problem: Orchestration can run multiple threads/worktrees, but operators still lack an in-app way to compare multiple worktree branches in one place and request an automated review without switching to race workflows or external tools.
+- Scope: Add a compare pane inside orchestration where users select a repository root, pick one base ref and multiple target refs (including worktree-backed branches), inspect diff summaries, and trigger a reviewer-agent analysis run through the selected CLI tool using a predefined Hydra prompt.
+- Acceptance Criteria:
+1. Orchestration includes a compare pane that supports one base ref + multiple target refs for a selected repository root.
+2. Backend compare IPC returns deterministic summary data (file count, insertions/deletions, merge-base metadata) for each selected target ref.
+3. Reviewer-agent launch is available from compare pane and uses selected adapter CLI (`claude`/`codex`) with a predefined compare-analysis prompt template.
+4. Reviewer-agent compare run executes with `cwd` at repository root (`repo_root`), not thread worktree path, so all relevant branches/worktrees are accessible.
+5. Reviewer output is rendered in formatted GUI sections (summary/risks/recommendations) with raw-text fallback.
+6. Existing race scoring/review/merge behavior remains unchanged.
+- Out of Scope: workflow DAG presets, automatic merge/refinement actions from reviewer output, semantic diff commenting.
+
 ## 8. Phase 5 Tickets (Collaboration Workflows)
 
 ### M5.1 Workflow Engine Core
